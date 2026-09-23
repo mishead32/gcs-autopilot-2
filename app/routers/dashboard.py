@@ -61,7 +61,9 @@ def home(request: Request, user: User = Depends(current_user), db: Session = Dep
         "key": src.value, "label": label,
         "open": [t for t in mine if t.source == src],
         "overdue": [t for t in buckets["overdue"] if t.source == src],
-        "report": f"/reports/tasks?source={key}",
+        # Straight to the doer's own open list for that kind of work —
+        # this is an action list, not a report.
+        "report": f"/tasks?scope=mine&status=open&source={key}",
     } for (src, label), key in zip(SOURCE_TABS, ("delegation", "checklist", "fms"))]
 
     card = scoring.user_scorecard(db, user, days=30)

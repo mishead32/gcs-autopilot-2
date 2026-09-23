@@ -30,7 +30,7 @@
       <div class="n">{{ submitted|length }}</div><div class="l">Waiting on audit</div></a>
   </div>
 
-  <h3 class="sub-h">By type of work</h3>
+  <h3 class="sub-h">By type of work — click through to that list</h3>
   <div class="grid g3">
     {% for s in by_source %}
     <a class="kpi {{ 'bad' if s.overdue }}" href="{{ s.report }}">

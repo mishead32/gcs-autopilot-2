@@ -4,7 +4,8 @@
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
   <div>
     <h1>Tasks</h1>
-    <p class="sub">{{ tasks|length }} matching task(s)</p>
+    <p class="sub">{{ tasks|length }} {{ source_tabs[source].label if source else '' }}
+      task(s) · sorted {{ sort_label|lower }}</p>
   </div>
   {% if user.has_create_task %}
   <div>
@@ -16,12 +17,12 @@
 
 <div class="tabs">
   <a class="{{ 'active' if scope=='mine' }}"
-     href="/tasks?scope=mine&status={{ status }}&date_from={{ date_from }}&date_to={{ date_to }}">Assigned to me</a>
+     href="/tasks?scope=mine&status={{ status }}&source={{ source }}&date_from={{ date_from }}&date_to={{ date_to }}">Assigned to me</a>
   <a class="{{ 'active' if scope=='assigned' }}"
-     href="/tasks?scope=assigned&status={{ status }}&date_from={{ date_from }}&date_to={{ date_to }}">Delegated by me</a>
+     href="/tasks?scope=assigned&status={{ status }}&source={{ source }}&date_from={{ date_from }}&date_to={{ date_to }}">Delegated by me</a>
   {% if user.can_manage %}
   <a class="{{ 'active' if scope=='all' }}"
-     href="/tasks?scope=all&status={{ status }}&date_from={{ date_from }}&date_to={{ date_to }}">Everyone</a>
+     href="/tasks?scope=all&status={{ status }}&source={{ source }}&date_from={{ date_from }}&date_to={{ date_to }}">Everyone</a>
   {% endif %}
 </div>
 
@@ -30,13 +31,29 @@
                      ('audit','Awaiting audit'),('audit_pending','Audit pending'),
                      ('done','Completed'),('all','All')] %}
   <a class="{{ 'active' if status==s }}"
-     href="/tasks?scope={{ scope }}&status={{ s }}&date_from={{ date_from }}&date_to={{ date_to }}">{{ label }}</a>
+     href="/tasks?scope={{ scope }}&status={{ s }}&source={{ source }}&date_from={{ date_from }}&date_to={{ date_to }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+{# Which KIND of work. Everyone has all three, and "what do I owe on the
+   checklist today" is a different question from "what has been delegated
+   to me" — so they get their own row rather than a column to read. #}
+<div class="tabs worktype">
+  <span class="m">Work type</span>
+  <a class="{{ 'active' if not source }}"
+     href="/tasks?scope={{ scope }}&status={{ status }}&date_from={{ date_from }}&date_to={{ date_to }}">
+    All work <b>{{ counts.all }}</b></a>
+  {% for k, c in source_tabs.items() %}
+  <a class="{{ 'active' if source==k }}"
+     href="/tasks?scope={{ scope }}&status={{ status }}&source={{ k }}&date_from={{ date_from }}&date_to={{ date_to }}"
+     title="{{ c.blurb }}">{{ c.label }} <b>{{ counts[k] }}</b></a>
   {% endfor %}
 </div>
 
 <form method="get" action="/tasks" class="card daterange">
   <input type="hidden" name="scope" value="{{ scope }}">
   <input type="hidden" name="status" value="{{ status }}">
+  <input type="hidden" name="source" value="{{ source }}">
   <div>
     <label>From</label>
     <input type="date" name="date_from" value="{{ date_from }}">
@@ -52,7 +69,7 @@
   <div class="acts">
     <button class="btn">Apply</button>
     {% if filtered %}
-    <a class="btn ghost" href="/tasks?scope={{ scope }}&status={{ status }}">Clear</a>
+    <a class="btn ghost" href="/tasks?scope={{ scope }}&status={{ status }}&source={{ source }}">Clear</a>
     {% endif %}
   </div>
 </form>

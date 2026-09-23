@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
-from sqlalchemy import select, or_, update, case, delete as sa_delete
+from sqlalchemy import select, or_, update, case, func, delete as sa_delete
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
@@ -67,6 +67,19 @@ PRIORITY_RANK = case(
     else_=2,
 )
 
+# The three kinds of work a person can be given. Everyone has some of each,
+# and "what do I owe on the checklist today" is a different question from
+# "what has somebody delegated to me", so the list has to separate them.
+SOURCE_TABS = {
+    "delegation": {"src": TaskSource.DELEGATION, "label": "Delegation",
+                   "blurb": "one-off work somebody assigned you"},
+    "checklist": {"src": TaskSource.RECURRING, "label": "Checklist",
+                  "blurb": "your repeating daily and weekly jobs"},
+    "fms": {"src": TaskSource.FLOW, "label": "FMS",
+            "blurb": "steps inside a running flow"},
+}
+SOURCE_KEY = {v["src"]: k for k, v in SOURCE_TABS.items()}
+
 
 def _parse_day(raw: str):
     try:
@@ -77,7 +90,7 @@ def _parse_day(raw: str):
 
 @router.get("/tasks", response_class=HTMLResponse)
 def task_list(request: Request, status: str = "open", scope: str = "mine",
-              date_from: str = "", date_to: str = "",
+              date_from: str = "", date_to: str = "", source: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _visible_tasks_query(user)
     now = clock.now()
@@ -113,13 +126,40 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
     if start or end:
         q = q.where(col.is_not(None))
 
+    # Count each kind of work BEFORE narrowing to one, so the tabs can show
+    # how much is waiting under each — otherwise you have to click all three
+    # to find out where your day has gone.
+    counts = {k: 0 for k in SOURCE_TABS}
+    _sub = q.subquery()
+    for src, n in db.execute(select(_sub.c.source, func.count())
+                             .select_from(_sub).group_by(_sub.c.source)).all():
+        # A subquery column hands back the raw stored value on some backends
+        # and the enum on others, so accept either rather than silently
+        # counting nothing.
+        key = SOURCE_KEY.get(src) or SOURCE_KEY.get(
+            next((m for m in TaskSource if m.value == str(src).lower()
+                  or m.name == str(src).upper()), None))
+        if key:
+            counts[key] = n
+    counts["all"] = sum(counts[k] for k in SOURCE_TABS)
+
+    # Which kind of work. A doer's three kinds land in one list, and until now
+    # the only way to tell them apart was to read the Source column row by row.
+    source = source if source in SOURCE_TABS else ""
+    if source:
+        q = q.where(Task.source == SOURCE_TABS[source]["src"])
+
     if col_name == "closed_at":
         order = (col.desc(),)                     # newest completions first
+        sort_label = "Most recently completed first"
     else:
         order = (PRIORITY_RANK, Task.due_at.asc())
+        sort_label = "High priority first, then by deadline"
     tasks = db.scalars(q.order_by(*order).limit(500)).all()
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,
+        "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
+        "sort_label": sort_label,
         "date_from": start.isoformat() if start else "",
         "date_to": end.isoformat() if end else "",
         "basis_label": basis_label,

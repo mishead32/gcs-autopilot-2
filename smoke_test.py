@@ -1585,5 +1585,86 @@ with _SLD() as _d:
     check("with no department", _pu2.department_id is None)
     check("and their branch untouched", _pu2.branch_id == _pu_branch)
 
+print("\n== My Tasks separates Delegation, Checklist and FMS ==")
+from app.db import SessionLocal as _SLT
+from app.models import Task as _TT, TaskSource as _TSR, User as _UT, TaskStatus as _TST
+from sqlalchemy import select as _st
+
+OPEN_T = (_TST.PENDING, _TST.IN_PROGRESS, _TST.REJECTED, _TST.REOPENED)
+with _SLT() as _d:
+    _am = _d.scalar(_st(_UT).where(_UT.email == "amit@gcs.local"))
+    _want = {}
+    for _k, _src in [("delegation", _TSR.DELEGATION), ("checklist", _TSR.RECURRING),
+                     ("fms", _TSR.FLOW)]:
+        _want[_k] = {t.id for t in _d.scalars(_st(_TT).where(
+            _TT.doer_id == _am.id, _TT.source == _src,
+            _TT.status.in_(OPEN_T))).all()}
+
+_all = doer.get("/tasks?scope=mine&status=open")
+check("the work-type row is on the page", "Work type" in _all.text)
+check("it offers all three kinds",
+      all(l in _all.text for l in ["Delegation", "Checklist", "FMS"]))
+check("and an All work tab", "All work" in _all.text)
+
+# Each tab must show that kind of work and nothing else.
+for _k in ("delegation", "checklist", "fms"):
+    _pg = doer.get(f"/tasks?scope=mine&status=open&source={_k}")
+    check(f"the {_k} tab opens", _pg.status_code == 200, _pg.status_code)
+    _shown = {i for i in range(1, 400) if f'/tasks/{i}"' in _pg.text}
+    _others = set().union(*[v for kk, v in _want.items() if kk != _k]) if _want else set()
+    check(f"{_k}: shows its own tasks",
+          _want[_k] <= _shown or not _want[_k],
+          f"missing {sorted(_want[_k] - _shown)[:4]}")
+    check(f"{_k}: shows no other kind",
+          not (_shown & _others), f"leaked {sorted(_shown & _others)[:4]}")
+
+# The tab counts must match what the tabs actually contain.
+import re as _re
+_row = _all.text.split("Work type", 1)[1].split("</div>", 1)[0]
+_nums = [int(n) for n in _re.findall(r"<b>(\d+)</b>", _row)]
+check("the tab counts add up", _nums and _nums[0] == sum(_nums[1:]),
+      f"all={_nums[:1]} parts={_nums[1:]}")
+check("and match the database",
+      len(_nums) == 4 and _nums[1:] == [len(_want["delegation"]),
+                                        len(_want["checklist"]),
+                                        len(_want["fms"])],
+      f"page {_nums[1:]} vs db {[len(_want[k]) for k in ('delegation','checklist','fms')]}")
+
+print("\n== and sorts high priority first ==")
+check("the page says how it is sorted",
+      "high priority first, then by deadline" in _all.text.lower())
+_open_pg = doer.get("/tasks?scope=mine&status=open").text
+_ids = [int(i) for i in _re.findall(r'/tasks/(\d+)"', _open_pg)]
+with _SLT() as _d:
+    _seen, _ordered = set(), []
+    for _i in _ids:
+        if _i in _seen: continue
+        _seen.add(_i)
+        _t = _d.get(_TT, _i)
+        if _t and _t.doer_id == _am.id:
+            _ordered.append((_t.priority.value, _t.due_at))
+_rank = {"high": 0, "medium": 1, "low": 2}
+check("high priority really is listed first",
+      all(_rank[_ordered[i][0]] <= _rank[_ordered[i+1][0]]
+          for i in range(len(_ordered) - 1)),
+      str([o[0] for o in _ordered]))
+check("and within a priority, the earliest deadline first",
+      all(_ordered[i][1] <= _ordered[i+1][1]
+          for i in range(len(_ordered) - 1)
+          if _ordered[i][0] == _ordered[i+1][0]))
+
+# Filtering by work type must survive changing the status tab.
+_done = doer.get("/tasks?scope=mine&status=done&source=checklist")
+check("the work type carries over to Completed", _done.status_code == 200)
+check("and stays selected there", "source=checklist" in _done.text)
+
+print("\n== the dashboard cards go to that list, not a report ==")
+_dash = doer.get("/").text
+# Jinja escapes & as &amp; inside an href, so compare against the escaped form.
+for _k in ("delegation", "checklist", "fms"):
+    _href = f"/tasks?scope=mine&amp;status=open&amp;source={_k}"
+    check(f"the {_k} card opens the doer's own list", _href in _dash,
+          "card still points at a report")
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -49,8 +49,8 @@
 
     {% if user.can_manage %}
       <div class="side-sec"><span class="lb">Operations</span></div>
-      <a href="/tasks?scope=assigned&status=open" title="Delegation">
-        <span class="ic">➜</span><span class="lb">Delegation</span></a>
+      <a href="/tasks?scope=assigned&status=open" title="Work you delegated to other people">
+        <span class="ic">➜</span><span class="lb">Delegated by me</span></a>
       <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
         <span class="ic">⇉</span><span class="lb">FMS</span></a>
       <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
