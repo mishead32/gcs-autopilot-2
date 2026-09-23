@@ -1,196 +1,307 @@
-# Put GCS Autopilot online for free
+# Putting GCS Autopilot online — free
 
-For showing management. Three accounts, all free, no card. About 30 minutes.
+Eight parts, about forty minutes, nothing to pay.
 
-| Step | What it is | Why |
-|---|---|---|
-| 1. GitHub | Where the code sits | Render reads the code from here |
-| 2. Neon | The database | Free Render gives you no database |
-| 3. Render | Runs the software | Gives you the link to share |
+There is an interactive version of this with tick-boxes that remember your place;
+ask Claude for the "GCS Autopilot Go-Live" page. This file is the offline copy.
 
-Attachments go **inside the database**, so nothing is lost when the free
-server sleeps or restarts. No fourth account, and nothing to pay.
+**What you need:** GitHub (you have it), and three free accounts you can all open
+with GitHub — [Neon](https://neon.com) for the database,
+[Render](https://render.com) to run the site, [cron-job.org](https://cron-job.org)
+to wake it each morning.
 
-**Not Vercel.** Vercel's free Hobby plan is restricted to non-commercial,
-personal use — this is a tool for running a business, so it does not qualify.
-Two other things would also break there: uploads pass through the server and
-Vercel caps a request at about 4.5 MB, so a 10 MB phone photo would fail; and
-there is no always-on process for the daily Checklist. Render's free plan has
-none of those problems.
+**Keep Notepad open.** You will park several long values in it.
 
----
+### Three things never to share
 
-## Before you start — what "free" costs you
-
-Two things, and you should know them before management clicks the link.
-
-**It sleeps.** Render spins a free service down after **15 minutes** with no
-traffic. The next person to open the link waits **about a minute** while it
-wakes; Render shows a loading page meanwhile. After that it is normal speed.
-Tell whoever you send the link to: *"if it takes a minute to open the first
-time, that's normal."* Better still, open it yourself five minutes before the
-meeting so it is already awake.
-
-**Space is limited.** Neon's free database is **0.5 GB per project**, and
-attachments live inside it — roughly **300–800 phone photos**. When Neon fills
-up it stops accepting writes rather than charging you, and because proof is
-mandatory that means **nobody can submit a task**. Watch the storage figure on
-your Neon dashboard; when it passes about 70%, come back and we will move
-attachments to file storage. That is one setting, not a code change.
-
-Neither matters for a demo. Both matter for daily use by 30 people. When the
-answer is yes, come back and we will move it to a paid plan properly.
+Your Neon connection string, your `MIDAP_SECRET` and your `CRON_SECRET`. The
+first contains your database password; the second can forge a login. They belong
+only in Notepad and in Render's settings screen — never in chat, email or
+WhatsApp, including to Claude.
 
 ---
 
-## Step 1 — GitHub (10 min)
+## Part 1 — Send the latest code to GitHub (2 min)
 
-1. Sign up at **https://github.com/signup** — free, no card.
-2. Go to **https://github.com/new**
-   - Repository name: `gcs-autopilot`
-   - Choose **Private**
-   - Do **not** tick "Add a README"
-   - Click **Create repository**
-3. On the next page click **uploading an existing file**.
-4. Open your `midap` folder on your PC. Drag **everything except these** into
-   the browser window:
-   - `.venv` (huge, and Render builds its own)
-   - `midap.db` (your local test data)
-   - `uploads` (local files)
-   - `setup-log.txt`
-5. Wait for the uploads to finish, then click **Commit changes**.
+Everything is already committed on your PC and waiting. One command sends it up.
 
-> If drag-and-drop struggles with the folders, install GitHub Desktop instead
-> — it handles nested folders properly.
+1. Press the **Windows** key, type `cmd`, press **Enter**. A black window opens.
+2. Paste this and press Enter (**right-click** pastes in that window; Ctrl+V may
+   not work):
+
+   ```
+   cd "C:\Users\Rajinder\Documents\GCS- Auto Pilot Dashboard\github-upload"
+   ```
+
+3. Then:
+
+   ```
+   git push
+   ```
+
+   If a browser opens asking you to sign in to GitHub, sign in and click
+   **Authorize**. It only asks once.
+
+   **Expect:** a few lines ending in `main -> main`. `Everything up-to-date` is
+   fine too — it means it already went up.
+
+4. Check it arrived: open
+   <https://github.com/mishead32/gcs-autopilot-2>. You should see an `app` folder
+   and the commit message "Reports menu, organised dashboard, report rights, and
+   an IST clock".
 
 ---
 
-## Step 2 — Neon, the database (5 min)
+## Part 2 — Create the database (5 min)
 
-1. Sign up at **https://neon.com** with your GitHub account.
+Neon's free plan does not expire. 0.5 GB.
+
+1. [neon.com](https://neon.com) → **Sign up** → **Continue with GitHub**.
 2. Create a project:
-   - Name: `gcs-autopilot`
-   - Postgres version: leave the default
-   - Region: **AWS Asia Pacific 1 (Singapore)**
+   - Project name: `gcs-autopilot`
+   - Postgres version: whatever it offers
+   - **Region: Singapore (`ap-southeast-1`)** — closest to India. Mumbai is not on
+     the free plan.
+3. Copy the connection string into Notepad. Neon shows it right after the project
+   is created; if you lose it, **Dashboard → Connect**. It looks like:
 
-   > Mumbai is not offered on the free plan, and Singapore is the right choice
-   > anyway. What matters is that the database sits beside the **app**, not
-   > beside you: every page makes several database calls, and your Render
-   > service is in Singapore too, so those hops are about a millisecond. Your
-   > browser talks to Render only once per page, so the extra distance from
-   > Chandigarh costs a few tens of milliseconds — imperceptible. A Mumbai
-   > database with a Singapore app would be slower, not faster.
-
-3. On the project dashboard, find **Connection string** and click copy.
-   It looks like:
    ```
-   postgresql://neondb_owner:xxxxxxxx@ep-cool-name.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+   postgresql://neondb_owner:•••••@ep-cool-name-12345.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
    ```
-4. Paste it into Notepad. You need it in the next step.
 
-That is all. The tables build themselves on first start.
+> **Copy the whole line**, right to the end including `?sslmode=require`. Cutting
+> it short is the most common reason the site will not start. The `•••••` part is
+> your database password.
 
 ---
 
-## Step 3 — Render, which runs it (10 min)
+## Part 3 — Make two secrets for the software (2 min)
 
-1. Sign up at **https://render.com** — choose **Sign in with GitHub**.
-2. **New +** → **Web Service** → **Build and deploy from a Git repository**.
-3. Find `gcs-autopilot` and click **Connect**. Authorise Render to see it if
-   asked.
-4. Fill in:
+These are not passwords you will ever type. One signs the login cookie, the other
+protects the daily wake-up address. They just have to be long and random.
+
+In Notepad:
+
+```
+MIDAP_SECRET = <mash the keyboard, about 40 characters>
+CRON_SECRET  = <mash again, about 20, different from the first>
+```
+
+> The value must be **your random characters** — not the words "40 random
+> characters".
+
+---
+
+## Part 4 — Put the website online (10 min)
+
+1. [render.com](https://render.com) → **Get Started** → **GitHub**. When it asks
+   which repositories it may see, choose **Only select repositories** and pick
+   **gcs-autopilot-2**.
+2. **New +** → **Web Service** → pick `gcs-autopilot-2` → **Connect**.
+3. Fill the settings exactly:
 
    | Field | Value |
    |---|---|
-   | Name | `gcs-autopilot` |
-   | Region | **Singapore** |
+   | Name | `gcs-autopilot` (this becomes your web address) |
+   | Language | Python 3 |
    | Branch | `main` |
-   | Runtime | **Python 3** |
+   | Region | Singapore |
+   | Root Directory | **leave completely empty** |
    | Build Command | `pip install -r requirements.txt` |
    | Start Command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
    | Instance Type | **Free** |
 
-5. Click **Advanced** → **Add Environment Variable**, and add these four:
+4. Add five **Environment Variables**. The names must match exactly — capitals and
+   underscores included:
 
-   | Key | Value |
+   | Name | Value |
    |---|---|
-   | `DATABASE_URL` | the Neon connection string from step 2 |
-   | `STORAGE_BACKEND` | `db` |
-   | `MIDAP_SECRET` | any long random text — mash the keyboard, 40+ characters |
-   | `PYTHON_VERSION` | `3.12` |
+   | `DATABASE_URL` | the whole Neon line from Notepad |
+   | `MIDAP_SECRET` | your 40 random characters |
+   | `CRON_SECRET` | your 20 random characters |
+   | `STORAGE_BACKEND` | `db` — exactly these two letters |
+   | `APP_NAME` | `GCS Autopilot` |
 
-   `STORAGE_BACKEND=db` is the one that keeps attachments alive. Without it,
-   every photo disappears the first time the server sleeps.
+   > **Why `STORAGE_BACKEND=db`.** A free Render service has no permanent disk —
+   > its files are wiped on every restart, several times a day. This keeps every
+   > screenshot and photo inside the database, where it survives.
 
-6. Click **Create Web Service** and wait. First build takes 3–5 minutes.
-   When the log ends with `Application startup complete`, it is live.
+5. Under **Advanced**, set **Health Check Path** to `/healthz`.
+6. **Create Web Service**, then wait 3–6 minutes. Watch for
+   `==> Your service is live 🎉` and your address at the top, something like
+   `https://gcs-autopilot.onrender.com`.
+7. Write that address in Notepad. Everywhere below, **YOUR-ADDRESS** means this.
+8. Open `https://YOUR-ADDRESS/healthz`. You should see:
 
-Your link appears at the top of the page:
-`https://gcs-autopilot.onrender.com`
+   ```
+   {"ok":true,"serverless":false,"database":"postgres","file_storage":"db"}
+   ```
 
----
-
-## Step 4 — Create your first login
-
-Open your link. Because the database is empty, it shows a **one-time setup
-page** asking you to create the first administrator. Fill it in and you are
-signed in.
-
-That page exists **only while there are no users at all** and disappears the
-moment you create one, so nobody can use it later to mint themselves an
-account. Do this immediately after deploying — do not hand the link out first.
-
-> Render's free plan has no Shell tab (that is a paid feature), so there is no
-> command to run. If you would rather set the password in advance, add
-> `ADMIN_EMAIL` and `ADMIN_PW` as environment variables before the first
-> deploy and the account is created automatically at start-up instead.
-
-Then set up your real branches and staff:
-
-- **Branches** → add Bodyzone, Spa Kora, BIPS, GCS Jharkhand, GCS HO
-- **Users** → add your people. Tick **Audit submissions** and
-  **See all branches** for whoever audits. Set each person's benchmark.
-- **Holidays** → add this year's holidays before anyone starts using it
-- **Bulk import** → load your delegation tasks and checklist rules from Excel
+   The last two matter: `postgres` means it found Neon, `db` means attachments are
+   safe.
 
 ---
 
-## Step 5 — Today's checklist tasks
+## Part 5 — Create your admin login (2 min)
 
-Render's free plan has no scheduler, so nothing creates the daily Checklist
-tasks by itself. Two options:
+> **Do this immediately after Part 4.** The site has no users at all, so it offers
+> a one-time setup page to whoever opens it first. The moment you create your
+> account that page is sealed forever. Until then, anyone who guessed the address
+> could take it.
 
-**For a demo:** click **Run now** on the Checklist page. Takes a second.
-
-**For daily use:** use a free external scheduler such as https://cron-job.org
-to call this once each morning:
-
-```
-https://gcs-autopilot.onrender.com/cron/spawn
-```
-
-It is safe to call repeatedly — each rule fires at most once per day. Calling
-it also wakes the service up, which is a useful side effect if you schedule it
-for 15 minutes before your team starts.
+1. Open `https://YOUR-ADDRESS/setup`. The first visit after a quiet spell takes
+   about a minute to load — normal on the free plan, see Part 7.
+2. Fill in your name, the email you want to sign in with, and a real password of
+   at least 8 characters. This account can see and change everything.
+3. Sign in on the page it sends you to.
+4. Visit `https://YOUR-ADDRESS/setup` again. It must now say
+   **"Page not found — Setup is already done"**. That is the lock working. If it
+   still shows the form, something is wrong.
 
 ---
 
-## Updating it later
+## Part 6 — Set up GCS inside it (15 min)
 
-Upload the changed files to GitHub again (or push from GitHub Desktop).
-Render notices and redeploys within a minute or two. Your data is in Neon, so
-it is untouched by a redeploy.
+The database starts completely empty. Build it in this order — each step needs the
+one before it.
+
+1. **Setup → Branches** — add all five: Bodyzone Fitness & Spa, Spa Kora, BIPS
+   School, GCS Jharkhand, GCS HO. Every task, person and score is filed under a
+   branch, so these must exist before you add anybody.
+2. **Setup → Holidays** — add the rest of this year. No checklist task is created
+   on those days, and an FMS or delegation deadline landing on one moves to the
+   next working day with a note saying why.
+3. **Setup → Users** — for each person set role, branch, a temporary password and
+   the 60/20/20 benchmark, then the rights:
+
+   | Tick | For |
+   |---|---|
+   | Follow up Checklist & FMS (PC) | your PC |
+   | Follow up Delegation (EA) | your EA |
+   | See everyone's reports | only people who should see the whole company, including other people's EM scores. Without it, a doer's reports show their own work only. |
+   | Audit submissions | whoever checks completed work |
+   | Flag false marking (−10) | the same auditors |
+
+   Tell each person to change their password once they are in.
+4. **Operations → Checklist** — the repeating daily and weekly jobs. These start
+   creating tasks once Part 7 is done.
+5. **Operations → FMS** — your step-by-step processes.
+6. **Walk the loop once yourself** before handing out the address: assign a task,
+   open it as that person, paste a screenshot with Ctrl+V, submit, then audit it.
 
 ---
 
-## When management says yes
+## Part 7 — Wake it each morning (5 min)
 
-Two changes, roughly ₹1,200/month total:
+A free Render service sleeps after 15 minutes with nobody on it, and the next
+visitor waits about a minute. Worse, the day's checklist tasks are created when
+the software starts — so if nobody opens it, nothing is created. One free
+scheduled ping solves both.
 
-1. **Render Starter — $7/month.** No sleeping, instant every time.
-2. **Neon Launch — $19/month**, or Cloudflare R2 for attachments (10 GB free,
-   then about ₹1.30 per GB). With R2 you set four `S3_*` settings and change
-   `STORAGE_BACKEND` to `s3` — the code already supports it, and existing
-   attachments keep working from the database.
+1. [cron-job.org](https://cron-job.org) → **Sign up**.
+2. Create a cronjob:
+   - Title: `GCS Autopilot — wake & daily checklist`
+   - URL: `https://YOUR-ADDRESS/cron/spawn?key=YOUR_CRON_SECRET`
+     (paste your `CRON_SECRET` after `key=`, no spaces anywhere)
+3. Schedule:
+   - Timezone: **Asia/Kolkata**
+   - Custom: every **10 minutes**, hours **08 to 21**, every day
 
-Do that when it is being used, not before.
+   > **Not around the clock.** Render gives 750 free hours a month; 24/7 is 744 —
+   > no margin, and the site would suspend itself before month end. 8 am to 9 pm is
+   > about 400 hours.
+4. Save, then **Run now**. Expect `{"created":0}` or a small number — that is how
+   many checklist tasks it just made. `401` means the key is wrong, `404` means the
+   address is wrong.
+
+---
+
+## Part 8 — Living with it
+
+**Getting new features.** When Claude makes a change, it is committed on your PC.
+You run the same two commands as Part 1 — `cd` to the github-upload folder, then
+`git push`. Render notices within seconds and rebuilds in about four minutes.
+Nobody is logged out and no data is touched.
+
+**Checking it is well.** `https://YOUR-ADDRESS/healthz` should always answer
+`"ok":true`. Render's **Logs** tab shows what happened if it does not.
+
+**Backups.** Neon's free plan keeps one day of history — enough for a deletion you
+notice the same day, nothing more. Once there is real data in there, ask for a
+proper export to be set up.
+
+**What free actually costs you:**
+
+| Limit | Day to day |
+|---|---|
+| Sleeps after 15 min | First visit of the morning takes ~1 min. Between 8 am and 9 pm the ping keeps it awake. |
+| 750 hours/month | Enough for 8 am–9 pm daily. A second free service will break it. |
+| No permanent disk | Already handled — attachments live in the database. |
+| 0.5 GB database | The real ceiling. Text is tiny, photos are not — roughly 200–400 phone screenshots. When it fills, writes start failing. Say so when you pass half and attachments can move to free object storage. |
+| 1 day of history | See Backups. |
+
+**If you outgrow free.** Render Starter is US$7/month and never sleeps; Neon's
+paid tier lifts the storage. Together roughly ₹1,200/month. Nothing gets rebuilt —
+you change the plan and it keeps running.
+
+---
+
+## When something goes wrong
+
+**Build fails: `ModuleNotFoundError: No module named 'app'`**
+**Root Directory** in Render has something in it. It must be completely empty —
+the `app` folder is at the top level of the repository and Render is looking one
+level too deep.
+
+**Build fails mentioning a Python version**
+Render now defaults to Python 3.14, which this software has never been tested on.
+`.python-version` in the repository pins it to 3.12. If the build ignores it, add
+an environment variable `PYTHON_VERSION` = `3.12.11` — Render needs the full
+three-part number there.
+
+**"Application failed to respond" or 502**
+Usually just waking — wait a minute and reload. If it persists, open **Logs** in
+Render. `could not translate host name` or `password authentication failed` means
+`DATABASE_URL` is wrong or was pasted incomplete.
+
+**Neon connection or SSL errors**
+Make sure the whole line was pasted, including `?sslmode=require`. If Neon's
+string ends `&channel_binding=require` and it still refuses, delete just that last
+part — the connection stays encrypted either way.
+
+**The setup page says "Page not found" before you made your account**
+Somebody else created the first admin. Say so straight away — the database gets
+rebuilt and you start again, ten minutes. This is why Part 5 says to do it
+immediately.
+
+**Everyone logged out after a deploy**
+Harmless, and expected if `MIDAP_SECRET` changed. Sign in again. No data affected.
+
+**Attachments vanish after a day**
+`STORAGE_BACKEND` is not `db`. Check the spelling in Render's environment
+variables, then check `/healthz` says `"file_storage":"db"`.
+
+**Times look about five and a half hours out**
+That was a real bug — the software compared deadlines against UTC while everybody
+types Indian times, so a 6 pm task only went overdue at 11:30 pm and the on-time
+half of every EM score was wrong by the same margin. Fixed 23 September 2026. If
+you see it, you are running an older build: push again.
+
+**The whole site suspends near month end**
+The 750 free hours are used up. Narrow the cron-job.org schedule to fewer hours a
+day, and delete any other free service in the same Render account. It returns on
+the 1st.
+
+**The repository is public — is that a problem?**
+Not for your data: no password, connection string or record of any kind is in
+there. Every secret lives only in Render's settings. What is public is the
+software itself. To change that: GitHub → the repository → **Settings** → **Danger
+Zone** → **Change visibility** → **Private**. Render's free plan deploys from
+private repositories perfectly well.
+
+---
+
+*Written 23 September 2026, against the version that passes 503 checks on both
+SQLite and PostgreSQL. The whole sequence above — empty database, setup page,
+branch, user, task, proof, submit, restart — was rehearsed end to end on a UTC
+server before this was written.*
