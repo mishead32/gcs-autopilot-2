@@ -416,8 +416,8 @@ check("doers were notified", "a new task has been assigned" in admin.get("/outbo
 CH = ["Task title","Details","Doer email","Company","Frequency","Day","Due time","Priority","Needs audit"]
 cblob = _xlsx([
     [f"BULK daily {RUN}", "", "amit@gcs.local", "", "weekdays", "", "19:00", "high", "NO"],
-    [f"BULK weekly {RUN}", "", "amit@gcs.local", "", "weekly", "Mon", "12:00", "normal", "YES"],
-    [f"BULK monthly {RUN}", "", "amit@gcs.local", "", "monthly", "1", "16:00", "critical", "NO"],
+    [f"BULK weekly {RUN}", "", "amit@gcs.local", "", "weekly", "Mon", "12:00", "medium", "YES"],
+    [f"BULK monthly {RUN}", "", "amit@gcs.local", "", "monthly", "1", "16:00", "high", "NO"],
     ["Weekly with no day", "", "amit@gcs.local", "", "weekly", "", "", "", ""],
 ], CH)
 r = admin.post("/bulk/preview", data={"kind": "checklist"},
@@ -474,7 +474,7 @@ check("executables are not accepted", ".exe" not in cfg["accept"])
 # a doer's own task, in local mode
 r = mgr.post("/tasks/new", data={
     "title": f"SMOKE attach {RUN}", "details": "x", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 aid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 
 page = doer.get(f"/tasks/{aid}").text
@@ -544,7 +544,15 @@ check("user is gone", admin.get(f"/admin/users/{did}").status_code == 404)
 
 print("\n== delete guards ==")
 me = admin.get("/admin/users").text
-check("no delete button against your own row", ">you<" in me)
+# Checked precisely rather than by looking for the word "you" — that text
+# moved when the Edit button was added, and a proxy like that passes happily
+# while the actual delete link sits right there.
+_my_id = admin.get("/admin/users").text
+import re as _re
+_mine = _re.search(r"mis@gcs\.local", me)
+check("no delete button against your own row",
+      f'/admin/users/2/delete"' not in me, "own delete link is on the page")
+check("but your own row does offer Edit", '/admin/users/2"' in me)
 check("cannot open delete page for yourself with a blocker",
       "can&#39;t delete your own account" in admin.get("/admin/users/2/delete").text
       or "own account" in admin.get("/admin/users/2/delete").text)
@@ -562,7 +570,7 @@ bid = int(_re.findall(r'/admin/users/(\d+)/delete"[^>]*title="Delete SMOKE Busy 
                       + RUN, page)[0])
 r = admin.post("/tasks/new", data={
     "title": f"SMOKE inherited task {RUN}", "details": "x", "doer_id": str(bid),
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 kept = int(_re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 dp = admin.get(f"/admin/users/{bid}/delete").text
 check("linked work is counted", "Tasks assigned" in dp and "Hand it over" in dp)
@@ -592,7 +600,7 @@ check("admin cards show each doer's split", "70/10/20" in sp2 or "20/40/40" in s
 print("\n== false marking ==")
 r = mgr.post("/tasks/new", data={
     "title": "SMOKE: false-mark candidate", "details": "x", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 fid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 doer.post(f"/tasks/{fid}/start")
 submit(doer, fid, completion_note="done")
@@ -623,7 +631,7 @@ check("manager cannot delete by default",
       mgr.post(f"/tasks/{eid}/delete").status_code == 403)
 check("edit applies", mgr.post(f"/tasks/{eid}/edit", data={
     "title": "SMOKE: edited title", "details": "y", "doer_id": "7",
-    "priority": "critical", "due_at": "2026-12-31T10:00"}).status_code == 200)
+    "priority": "high", "due_at": "2026-12-31T10:00"}).status_code == 200)
 body = mgr.get(f"/tasks/{eid}").text
 check("edited title shown", "edited title" in body)
 check("edit logged as a note", "Edited:" in body)
@@ -633,7 +641,7 @@ check("deleted task is gone", admin.get(f"/tasks/{eid}").status_code == 404)
 print("\n== audit status ==")
 r = mgr.post("/tasks/new", data={
     "title": "SMOKE: audit-state task", "details": "d", "doer_id": "6",
-    "branch_id": "", "priority": "normal",
+    "branch_id": "", "priority": "medium",
     "due_at": "2026-12-31T18:00", "requires_audit": "1"})
 aid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 body = mgr.get(f"/tasks/{aid}").text
@@ -641,7 +649,7 @@ check("audit-flagged task starts as Audit pending", "Audit pending" in body)
 
 r = mgr.post("/tasks/new", data={
     "title": "SMOKE: no-audit task", "details": "d", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 nid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 check("unflagged task starts as Not required",
       "Not required" in mgr.get(f"/tasks/{nid}").text)
@@ -826,7 +834,7 @@ check("the Performance page still loads afterwards",
 r = admin.post("/recurring", data={
     "title": f"SMOKE daily check {RUN}", "details": "", "doer_id": "6",
     "branch_id": "", "frequency": "daily", "day_of": "", "due_time": "18:00",
-    "priority": "normal"})
+    "priority": "medium"})
 check("Add checklist rule works", r.status_code == 200 and "SMOKE daily check" in r.text)
 rid = re.findall(r"/recurring/(\d+)/toggle", r.text)
 check("the rule can be paused",
@@ -835,7 +843,7 @@ check("the rule can be paused",
 r = admin.post("/flows/new", data={
     "name": f"SMOKE flow {RUN}", "description": "",
     "step_title": ["Step one", "Step two"], "step_doer": ["6", "7"],
-    "step_tat": ["24", "24"], "step_priority": ["normal", "normal"],
+    "step_tat": ["24", "24"], "step_priority": ["medium", "medium"],
     "step_fields": ["", ""], "step_audit": ["", ""]})
 check("Create FMS flow works", r.status_code == 200, r.status_code)
 fl = re.findall(r"/flows/(\d+)/start", r.text) or re.findall(r"/flows/(\d+)\"", r.text)
@@ -852,7 +860,7 @@ check("Sync now answers even with no sheet configured",
 print("\n== proof is required by default ==")
 r = mgr.post("/tasks/new", data={
     "title": f"SMOKE proof needed {RUN}", "details": "", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 pid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 body = doer.get(f"/tasks/{pid}").text
 check("a new task requires proof with nothing ticked", "Proof is required" in body)
@@ -873,7 +881,7 @@ check("the task closed", "completed" in doer.get(f"/tasks/{pid}").text)
 
 r = mgr.post("/tasks/new", data={
     "title": f"SMOKE proof off {RUN}", "details": "", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00",
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00",
     "requires_attachment": "0"})   # exactly what an unticked box posts
 oid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 check("an unticked proof box really turns it off",
@@ -884,7 +892,7 @@ check("and then it submits with nothing attached",
 r = admin.post("/recurring", data={
     "title": f"SMOKE rule no proof {RUN}", "details": "", "doer_id": "6",
     "branch_id": "", "frequency": "daily", "day_of": "", "due_time": "18:00",
-    "priority": "normal", "requires_attachment": "0"})
+    "priority": "medium", "requires_attachment": "0"})
 from app.db import SessionLocal as _S
 from app.models import RecurringRule as _R
 from sqlalchemy import select as _sel
@@ -912,7 +920,7 @@ check("uploads stay available with no disk", _st.uploads_available())
 
 r = mgr.post("/tasks/new", data={
     "title": f"SMOKE db-stored proof {RUN}", "details": "", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-12-31T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 dbid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 r = doer.post(f"/tasks/{dbid}/attach/upload",
               files={"file": ("in-db.png", io.BytesIO(TINY_PNG), "image/png")})
@@ -1035,7 +1043,7 @@ _db.close()
 
 r = admin.post("/tasks/new", data={
     "title": f"SMOKE holiday deadline {RUN}", "details": "", "doer_id": "6",
-    "branch_id": "", "priority": "normal", "due_at": "2026-11-08T18:00"})
+    "branch_id": "", "priority": "medium", "due_at": "2026-11-08T18:00"})
 check("delegating onto a holiday still works", r.status_code == 200, r.status_code)
 check("and the task says the deadline moved", "is a holiday" in r.text)
 check("the new deadline is the next day", "09 Nov 2026" in r.text)
@@ -1093,9 +1101,413 @@ check("login still works normally", "Sign out" in
       TestClient(app, follow_redirects=True).post(
           "/login", data={"email": "mis@gcs.local", "password": "gcs1234"}).text)
 
+print("\n== priority weight (5x / 2x / 1x) ==")
+from app.models import Priority as _P, PRIORITY_WEIGHT as _PW
+check("three levels only", sorted(p.value for p in _P) == ["high", "low", "medium"],
+      [p.value for p in _P])
+check("high counts 5, medium 2, low 1",
+      (_PW[_P.HIGH], _PW[_P.MEDIUM], _PW[_P.LOW]) == (5, 2, 1))
+
+from app.services.scoring import SourceScore as _SS, Card as _C
+
+class _FakeTask:
+    def __init__(self, pr): self.priority = pr
+    @property
+    def weight(self):
+        return _PW[self.priority]
+
+from app.services import scoring as _sc
+check("one high task weighs the same as five low ones",
+      _sc._w([_FakeTask(_P.HIGH)]) == _sc._w([_FakeTask(_P.LOW)] * 5) == 5)
+check("a medium weighs two", _sc._w([_FakeTask(_P.MEDIUM)]) == 2)
+
+r = mgr.post("/tasks/new", data={
+    "title": f"SMOKE high priority {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "high", "due_at": "2026-12-31T18:00"})
+hid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
+body = mgr.get(f"/tasks/{hid}").text
+check("the task page shows the multiplier", "5\u00d7" in body)
+check("and says what it means in words", "counts as 5" in body)
+check("the doer still sees exactly one row, not five",
+      doer.get("/tasks?scope=mine&status=open").text.count(f"SMOKE high priority {RUN}") == 1)
+
+# the score must move five times as far for a high task as a low one
+def _score_gap(tasks):
+    c = _C()
+    c.sources = {"delegation": _SS(key="delegation", benchmark=100,
+                                   planned=_sc._w(tasks), completed=0,
+                                   not_done=_sc._w(tasks)).compute()}
+    return c.compute().gap
+
+check("missing one high task hurts as much as missing five low ones",
+      _score_gap([_FakeTask(_P.HIGH)]) == _score_gap([_FakeTask(_P.LOW)] * 5))
+
+# sorting
+r = mgr.post("/tasks/new", data={
+    "title": f"SMOKE low priority {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-01-01T09:00"})
+lid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
+listing = mgr.get("/tasks?scope=all&status=open").text
+check("high sorts above low even when low is due sooner",
+      listing.index(f"SMOKE high priority {RUN}") < listing.index(f"SMOKE low priority {RUN}"))
+
+print("\n== follow-ups: PC and EA ==")
+pc = login("pc@gcs.local")
+ea = login("ea@gcs.local")
+check("the PC can open Follow-ups", pc.get("/followups").status_code == 200)
+check("the EA can open Follow-ups", ea.get("/followups").status_code == 200)
+check("the PC lands on the Checklist & FMS desk", "Checklist &amp; FMS" in pc.get("/followups").text)
+check("the EA lands on the Delegation desk", "EA \u2014 Delegation" in ea.get("/followups").text)
+check("Follow-ups is in the PC's menu", "Follow-ups</span>" in pc.get("/").text)
+check("an ordinary doer does not see the menu",
+      "Follow-ups</span>" not in doer.get("/").text)
+
+from datetime import date as _date
+_today = _date.today().isoformat()
+ea_page = ea.get(f"/followups?desk=ea&day={_today}").text
+check("the EA sees delegation tasks that are not theirs",
+      "SMOKE high priority" in ea_page or "tick" in ea_page.lower())
+_ids = re.findall(r"/followups/(\d+)/tick", ea_page)
+check("there is something to chase", len(_ids) > 0, len(_ids))
+
+if _ids:
+    tid_f = _ids[0]
+    r = ea.post(f"/followups/{tid_f}/tick", data={"day": _today, "desk": "ea"})
+    check("the EA can tick a follow-up", r.status_code == 200, r.status_code)
+    check("the tick is recorded", "Followed up" in r.text)
+    page = ea.get(f"/followups?desk=ea&day={_today}").text
+    check("the count moves", "fu-done" in page)
+    r = ea.post(f"/followups/{tid_f}/tick", data={"day": _today, "desk": "ea"})
+    check("ticking again unticks it", "fu-done" not in r.text)
+    ea.post(f"/followups/{tid_f}/tick", data={"day": _today, "desk": "ea"})
+
+    check("the PC cannot tick a delegation task",
+          pc.post(f"/followups/{tid_f}/tick",
+                  data={"day": _today, "desk": "ea"}).status_code == 403)
+    check("an ordinary doer cannot tick anything",
+          doer.post(f"/followups/{tid_f}/tick",
+                    data={"day": _today, "desk": "ea"}).status_code == 403)
+    check("a follow-up cannot be recorded for tomorrow",
+          ea.post(f"/followups/{tid_f}/tick",
+                  data={"day": "2030-01-01", "desk": "ea"}).status_code == 400)
+
+    # yesterday's tick must not cover today
+    _yday = (_date.today() - __import__("datetime").timedelta(days=1)).isoformat()
+    ea.post(f"/followups/{tid_f}/tick", data={"day": _yday, "desk": "ea"})
+    ypage = ea.get(f"/followups?desk=ea&day={_yday}").text
+    check("yesterday can be ticked separately", "fu-done" in ypage)
+    check("and today keeps its own tally",
+          f'/followups/{tid_f}/tick' in ea.get(f"/followups?desk=ea&day={_today}").text)
+
+print("\n== follow-up report (now under Reports) ==")
+check("the old link still lands on the report",
+      admin.get("/followups/report").url.path == "/reports/followups")
+rep = admin.get("/reports/followups")
+check("the report opens", rep.status_code == 200, rep.status_code)
+check("it names who holds each desk", "Karan" in rep.text and "Simran" in rep.text)
+# The desk table is the only place a name means "this person holds the desk".
+# The employee filter lists everybody, which is not the same thing.
+_desk_table = rep.text.split("By desk", 1)[1].split("Day by day", 1)[0]
+check("and does not list every admin as the PC",
+      "CMD Sir" not in _desk_table, "admins should not be listed as desk holders")
+check("it shows follow-ups still pending", "Follow-up pending" in rep.text)
+check("a plain doer cannot open the report",
+      doer.get("/reports/followups").status_code == 403)
+check("but the PC can", pc.get("/reports/followups").status_code == 200)
+check("a date range works",
+      admin.get("/reports/followups?date_from=2026-09-01&date_to=2026-09-30").status_code == 200)
+check("backwards dates are handled",
+      admin.get("/reports/followups?date_from=2026-09-30&date_to=2026-09-01").status_code == 200)
+
+print("\n== the priority column is plain text, not a native enum ==")
+from sqlalchemy import inspect as _inspect, Enum as _SAEnum
+from app.db import engine as _eng
+_col = [c for c in _inspect(_eng).get_columns("tasks") if c["name"] == "priority"][0]
+check("priority is stored as text", not isinstance(_col["type"], _SAEnum),
+      repr(_col["type"]))
+check("so renaming a level is an ordinary UPDATE", True)
+
 print("\n== flow steps protected from deletion ==")
 check("cannot delete a live FMS step",
       admin.post(f"/tasks/{step1}/delete").status_code == 400)
+
+print("\n== the Reports menu ==")
+_idx = admin.get("/reports")
+check("the reports index opens", _idx.status_code == 200, _idx.status_code)
+for _t in ["1 · Delegation", "2 · Checklist", "3 · FMS", "4 · Follow-ups",
+           "5 · Audit", "6 · EM score"]:
+    check(f"it offers {_t}", _t in _idx.text)
+
+check("a doer sees the index too", doer.get("/reports").status_code == 200)
+check("but is not offered the EM score report", "6 · EM score" not in doer.get("/reports").text)
+check("nor the follow-up report", "4 · Follow-ups" not in doer.get("/reports").text)
+
+print("\n== reports 1-3: pending and completed, by work type ==")
+for _src, _label in [("delegation", "Delegation"), ("checklist", "Checklist"),
+                     ("fms", "FMS")]:
+    r = admin.get(f"/reports/tasks?source={_src}")
+    check(f"{_label} report opens", r.status_code == 200, r.status_code)
+    check(f"{_label} report is about {_label}",
+          f"{_label} — pending" in r.text, r.text[:200])
+    for _state in ["pending", "completed", "overdue", "all"]:
+        check(f"{_label}: the {_state} tab works",
+              admin.get(f"/reports/tasks?source={_src}&state={_state}").status_code == 200)
+
+check("an unknown report is a readable 404",
+      admin.get("/reports/tasks?source=nonsense").status_code == 404)
+
+# Pending is filtered on the PLANNED date, completed on the COMPLETION date.
+# Filtering both on one column is the usual way this goes quietly wrong.
+_r = admin.get("/reports/tasks?source=delegation")
+check("the page says which date it filters on",
+      "planned date for pending" in _r.text and "completion date for completed" in _r.text)
+
+print("\n== every report filter has BOTH a from and a to ==")
+for _path in ["/reports/tasks?source=delegation", "/reports/tasks?source=checklist",
+              "/reports/tasks?source=fms", "/reports/followups",
+              "/reports/audit", "/reports/score"]:
+    _t = admin.get(_path).text
+    check(f"{_path} has a from date", 'name="date_from"' in _t)
+    check(f"{_path} has a to date", 'name="date_to"' in _t)
+    check(f"{_path} offers quick ranges", "Quick range" in _t)
+    check(f"{_path} filters by branch", 'name="branch"' in _t)
+
+_fu = pc.get("/followups").text
+check("the follow-up desk has a from date too", 'name="date_from"' in _fu)
+check("and a to date", 'name="date_to"' in _fu)
+_range = pc.get("/followups?date_from=2026-09-01&date_to=2026-09-07")
+check("a range on the desk gives a day-by-day summary",
+      _range.status_code == 200 and "day by day" in _range.text.lower())
+check("a single day still gives the tick list",
+      "tickbox" in pc.get("/followups?date_from=%s&date_to=%s" % (_today, _today)).text)
+
+print("\n== report 5: audit pending and completed ==")
+_a = admin.get("/reports/audit")
+check("the audit report opens", _a.status_code == 200, _a.status_code)
+check("it splits by work type",
+      "Delegation" in _a.text and "Checklist" in _a.text and "FMS" in _a.text)
+check("it shows audit pending and completed",
+      "Audit pending" in _a.text and "Audit completed" in _a.text)
+for _state in ["pending", "completed", "not_required", "all"]:
+    check(f"audit report: the {_state} tab works",
+          admin.get(f"/reports/audit?state={_state}").status_code == 200)
+
+print("\n== report 6: EM score, person-wise and branch-wise ==")
+_s = admin.get("/reports/score")
+check("the score report opens", _s.status_code == 200, _s.status_code)
+check("it shows an average", "Average score" in _s.text)
+check("person-wise is the default", "Person-wise" in _s.text)
+check("branch-wise works",
+      admin.get("/reports/score?view=branch").status_code == 200)
+check("it shows the bifurcation per work type",
+      "not done" in _s.text and "late" in _s.text)
+check("a plain doer cannot open it", doer.get("/reports/score").status_code == 403)
+
+# Picking a branch must narrow the employee list to that branch's people.
+from app.db import SessionLocal as _SL
+from app.models import Branch as _Br, User as _U
+from sqlalchemy import select as _sel
+with _SL() as _d:
+    _bz = _d.scalar(_sel(_Br).where(_Br.name.like("Bodyzone%")))
+    _bz_id = _bz.id
+    _in_bz = {u.name for u in _d.scalars(_sel(_U).where(_U.branch_id == _bz_id)).all()}
+    _out_bz = {u.name for u in _d.scalars(
+        _sel(_U).where(_U.branch_id != _bz_id, _U.branch_id.is_not(None))).all()}
+_bpage = admin.get(f"/reports/score?branch={_bz_id}").text
+_table = _bpage.split("Person-wise", 1)[1]
+check("picking a branch keeps its own employees",
+      any(n in _table for n in _in_bz), "no Bodyzone employee listed")
+check("and drops everybody else",
+      not any(n in _table for n in _out_bz - _in_bz),
+      "an employee from another branch is still listed")
+
+print("\n== the dashboard is organised into sections ==")
+_dash = admin.get("/").text
+for _sec in ["1 · My work", "2 · My EM score", "3 · My team"]:
+    check(f"the dashboard has '{_sec}'", _sec in _dash)
+check("it groups my work by type of work", "By type of work" in _dash)
+check("it shows the team average", "Average EM score" in _dash)
+check("with the bifurcation behind it", "Score bifurcation" in _dash)
+check("and a branch-wise roll-up", "Branch-wise" in _dash)
+
+_ddash = doer.get("/").text
+check("a doer gets the same score sections",
+      "1 · My work" in _ddash and "2 · My EM score" in _ddash)
+check("a doer sees their own bifurcation",
+      "Work not done" in _ddash and "Not done on time" in _ddash)
+check("but no team section", "3 · My team" not in _ddash)
+
+print("\n== every user row has a visible Edit button ==")
+from app.db import SessionLocal as _SL2
+from app.models import User as _U2
+from sqlalchemy import select as _sel2
+with _SL2() as _d:
+    _me = _d.scalar(_sel2(_U2).where(_U2.email == "mis@gcs.local"))
+    _other = _d.scalar(_sel2(_U2).where(_U2.email == "amit@gcs.local"))
+    _me_id, _other_id = _me.id, _other.id
+
+_up = admin.get("/admin/users").text
+check("someone else's row has an Edit button",
+      f'href="/admin/users/{_other_id}"' in _up and ">Edit<" in _up)
+check("your own row has one too",
+      _up.count(f'href="/admin/users/{_me_id}"') >= 1)
+# The Edit button must not be the only way in, and must not be a dead link.
+check("the Edit button opens the edit page",
+      admin.get(f"/admin/users/{_other_id}").status_code == 200)
+_saved = admin.post(f"/admin/users/{_other_id}",
+                    data={"name": "PT Trainer Amit", "phone": "+919800000006",
+                          "role": "doer", "branch_id": "", "department_id": "",
+                          "rights": ["create_task"], "bm_delegation": 70,
+                          "bm_checklist": 10, "bm_fms": 20})
+check("the edit page can actually save", _saved.status_code == 200, _saved.status_code)
+check("and the change sticks", "70 / 10 / 20" in admin.get("/admin/users").text)
+check("editing your own account is allowed",
+      admin.get(f"/admin/users/{_me_id}").status_code == 200)
+check("but your own role stays locked",
+      "Role and rights are locked here" in admin.get(f"/admin/users/{_me_id}").text)
+
+print("\n== reports are scoped until the right is given ==")
+from app.db import SessionLocal as _SL3
+from app.models import User as _U3, Task as _T3, Right as _R3
+from sqlalchemy import select as _s3
+
+with _SL3() as _d:
+    _amit = _d.scalar(_s3(_U3).where(_U3.email == "amit@gcs.local"))
+    _amit_id = _amit.id
+    _amit_rights = _amit.rights
+
+# By default a doer's report is about the doer, and nobody else.
+_dr = doer.get("/reports/tasks?source=delegation&state=all")
+check("a doer can open the delegation report", _dr.status_code == 200, _dr.status_code)
+check("and is told it is only their own work",
+      "covers your own work only" in _dr.text)
+with _SL3() as _d:
+    _mine = {t.id for t in _d.scalars(_s3(_T3).where(
+        _T3.source == "DELEGATION",
+        (_T3.doer_id == _amit_id) | (_T3.assigner_id == _amit_id))).all()}
+    _theirs = {t.id for t in _d.scalars(_s3(_T3).where(
+        _T3.source == "DELEGATION", _T3.doer_id != _amit_id,
+        _T3.assigner_id != _amit_id)).all()}
+_shown = {i for i in _mine if f'/tasks/{i}"' in _dr.text}
+_leaked = {i for i in _theirs if f'/tasks/{i}"' in _dr.text}
+check("their own delegation tasks are listed", bool(_shown), "none of their own shown")
+check("somebody else's are not", not _leaked, f"leaked task ids {sorted(_leaked)[:5]}")
+
+check("the EM score report is refused", doer.get("/reports/score").status_code == 403)
+check("the follow-up report is refused", doer.get("/reports/followups").status_code == 403)
+_ix = doer.get("/reports").text
+check("the index does not offer the EM score report", "6 · EM score" not in _ix)
+check("nor the follow-up report", "4 · Follow-ups" not in _ix)
+check("and the sidebar hides both",
+      "EM score report" not in _ix and "Follow-up report" not in _ix)
+
+# Now tick the right and the same pages cover the company.
+admin.post(f"/admin/users/{_amit_id}",
+           data={"name": "PT Trainer Amit", "phone": "+919800000006",
+                 "role": "doer", "branch_id": "", "department_id": "",
+                 "rights": ["view_all_reports"], "bm_delegation": 60,
+                 "bm_checklist": 20, "bm_fms": 20})
+_dr2 = doer.get("/reports/tasks?source=delegation&state=all")
+check("with the right, the warning is gone",
+      "covers your own work only" not in _dr2.text)
+check("and other people's tasks appear",
+      any(f'/tasks/{i}"' in _dr2.text for i in _theirs), "still scoped to self")
+check("the EM score report opens", doer.get("/reports/score").status_code == 200)
+check("the follow-up report opens", doer.get("/reports/followups").status_code == 200)
+check("the branch filter offers every branch",
+      doer.get("/reports/score").text.count("<option value=\"") >
+      _dr.text.count("<option value=\""))
+_ix2 = doer.get("/reports").text
+check("the index now offers all six",
+      "6 · EM score" in _ix2 and "4 · Follow-ups" in _ix2)
+
+# The right must not become a back door into anything else.
+check("it does not grant delegating work",
+      doer.get("/tasks/new").status_code == 403)
+check("nor managing users", doer.get("/admin/users").status_code == 403)
+check("nor the Performance page", doer.get("/stats").status_code == 403)
+
+# put the user back the way the seed left them
+with _SL3() as _d:
+    _u = _d.get(_U3, _amit_id); _u.rights = _amit_rights; _d.commit()
+
+print("\n== each person is told whose figures they are looking at ==")
+check("a manager is told it is their branch",
+      "This report covers Bodyzone Fitness &amp; Spa" in
+      mgr.get("/reports/tasks?source=delegation").text
+      or "covers Bodyzone" in mgr.get("/reports/tasks?source=delegation").text)
+check("an admin gets no warning at all",
+      "covers your own work only" not in admin.get("/reports/tasks?source=delegation").text
+      and "To see every branch" not in admin.get("/reports/tasks?source=delegation").text)
+# A manager's report must actually stay inside their branch.
+with _SL3() as _d:
+    _mgr = _d.scalar(_s3(_U3).where(_U3.email == "bz.manager@gcs.local"))
+    _elsewhere = [t.id for t in _d.scalars(_s3(_T3).where(
+        _T3.source == "DELEGATION", _T3.branch_id != _mgr.branch_id,
+        _T3.doer_id != _mgr.id, _T3.assigner_id != _mgr.id)).all()]
+_mp = mgr.get("/reports/tasks?source=delegation&state=all").text
+check("and another branch's tasks stay out of it",
+      not any(f'/tasks/{i}"' in _mp for i in _elsewhere),
+      "a task from another branch is listed")
+
+print("\n== the right is offered when creating a user ==")
+_form = admin.get("/admin/users").text
+check("the tick box exists", 'value="view_all_reports"' in _form)
+check("with a plain-English label", "See everyone&#39;s reports" in _form
+      or "See everyone\u2019s reports" in _form)
+# Read the actual default-rights map the page ships to the browser, rather
+# than guessing at the surrounding HTML — the word "manager" appears a dozen
+# times on that page and a substring search finds the wrong one.
+import json as _json
+_def = _json.loads(_form.split("DEF = ", 1)[1].split(";", 1)[0].strip())
+check("a doer gets nothing by default", _def["doer"] == [])
+check("a manager does NOT get it by default",
+      "view_all_reports" not in _def["manager"], _def["manager"])
+check("an admin does", "view_all_reports" in _def["admin"])
+
+print("\n== the clock runs on Indian time, not UTC ==")
+from datetime import timezone as _tz, timedelta as _td, datetime as _dt
+from app import clock as _clock
+_IST = _tz(_td(hours=5, minutes=30))
+_real = _dt.now(_IST).replace(tzinfo=None)
+check("clock.now() is Chandigarh time",
+      abs((_clock.now() - _real).total_seconds()) < 5,
+      f"off by {(_clock.now() - _real).total_seconds()/3600:.1f}h")
+check("clock.today() is the Indian date", _clock.today() == _real.date())
+
+# A deadline typed as 6pm must go overdue at 6pm, not 11:30pm. This is the
+# whole point: the 'not done on time' half of every benchmark depends on it.
+from app.models import Task as _TK, TaskSource as _TS, Priority as _PR
+_late = _TK(title="t", due_at=_clock.now() - _td(minutes=1),
+            source=_TS.DELEGATION, priority=_PR.MEDIUM)
+_soon = _TK(title="t", due_at=_clock.now() + _td(minutes=1),
+            source=_TS.DELEGATION, priority=_PR.MEDIUM)
+check("a deadline one minute ago is overdue", _late.is_overdue)
+check("a deadline one minute away is not", not _soon.is_overdue)
+
+# And nothing anywhere may quietly go back to UTC.
+import subprocess as _sp, os as _os
+_hits = _sp.run(["grep", "-rn", "utcnow()", "app/", "--include=*.py"],
+                capture_output=True, text=True).stdout
+# clock.py names it in its own docstring, explaining why it is gone.
+_hits = "\n".join(l for l in _hits.splitlines() if "app/clock.py" not in l)
+check("no utcnow() left anywhere in the app", _hits.strip() == "", _hits[:200])
+_naive = _sp.run(["grep", "-rn", "date.today()", "app/", "--include=*.py"],
+                 capture_output=True, text=True).stdout
+_naive = "\n".join(l for l in _naive.splitlines() if "app/clock.py" not in l)
+check("no bare date.today() either", _naive.strip() == "", _naive[:200])
+
+# A task created now must be stamped with Indian time in the database.
+_tid = int(re.search(r"/tasks/(\d+)",
+    admin.post("/tasks/new", data={"title": f"clock {RUN}", "doer_id": 6,
+        "priority": "medium", "due_at": (_clock.now() + _td(days=1)).strftime("%Y-%m-%dT%H:%M"),
+    }, follow_redirects=False).headers["location"]).group(1))
+from app.db import SessionLocal as _SLC
+with _SLC() as _d:
+    _row = _d.get(_TK, _tid)
+    check("its created_at is Indian time",
+          abs((_row.created_at - _dt.now(_IST).replace(tzinfo=None)).total_seconds()) < 120,
+          str(_row.created_at))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

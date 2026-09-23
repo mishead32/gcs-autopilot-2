@@ -81,6 +81,12 @@ def seed():
                  extra_rights=[Right.AUDIT_TASK, Right.REOPEN_TASK,
                                Right.FALSE_MARK, Right.VIEW_ALL_BRANCHES])
 
+    # the two people who chase what has not been done
+    pc = mk("PC Simran", "pc@gcs.local", Role.DOER, ho, "+919800000014",
+            extra_rights=[Right.FOLLOWUP_CHECKLIST_FMS, Right.VIEW_ALL_BRANCHES])
+    ea = mk("EA Karan", "ea@gcs.local", Role.DOER, ho, "+919800000015",
+            extra_rights=[Right.FOLLOWUP_DELEGATION, Right.VIEW_ALL_BRANCHES])
+
     # ---------------- Flows -------------------------------------------------
     pt_flow = Flow(org_id=org.id, branch_id=bz.id,
                    name="New PT Member Onboarding",
@@ -101,7 +107,7 @@ def seed():
         db.add(FlowStep(flow_id=pt_flow.id, position=pos, title=title, instructions=instr,
                         default_doer_id=doer.id, tat_hours=tat, capture_fields=fields,
                         requires_audit=audit,
-                        priority=Priority.HIGH if pos <= 2 else Priority.NORMAL))
+                        priority=Priority.HIGH if pos <= 2 else Priority.MEDIUM))
 
     adm_flow = Flow(org_id=org.id, branch_id=bp.id, name="BIPS Admission Enquiry",
                     description="Enquiry to admission — with a mandatory follow-up loop.")
@@ -131,11 +137,11 @@ def seed():
     # ---------------- Recurring rules --------------------------------------
     for title, doer, freq, day, time_, prio, audit in [
         ("Post daily sales MIS to CMD", rajinder, Recurrence.WEEKDAYS, None, "19:00", Priority.HIGH, False),
-        ("Bodyzone: invalid member & face-ID report", frontbz, Recurrence.DAILY, None, "11:00", Priority.NORMAL, False),
-        ("Spa Kora: room occupancy entry", therapy, Recurrence.DAILY, None, "21:00", Priority.NORMAL, False),
+        ("Bodyzone: invalid member & face-ID report", frontbz, Recurrence.DAILY, None, "11:00", Priority.MEDIUM, False),
+        ("Spa Kora: room occupancy entry", therapy, Recurrence.DAILY, None, "21:00", Priority.MEDIUM, False),
         ("Weekly PT trainer-wise performance review", bz_mgr, Recurrence.WEEKLY, 0, "12:00", Priority.HIGH, True),
-        ("Monthly machine maintenance audit", bz_mgr, Recurrence.MONTHLY, 1, "16:00", Priority.CRITICAL, True),
-        ("BIPS: irrelevant-lead quality audit", counsel, Recurrence.WEEKLY, 4, "17:00", Priority.NORMAL, True),
+        ("Monthly machine maintenance audit", bz_mgr, Recurrence.MONTHLY, 1, "16:00", Priority.HIGH, True),
+        ("BIPS: irrelevant-lead quality audit", counsel, Recurrence.WEEKLY, 4, "17:00", Priority.MEDIUM, True),
         ("Jharkhand: daily collection summary", jh_ops, Recurrence.WEEKDAYS, None, "18:30", Priority.HIGH, False),
         ("HO: vendor payment run", ho_acct, Recurrence.WEEKLY, 2, "15:00", Priority.HIGH, True),
     ]:

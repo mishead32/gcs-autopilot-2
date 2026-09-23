@@ -26,6 +26,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..models import (
     Task, TaskStatus, User, Branch, RecurringRule, Flow, FlowInstance,
     Attachment, TaskComment,
@@ -281,7 +282,7 @@ def sync(db: Session, org_id: int) -> dict:
             title="Last sync", rows=20, cols=3)
         meta.clear()
         meta.update([
-            ["Last updated", datetime.now().strftime("%d %b %Y, %I:%M %p")],
+            ["Last updated", clock.stamp()],
             ["Rows written", sum(counts.values())],
             ["Source", "GCS Autopilot — this Sheet is a read-only copy"],
             ["Note", "Edits made here are overwritten on the next sync."],
@@ -291,7 +292,7 @@ def sync(db: Session, org_id: int) -> dict:
 
     return {"ok": not errors, "counts": counts, "errors": errors,
             "total": sum(counts.values()),
-            "at": datetime.now().strftime("%d %b %Y, %I:%M %p")}
+            "at": clock.stamp()}
 
 
 def sheet_url() -> str:

@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..models import RecurringRule, Recurrence, Task, TaskSource
 from . import notify, holidays
 
@@ -30,7 +31,7 @@ def is_due_today(rule: RecurringRule, today: date) -> bool:
 
 
 def run_spawn(db: Session, today: date | None = None) -> int:
-    today = today or date.today()
+    today = today or clock.today()
     created = 0
     rules = db.scalars(select(RecurringRule).where(RecurringRule.active.is_(True))).all()
 

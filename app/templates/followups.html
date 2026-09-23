@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Follow-ups</h1>
+    <p class="sub">Tick every task you chased. One tick per task per day.</p>
+  </div>
+  <a class="btn ghost" href="/reports/followups">Management report</a>
+</div>
+
+<div class="tabs">
+  {% for k, c in desks.items() %}
+  <a class="{{ 'active' if k == desk }}"
+     href="/followups?desk={{ k }}&date_from={{ date_from }}&date_to={{ date_to }}">{{ c.label }}</a>
+  {% endfor %}
+</div>
+
+<form method="get" action="/followups" class="card filterbar">
+  <input type="hidden" name="desk" value="{{ desk }}">
+  <div class="fb-row">
+    <div class="fb-f"><label>From date</label>
+      <input type="date" name="date_from" value="{{ date_from }}"></div>
+    <div class="fb-f"><label>To date</label>
+      <input type="date" name="date_to" value="{{ date_to }}"></div>
+  </div>
+  <div class="fb-acts">
+    <span class="m">
+      {% if span > 1 %}Showing <strong>{{ span }} days</strong> as a summary.
+        Pick a single day — the same date in both boxes — to tick tasks off.
+      {% else %}Showing <strong>{{ 'today' if is_today else day.strftime('%a %d %b %Y') }}</strong>.
+        Widen the dates to see a day-by-day summary.{% endif %}
+    </span>
+    <span class="fb-sp"></span>
+    <button class="btn">Apply</button>
+    {% if span == 1 %}
+    <a class="btn ghost" href="/followups?desk={{ desk }}&date_from={{ prev_day }}&date_to={{ prev_day }}">‹ Previous day</a>
+    {% if not is_today %}
+    <a class="btn ghost" href="/followups?desk={{ desk }}&date_from={{ next_day }}&date_to={{ next_day }}">Next day ›</a>
+    <a class="btn ghost" href="/followups?desk={{ desk }}">Today</a>
+    {% endif %}
+    {% endif %}
+  </div>
+</form>
+
+<div class="grid g3">
+  <div class="kpi"><div class="n">{{ due }}</div>
+    <div class="l">{{ 'Follow-ups due' if span > 1 else 'Open tasks' }}</div></div>
+  <div class="kpi ok"><div class="n">{{ done }}</div><div class="l">Followed up</div></div>
+  <div class="kpi {{ 'bad' if missed else 'ok' }}"><div class="n">{{ missed }}</div>
+    <div class="l">Not followed up</div></div>
+</div>
+
+{% if not can_tick %}
+<div class="proof need" style="margin-top:16px">
+  <strong>You can see this list but not tick it.</strong>
+  Only the person holding the “{{ cfg.short }}” right can record a follow-up.
+  Ask an admin to tick it on your user if that should be you.
+</div>
+{% endif %}
+
+{% if range_rows is not none %}
+<div class="sect">
+  <div class="sect-head"><h2>{{ cfg.label }} — day by day</h2>
+    <span class="count">{{ range_rows|length }} days</span></div>
+</div>
+<div class="table-wrap">
+<table>
+  <tr><th>Day</th><th>Open tasks</th><th>Followed up</th><th>Not followed up</th>
+      <th>Chased by</th><th></th></tr>
+  {% for r in range_rows %}
+  <tr>
+    <td><strong>{{ r.day.strftime('%a %d %b %Y') }}</strong></td>
+    <td>{{ r.due }}</td>
+    <td class="good-n">{{ r.done }}</td>
+    <td class="{{ 'overdue' if r.missed }}">{{ r.missed }}</td>
+    <td>{{ r.who or '—' }}</td>
+    <td><a class="btn sm ghost"
+           href="/followups?desk={{ desk }}&date_from={{ r.day.isoformat() }}&date_to={{ r.day.isoformat() }}">Open</a></td>
+  </tr>
+  {% endfor %}
+</table></div>
+
+{% else %}
+<div class="sect">
+  <div class="sect-head"><h2>{{ cfg.label }} — {{ day.strftime('%d %b %Y') }}</h2>
+    <span class="count {{ 'bad' if missed }}">{{ tasks|length }} open</span></div>
+</div>
+
+{% if tasks %}
+<div class="table-wrap">
+<table>
+  <tr><th style="width:52px"></th><th>Task</th><th>Doer</th><th>Priority</th>
+      <th>Due</th><th>Status</th><th>Followed up by</th></tr>
+  {% for t in tasks %}
+  {% set f = ticks.get(t.id) %}
+  <tr class="{{ 'fu-done' if f }}">
+    <td>
+      {% if can_tick %}
+      <form method="post" action="/followups/{{ t.id }}/tick">
+        <input type="hidden" name="day" value="{{ day_str }}">
+        <input type="hidden" name="desk" value="{{ desk }}">
+        <button class="tickbox {{ 'on' if f }}"
+                title="{{ 'Ticked — click to undo' if f else 'Mark followed up' }}">
+          {{ '✓' if f else '' }}</button>
+      </form>
+      {% else %}
+        <span class="tickbox {{ 'on' if f }} static">{{ '✓' if f else '' }}</span>
+      {% endif %}
+    </td>
+    <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
+      {% if t.branch %}<div class="m" style="font-size:12px">{{ t.branch.name }}</div>{% endif %}</td>
+    <td>{{ t.doer.name }}</td>
+    <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }} {{ t.weight_label }}</span></td>
+    <td class="{{ 'overdue' if t.due_at.date() < day }}">{{ t.due_at|dt('%d %b, %I:%M %p') }}</td>
+    <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>
+    <td>{% if f %}{{ f.by.name }}<div class="m" style="font-size:11px">{{ f.created_at|dt('%d %b, %I:%M %p') }}</div>
+        {% else %}<span class="m">—</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<div class="empty">Nothing was open on this desk that day. Nothing to chase.</div>
+{% endif %}
+{% endif %}
+{% endblock %}

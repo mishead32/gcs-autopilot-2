@@ -14,7 +14,7 @@
       {% if t.branch %}<div class="m" style="color:var(--muted);font-size:12px">{{ t.branch.name }}</div>{% endif %}
     </td>
     {% if show_doer %}<td>{{ t.doer.name }}</td>{% endif %}
-    <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}</span></td>
+    <td><span class="chip {{ t.priority.value }}" title="Counts as {{ t.weight }} tasks in the score">{{ t.priority.value }} {{ t.weight_label }}</span></td>
     <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>
     <td><a class="chip audit_{{ t.audit_state.value }}" href="/tasks/{{ t.id }}#audit"
            title="Open the audit for this task">{{ t.audit_label }}</a></td>

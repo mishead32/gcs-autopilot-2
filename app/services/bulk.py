@@ -21,6 +21,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..models import (
     Task, TaskSource, Priority, RecurringRule, Recurrence, User, Branch,
 )
@@ -34,7 +35,7 @@ DELEGATION_COLS = [
     ("Details", 46, "Optional. Instructions, and what 'done' looks like."),
     ("Doer email", 26, "Required. Must match a user already in the system."),
     ("Company", 26, "Optional. Defaults to the doer's own company."),
-    ("Priority", 14, "low / normal / high / critical. Blank = normal."),
+    ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Due date", 14, "Required. DD/MM/YYYY, e.g. 25/09/2026"),
     ("Due time", 12, "HH:MM 24-hour, e.g. 18:00. Blank = 18:00."),
     ("Needs audit", 13, "YES or NO. Blank = NO."),
@@ -48,7 +49,7 @@ CHECKLIST_COLS = [
     ("Frequency", 16, "daily / weekdays / weekly / monthly"),
     ("Day", 10, "Weekly: Mon-Sun. Monthly: 1-31. Daily: leave blank."),
     ("Due time", 12, "HH:MM 24-hour, e.g. 18:00. Blank = 18:00."),
-    ("Priority", 14, "low / normal / high / critical. Blank = normal."),
+    ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Needs audit", 13, "YES or NO. Blank = NO."),
 ]
 
@@ -99,7 +100,7 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
     ).all()
 
     wb = Workbook()
-    soon = (datetime.now() + timedelta(days=3)).strftime("%d/%m/%Y")
+    soon = (clock.now() + timedelta(days=3)).strftime("%d/%m/%Y")
     sample_email = users[0].email if users else "someone@gcs.local"
     sample_branch = branches[0].name if branches else ""
 
@@ -108,9 +109,9 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
             ["Reconcile September PT collections",
              "Cross-check the billing export against the register.",
              sample_email, sample_branch, "high", soon, "18:00", "YES"],
-            ["Chase pending NBD follow-ups", "", sample_email, "", "normal", soon, "", "NO"],
+            ["Chase pending NBD follow-ups", "", sample_email, "", "medium", soon, "", "NO"],
         ])
-        _dropdown(ws, "E", ["low", "normal", "high", "critical"])
+        _dropdown(ws, "E", ["high", "medium", "low"])
         _dropdown(ws, "H", ["YES", "NO"])
     else:
         ws = _sheet(wb, "Checklist", CHECKLIST_COLS, [
@@ -119,10 +120,10 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
             ["Weekly trainer performance review", "", sample_email, "",
              "weekly", "Mon", "12:00", "high", "YES"],
             ["Monthly machine maintenance audit", "", sample_email, "",
-             "monthly", "1", "16:00", "critical", "YES"],
+             "monthly", "1", "16:00", "high", "YES"],
         ])
         _dropdown(ws, "E", ["daily", "weekdays", "weekly", "monthly"])
-        _dropdown(ws, "H", ["low", "normal", "high", "critical"])
+        _dropdown(ws, "H", ["high", "medium", "low"])
         _dropdown(ws, "I", ["YES", "NO"])
 
     # a reference tab so nobody has to guess an email address
@@ -187,7 +188,7 @@ def _text(v) -> str:
 
 def _priority(v) -> Priority:
     s = _text(v).lower()
-    return Priority(s) if s in {p.value for p in Priority} else Priority.NORMAL
+    return Priority(s) if s in {p.value for p in Priority} else Priority.MEDIUM
 
 
 def _yes(v) -> bool:

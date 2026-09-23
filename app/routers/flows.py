@@ -76,7 +76,7 @@ async def create_flow(request: Request, user: User = Depends(require_right(Right
             instructions=(instr[i] if i < len(instr) else "").strip() or None,
             default_doer_id=int(doers[i]) if i < len(doers) and doers[i] else None,
             tat_hours=int(tats[i]) if i < len(tats) and tats[i] else 24,
-            priority=Priority(prios[i]) if i < len(prios) and prios[i] else Priority.NORMAL,
+            priority=Priority(prios[i]) if i < len(prios) and prios[i] else Priority.MEDIUM,
             requires_audit=(audits[i] == "1") if i < len(audits) else False,
             # proof is required unless the step explicitly says otherwise
             requires_attachment=(proofs[i] != "0") if i < len(proofs) else True,

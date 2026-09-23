@@ -22,6 +22,30 @@
       <span class="ic">✓</span><span class="lb">My Tasks</span></a>
     <a class="{{ 'active' if p.startswith('/help') }}" href="/help" title="Help Desk">
       <span class="ic">☏</span><span class="lb">Help Desk</span></a>
+    {% if user.can_follow_up or user.can_manage %}
+    <a class="{{ 'active' if p.startswith('/followups') }}" href="/followups" title="Follow-ups">
+      <span class="ic">☎</span><span class="lb">Follow-ups</span></a>
+    {% endif %}
+
+    <div class="side-sec"><span class="lb">Reports</span></div>
+    <a class="{{ 'active' if p == '/reports' }}" href="/reports" title="All reports">
+      <span class="ic">▤</span><span class="lb">All reports</span></a>
+    <a href="/reports/tasks?source=delegation" title="Delegation report">
+      <span class="ic">➜</span><span class="lb">Delegation report</span></a>
+    <a href="/reports/tasks?source=checklist" title="Checklist report">
+      <span class="ic">☑</span><span class="lb">Checklist report</span></a>
+    <a href="/reports/tasks?source=fms" title="FMS report">
+      <span class="ic">⇉</span><span class="lb">FMS report</span></a>
+    {% if user.can_see_all_reports or user.can_follow_up %}
+    <a class="{{ 'active' if p == '/reports/followups' }}" href="/reports/followups" title="Follow-up report">
+      <span class="ic">☎</span><span class="lb">Follow-up report</span></a>
+    {% endif %}
+    <a class="{{ 'active' if p == '/reports/audit' }}" href="/reports/audit" title="Audit report">
+      <span class="ic">⚖</span><span class="lb">Audit report</span></a>
+    {% if user.can_see_all_reports %}
+    <a class="{{ 'active' if p == '/reports/score' }}" href="/reports/score" title="EM score report">
+      <span class="ic">◉</span><span class="lb">EM score report</span></a>
+    {% endif %}
 
     {% if user.can_manage %}
       <div class="side-sec"><span class="lb">Operations</span></div>

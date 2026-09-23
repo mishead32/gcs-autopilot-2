@@ -2,6 +2,7 @@ from datetime import datetime
 
 from fastapi.templating import Jinja2Templates
 
+from . import clock
 from .config import BASE_DIR, APP_NAME, EPHEMERAL_STORAGE, BANNER
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
@@ -16,7 +17,7 @@ def dt(value, fmt="%d %b %Y, %I:%M %p"):
 def relative_due(value):
     if value is None:
         return "—"
-    delta = value - datetime.utcnow()
+    delta = value - clock.now()
     mins = int(delta.total_seconds() // 60)
     if mins < 0:
         mins = -mins
@@ -44,3 +45,6 @@ templates.env.globals["MAX_UPLOAD_MB"] = _storage.MAX_UPLOAD_MB
 templates.env.globals["UPLOAD_ACCEPT"] = _storage.ACCEPT_ATTR
 templates.env.globals["BANNER"] = BANNER
 templates.env.globals["now"] = datetime.utcnow
+
+from .models import PRIORITY_WEIGHT as _PW          # noqa: E402
+templates.env.globals["PRIORITY_WEIGHT"] = _PW

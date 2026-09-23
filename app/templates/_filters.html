@@ -1,0 +1,98 @@
+{# One filter bar for every report, so the controls never move around.
+   Every date filter is a FROM and a TO — never a single day. #}
+{# Says plainly whose work a report is covering. Without the right, a report
+   is about YOU — better to say so than to let someone read a company-wide
+   conclusion off their own three tasks. #}
+{% macro scope_note(user) %}
+{% if user.report_scope == 'self' %}
+<div class="proof need" style="margin-bottom:14px">
+  <strong>This report covers your own work only.</strong>
+  To see the whole company here, an admin has to tick
+  <em>“See everyone’s reports”</em> on your user under Setup → Users.
+</div>
+{% elif user.report_scope == 'branch' %}
+<div class="proof need" style="margin-bottom:14px">
+  <strong>This report covers {{ user.branch.name if user.branch else 'your branch' }}.</strong>
+  To see every branch, an admin has to tick
+  <em>“See everyone’s reports”</em> on your user under Setup → Users.
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro filter_bar(f, basis='', show_branch=true, show_doer=true, show_priority=true) %}
+<form method="get" action="{{ f.path }}" class="card filterbar">
+  {% for k, v in f.hidden.items() %}
+  <input type="hidden" name="{{ k }}" value="{{ v }}">
+  {% endfor %}
+  {% if f.state %}<input type="hidden" name="state" value="{{ f.state }}">{% endif %}
+
+  <div class="fb-row">
+    <div class="fb-f">
+      <label>From date</label>
+      <input type="date" name="date_from" value="{{ f.f_from }}">
+    </div>
+    <div class="fb-f">
+      <label>To date</label>
+      <input type="date" name="date_to" value="{{ f.f_to }}">
+    </div>
+
+    {% if show_branch %}
+    <div class="fb-f">
+      <label>Branch</label>
+      <select name="branch" onchange="this.form.submit()">
+        <option value="">All branches</option>
+        {% for b in f.branches %}
+        <option value="{{ b.id }}" {{ 'selected' if f.branch_id == b.id }}>{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    {% if show_doer %}
+    <div class="fb-f">
+      <label>Employee</label>
+      <select name="doer">
+        <option value="">All employees{% if f.branch_id %} in this branch{% endif %}</option>
+        {% for d in f.doers %}
+        <option value="{{ d.id }}" {{ 'selected' if f.doer_id == d.id }}>{{ d.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    {% if show_priority %}
+    <div class="fb-f">
+      <label>Priority</label>
+      <select name="priority">
+        <option value="">All priorities</option>
+        {% for p, w in [('high','5×'), ('medium','2×'), ('low','1×')] %}
+        <option value="{{ p }}" {{ 'selected' if f.priority == p }}>{{ p|title }} ({{ w }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="fb-acts">
+    <span class="m">
+      {% if basis %}Dates filter on <strong>{{ basis }}</strong>. {% endif %}
+      Showing: <strong>{{ f.summary }}</strong>
+    </span>
+    <span class="fb-sp"></span>
+    <button class="btn">Apply filters</button>
+    {% if f.active %}<a class="btn ghost" href="{{ f.clear_url }}">Clear</a>{% endif %}
+  </div>
+</form>
+{% endmacro %}
+
+
+{# Quick date presets — every one sets BOTH from and to. #}
+{% macro date_presets(f) %}
+<div class="tabs presets">
+  <span class="m" style="align-self:center;margin-right:4px">Quick range</span>
+  {% for label, href, on in f.presets %}
+  <a class="{{ 'active' if on }}" href="{{ href }}">{{ label }}</a>
+  {% endfor %}
+</div>
+{% endmacro %}

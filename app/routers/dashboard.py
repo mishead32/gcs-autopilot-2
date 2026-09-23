@@ -5,11 +5,12 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..db import get_db
 from ..deps import current_user, manager_up, admin_up
 from ..models import (
-    Task, TaskStatus, User, Role, RecurringRule, Recurrence, Priority,
-    Branch, OutboundMessage, FlowInstance
+    Task, TaskStatus, TaskSource, User, Role, RecurringRule, Recurrence,
+    Priority, Branch, OutboundMessage, FlowInstance
 )
 from ..services import scoring, recurring
 from ..templating import templates
@@ -19,38 +20,121 @@ OPEN = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
         TaskStatus.REJECTED, TaskStatus.REOPENED)
 
 
+SOURCE_TABS = [
+    (TaskSource.DELEGATION, "Delegation"),
+    (TaskSource.RECURRING, "Checklist"),
+    (TaskSource.FLOW, "FMS"),
+]
+
+
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Doer dashboard - what's on my plate right now."""
+    """The dashboard, in three clear parts.
+
+      1. My work        — what is on my plate, split by urgency and by type
+      2. My score       — the average and the bifurcation behind it
+      3. My team        — only for managers and above: the same two, org-wide
+
+    Everything deeper than a glance lives under Reports; this page is meant
+    to answer "what do I do next" without scrolling.
+    """
+    from ..models import PRIORITY_ORDER
     mine = db.scalars(
         select(Task).where(Task.doer_id == user.id, Task.status.in_(OPEN))
-        .order_by(Task.due_at.asc())
     ).all()
+    # High priority to the top, then by deadline. Done in Python because the
+    # buckets below re-split the same list anyway.
+    mine.sort(key=lambda t: (PRIORITY_ORDER.get(t.priority, 9), t.due_at))
     submitted = db.scalars(
         select(Task).where(Task.doer_id == user.id, Task.status == TaskStatus.SUBMITTED)
     ).all()
 
-    now = datetime.utcnow()
+    now = clock.now()
     buckets = {
         "overdue": [t for t in mine if t.due_at < now],
         "today": [t for t in mine if t.due_at.date() == now.date() and t.due_at >= now],
         "upcoming": [t for t in mine if t.due_at.date() > now.date()],
     }
+    # The same open work, cut the other way: by kind of work rather than by
+    # how soon it is due. Both cuts of one list, so the totals always agree.
+    by_source = [{
+        "key": src.value, "label": label,
+        "open": [t for t in mine if t.source == src],
+        "overdue": [t for t in buckets["overdue"] if t.source == src],
+        "report": f"/reports/tasks?source={key}",
+    } for (src, label), key in zip(SOURCE_TABS, ("delegation", "checklist", "fms"))]
 
-    awaiting_audit = []
+    card = scoring.user_scorecard(db, user, days=30)
+
+    team = None
     if user.role in (Role.OWNER, Role.ADMIN, Role.MANAGER):
-        q = select(Task).where(Task.org_id == user.org_id, Task.status == TaskStatus.SUBMITTED)
-        if user.role == Role.MANAGER:
-            q = q.where(Task.branch_id == user.branch_id)
-        awaiting_audit = db.scalars(q.order_by(Task.submitted_at)).all()
+        team = _team_block(db, user)
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": user,
         "buckets": buckets,
+        "by_source": by_source,
+        "open_total": len(mine),
         "submitted": submitted,
-        "awaiting_audit": awaiting_audit,
-        "card": scoring.user_scorecard(db, user, days=30),
+        "card": card,
+        "team": team,
     })
+
+
+def _team_block(db: Session, user: User) -> dict:
+    """The manager half of the dashboard: headline numbers, nothing more.
+
+    Deliberately one window (30 days) with no filters — a dashboard that
+    needs configuring before it says anything is not a dashboard. Every
+    figure here links to the report that can be filtered.
+    """
+    from ..models import PRIORITY_ORDER, AuditState
+    from datetime import date, timedelta
+
+    start, end = scoring.resolve_window(None, None, 30)
+    board = scoring.scoreboard(db, user.org_id, start, end,
+                               None if user.role != Role.MANAGER else user.branch_id)
+    people = board["people"]
+    scores = [r["card"].score for r in people]
+    avg = round(sum(scores) / len(scores), 1) if scores else 0.0
+
+    q = select(Task).where(Task.org_id == user.org_id,
+                           Task.status == TaskStatus.SUBMITTED)
+    if user.role == Role.MANAGER:
+        q = q.where(Task.branch_id == user.branch_id)
+    awaiting = list(db.scalars(q.order_by(Task.submitted_at)).all())
+    awaiting.sort(key=lambda t: (PRIORITY_ORDER.get(t.priority, 9),
+                                 t.submitted_at or t.due_at))
+
+    aq = select(Task).where(Task.org_id == user.org_id,
+                            Task.audit_state == AuditState.PENDING)
+    if user.role == Role.MANAGER:
+        aq = aq.where(Task.branch_id == user.branch_id)
+    audit_pending = len(list(db.scalars(aq).all()))
+
+    # Today's follow-up standing, both desks together.
+    from .followups import DESKS, _open_tasks, _ticks
+    today = clock.today()
+    fu_due = fu_done = 0
+    for cfg in DESKS.values():
+        rows = _open_tasks(db, user, cfg["sources"], today, cfg["right"])
+        fu_due += len(rows)
+        fu_done += len(_ticks(db, [t.id for t in rows], today))
+
+    return {
+        "avg": avg,
+        "band": "good" if avg >= 85 else "warn" if avg >= 60 else "bad",
+        "headcount": len(people),
+        "overall": board["overall"],
+        "top": people[:5],
+        "bottom": list(reversed(people[-3:])) if len(people) > 5 else [],
+        "branches": board["branches"],
+        "awaiting_audit": awaiting[:25],
+        "awaiting_total": len(awaiting),
+        "audit_pending": audit_pending,
+        "fu_due": fu_due, "fu_done": fu_done, "fu_missed": fu_due - fu_done,
+        "window": f"{start:%d %b} – {end:%d %b %Y}",
+    }
 
 
 def _resolve_filters(db: Session, user: User, branch: str, doer: str):
@@ -161,7 +245,7 @@ async def create_rule(
     request: Request,
     title: str = Form(...), details: str = Form(""), doer_id: int = Form(...),
     branch_id: str = Form(""), frequency: str = Form("daily"), day_of: str = Form(""),
-    due_time: str = Form("18:00"), priority: str = Form("normal"),
+    due_time: str = Form("18:00"), priority: str = Form("medium"),
     requires_audit: str = Form(""),
     user: User = Depends(manager_up), db: Session = Depends(get_db),
 ):

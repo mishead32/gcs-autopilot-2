@@ -1,18 +1,106 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table %}
 {% block content %}
-<h1>Good day, {{ user.name.split()[0] }}</h1>
-<p class="sub">Your doer dashboard — {{ user.branch.name if user.branch else 'All branches' }}</p>
-
-<div class="grid g3">
-  <div class="kpi bad"><div class="n">{{ buckets.overdue|length }}</div><div class="l">Overdue</div></div>
-  <div class="kpi warn"><div class="n">{{ buckets.today|length }}</div><div class="l">Due today</div></div>
-  <div class="kpi"><div class="n">{{ buckets.upcoming|length }}</div><div class="l">Upcoming</div></div>
-  <div class="kpi {{ 'ok' if card.band=='good' else ('warn' if card.band=='warn' else 'bad') }}">
-    <div class="n">{{ card.score }}</div><div class="l">My 30-day score</div></div>
+<div class="page-head">
+  <div>
+    <h1>Good day, {{ user.name.split()[0] }}</h1>
+    <p class="sub">{{ user.branch.name if user.branch else 'All branches' }} ·
+      {{ user.role.value|title }}</p>
+  </div>
+  <a class="btn ghost" href="/reports">Reports</a>
 </div>
 
-<h2>My score — last 30 days</h2>
+{# ================================================== 1 · MY WORK ======= #}
+<div class="sect">
+  <div class="sect-head">
+    <h2>1 · My work</h2>
+    <span class="count {{ 'bad' if buckets.overdue }}">{{ open_total }} open</span>
+    <span class="sp"></span>
+    <a href="/tasks?scope=mine&status=open">See all my tasks →</a>
+  </div>
+
+  <div class="grid g3">
+    <a class="kpi bad" href="/tasks?scope=mine&status=overdue">
+      <div class="n">{{ buckets.overdue|length }}</div><div class="l">Overdue</div></a>
+    <a class="kpi warn" href="/tasks?scope=mine&status=open">
+      <div class="n">{{ buckets.today|length }}</div><div class="l">Due today</div></a>
+    <a class="kpi" href="/tasks?scope=mine&status=upcoming">
+      <div class="n">{{ buckets.upcoming|length }}</div><div class="l">Coming up</div></a>
+    <a class="kpi" href="/tasks?scope=mine&status=audit">
+      <div class="n">{{ submitted|length }}</div><div class="l">Waiting on audit</div></a>
+  </div>
+
+  <h3 class="sub-h">By type of work</h3>
+  <div class="grid g3">
+    {% for s in by_source %}
+    <a class="kpi {{ 'bad' if s.overdue }}" href="{{ s.report }}">
+      <div class="n">{{ s.open|length }}</div>
+      <div class="l">{{ s.label }}</div>
+      <div class="m">{% if s.overdue %}{{ s.overdue|length }} overdue{% else %}nothing overdue{% endif %}</div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if buckets.overdue %}
+<div class="sect">
+  <div class="sect-head"><h2>Overdue — do these first</h2>
+    <span class="count bad">{{ buckets.overdue|length }}</span></div>
+</div>
+{{ task_table(buckets.overdue, false) }}
+{% endif %}
+
+<div class="sect">
+  <div class="sect-head"><h2>Due today</h2>
+    <span class="count warn">{{ buckets.today|length }}</span></div>
+</div>
+{{ task_table(buckets.today, false) }}
+
+<div class="sect">
+  <div class="sect-head"><h2>Coming up</h2>
+    <span class="count">{{ buckets.upcoming|length }}</span></div>
+</div>
+{{ task_table(buckets.upcoming, false) }}
+
+{% if submitted %}
+<div class="sect">
+  <div class="sect-head"><h2>Submitted — waiting on audit</h2>
+    <span class="count">{{ submitted|length }}</span></div>
+</div>
+{{ task_table(submitted, false) }}
+{% endif %}
+
+{# ================================================== 2 · MY SCORE ====== #}
+<div class="sect">
+  <div class="sect-head">
+    <h2>2 · My EM score — last 30 days</h2>
+    <span class="count {{ 'bad' if card.band == 'bad' else ('warn' if card.band == 'warn' else '') }}">
+      {{ card.score }} / 100</span>
+    <span class="sp"></span>
+    <a href="/tasks?scope=mine&status=done">What I completed →</a>
+  </div>
+  <p class="sect-note">
+    Average out of 100, then the bifurcation behind it — each kind of work
+    can only cost you as much as its own benchmark.
+    High priority counts 5×, medium 2×, low 1×.
+  </p>
+</div>
+
+<div class="grid g3">
+  <div class="kpi {{ 'ok' if card.band=='good' else ('warn' if card.band=='warn' else 'bad') }}">
+    <div class="n" id="scoreBig">{{ card.score }}</div><div class="l">Score (avg out of 100)</div>
+    <div class="m">gap {{ card.gap }}</div></div>
+  <div class="kpi"><div class="n">{{ card.completion_rate }}%</div>
+    <div class="l">Work completed</div>
+    <div class="m">{{ card.completed }} of {{ card.planned }} score weight</div></div>
+  <div class="kpi"><div class="n">{{ card.on_time_rate }}%</div>
+    <div class="l">Done on time</div>
+    <div class="m">{{ card.late }} weight closed late</div></div>
+  <div class="kpi {{ 'bad' if card.false_marks else 'ok' }}">
+    <div class="n">{{ card.false_marks }}</div><div class="l">False marks</div>
+    <div class="m">−10 each</div></div>
+</div>
+
 <div class="board" id="myBoard">
   {% for s in card.source_list %}
   <div class="tile {{ 'zero' if s.subtotal == 0 }}" style="--i:{{ loop.index0 }}">
@@ -26,7 +114,7 @@
         <div><span>Work not done</span><b data-src-nd="{{ s.key }}">{{ s.not_done_penalty }}</b></div>
         <div><span>Not done on time</span><b data-src-lt="{{ s.key }}">{{ s.late_penalty }}</b></div>
       </div>
-      <div class="foot">{{ s.completed }} of {{ s.planned }} closed{% if s.late %} · {{ s.late }} late{% endif %}<br>
+      <div class="foot">Weight {{ s.completed }} of {{ s.planned }} closed{% if s.late %} · {{ s.late }} late{% endif %}<br>
         Raw {{ s.raw_not_done }} / {{ s.raw_late }} at {{ s.benchmark }}% benchmark</div>
     </div>
   </div>
@@ -59,6 +147,127 @@
   </div>
 </div>
 
+{# ================================================== 3 · MY TEAM ======= #}
+{% if team %}
+<div class="sect">
+  <div class="sect-head">
+    <h2>3 · My team — {{ team.window }}</h2>
+    <span class="count">{{ team.headcount }} employee(s)</span>
+    <span class="sp"></span>
+    <a href="/reports/score">Full EM score report →</a>
+  </div>
+</div>
+
+<div class="grid g3">
+  <div class="kpi {{ 'ok' if team.band=='good' else ('warn' if team.band=='warn' else 'bad') }}">
+    <div class="n">{{ team.avg }}</div><div class="l">Average EM score</div>
+    <div class="m">across {{ team.headcount }} employee(s)</div></div>
+  <a class="kpi {{ 'bad' if team.audit_pending }}" href="/reports/audit">
+    <div class="n">{{ team.audit_pending }}</div><div class="l">Audit pending</div>
+    <div class="m">{{ team.awaiting_total }} awaiting your decision</div></a>
+  <a class="kpi {{ 'bad' if team.fu_missed else 'ok' }}" href="/reports/followups">
+    <div class="n">{{ team.fu_missed }}</div><div class="l">Follow-ups pending today</div>
+    <div class="m">{{ team.fu_done }} of {{ team.fu_due }} chased</div></a>
+  <div class="kpi total"><div class="n">{{ team.overall.completion_rate }}%</div>
+    <div class="l">Work completed</div>
+    <div class="m">{{ team.overall.on_time_rate }}% of it on time</div></div>
+</div>
+
+<h3 class="sub-h">Score bifurcation — whole team</h3>
+<div class="board">
+  {% for s in team.overall.source_list %}
+  <div class="tile {{ 'zero' if s.subtotal == 0 }}" style="--i:{{ loop.index0 }}">
+    <div class="tile-in">
+      <div class="cap-row"><span class="cap">{{ s.label }}</span></div>
+      <div class="big">{{ s.subtotal }}</div>
+      <div class="rows">
+        <div><span>Work not done</span><b>{{ s.not_done_penalty }}</b></div>
+        <div><span>Not done on time</span><b>{{ s.late_penalty }}</b></div>
+      </div>
+      <div class="foot">Average across the team</div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="tile total" style="--i:3">
+    <div class="tile-in">
+      <div class="cap-row"><span class="cap">Average score</span></div>
+      <div class="big">{{ team.avg }}</div>
+      <div class="rows">
+        <div><span>Employees</span><b>{{ team.headcount }}</b></div>
+        <div><span>False marking</span><b>{{ team.overall.false_penalty }}</b></div>
+      </div>
+      <div class="foot">The mean of each employee's own score</div>
+    </div>
+  </div>
+</div>
+
+{% if team.branches %}
+<h3 class="sub-h">Branch-wise</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Branch</th><th>Score</th>
+    {% for s in team.overall.source_list %}<th>{{ s.label }}</th>{% endfor %}
+    <th>Completed</th><th>On time</th><th></th></tr>
+  {% for r in team.branches %}
+  <tr>
+    <td><strong>{{ r.branch.name if r.branch else 'Unassigned' }}</strong></td>
+    <td><span class="score-pill {{ r.card.band }}">{{ r.card.score }}</span></td>
+    {% for s in r.card.source_list %}<td>{{ s.subtotal }}</td>{% endfor %}
+    <td>{{ r.card.completion_rate }}%</td>
+    <td>{{ r.card.on_time_rate }}%</td>
+    <td><a class="btn sm ghost"
+       href="/reports/score?branch={{ r.branch.id if r.branch else '' }}">Employees</a></td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endif %}
+
+<h3 class="sub-h">People</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Employee</th><th>Branch</th><th>Score</th>
+    {% for s in team.overall.source_list %}<th>{{ s.label }}</th>{% endfor %}
+    <th>Completed</th></tr>
+  <tr class="subhead"><th colspan="{{ 4 + team.overall.source_list|length }}">Top of the board</th></tr>
+  {% for r in team.top %}
+  <tr>
+    <td><strong>{{ r.user.name }}</strong></td>
+    <td class="m">{{ r.user.branch.name if r.user.branch else '—' }}</td>
+    <td><span class="score-pill {{ r.card.band }}">{{ r.card.score }}</span></td>
+    {% for s in r.card.source_list %}<td>{{ s.subtotal }}</td>{% endfor %}
+    <td>{{ r.card.completion_rate }}%</td>
+  </tr>
+  {% endfor %}
+  {% if team.bottom %}
+  <tr class="subhead"><th colspan="{{ 4 + team.overall.source_list|length }}">Needs attention</th></tr>
+  {% endif %}
+  {% for r in team.bottom %}
+  <tr>
+    <td><strong>{{ r.user.name }}</strong></td>
+    <td class="m">{{ r.user.branch.name if r.user.branch else '—' }}</td>
+    <td><span class="score-pill {{ r.card.band }}">{{ r.card.score }}</span></td>
+    {% for s in r.card.source_list %}<td>{{ s.subtotal }}</td>{% endfor %}
+    <td>{{ r.card.completion_rate }}%</td>
+  </tr>
+  {% endfor %}
+  {% if not team.top %}
+  <tr><td colspan="7" class="m">No scored work in the last 30 days.</td></tr>
+  {% endif %}
+</table>
+</div>
+
+{% if team.awaiting_audit %}
+<div class="sect">
+  <div class="sect-head"><h2>Pending your audit</h2>
+    <span class="count warn">{{ team.awaiting_total }}</span>
+    <span class="sp"></span>
+    <a href="/reports/audit">Audit report →</a></div>
+</div>
+{{ task_table(team.awaiting_audit) }}
+{% endif %}
+{% endif %}
+
 <script>
 (function(){
   function set(sel, v){ var e = document.querySelector(sel); if (e) e.textContent = v; }
@@ -75,24 +284,9 @@
         set('#fmCount', d.false_marks);
         set('#totBig', d.total_penalty);
         set('#netBig', d.score);
+        set('#scoreBig', d.score);
       }).catch(function(){});
   }, 30000);
 })();
 </script>
-
-{% if buckets.overdue %}
-<h2>Overdue</h2>{{ task_table(buckets.overdue, false) }}
-{% endif %}
-
-<h2>Due today</h2>{{ task_table(buckets.today, false) }}
-
-<h2>Upcoming</h2>{{ task_table(buckets.upcoming, false) }}
-
-{% if submitted %}
-<h2>Waiting on audit</h2>{{ task_table(submitted, false) }}
-{% endif %}
-
-{% if awaiting_audit %}
-<h2>Pending your audit ({{ awaiting_audit|length }})</h2>{{ task_table(awaiting_audit) }}
-{% endif %}
 {% endblock %}

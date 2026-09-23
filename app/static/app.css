@@ -116,9 +116,8 @@ tr:last-child td{border-bottom:0}
 .chip{display:inline-block;padding:2px 9px;border-radius:20px;background:var(--chip);
   font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
   letter-spacing:.4px;white-space:nowrap}
-.chip.critical{background:#fee2e2;color:#991b1b}
-.chip.high{background:#ffedd5;color:#9a3412}
-.chip.normal{background:#e0f2fe;color:#075985}
+.chip.high{background:#fee2e2;color:#991b1b;font-weight:800}
+.chip.medium{background:#e0f2fe;color:#075985}
 .chip.low{background:#f1f5f9;color:#475569}
 .chip.pending{background:#f1f5f9;color:#475569}
 .chip.in_progress{background:#dbeafe;color:#1e40af}
@@ -412,6 +411,15 @@ tr.past td{opacity:.5}
   .daterange .acts{justify-content:flex-start}
 }
 
+/* --------------------------------------------- follow-up ticks --------- */
+.tickbox{width:30px;height:30px;border-radius:7px;border:2px solid var(--line);
+  background:#fff;color:transparent;font-size:15px;font-weight:800;cursor:pointer;
+  display:grid;place-items:center;padding:0;line-height:1}
+.tickbox:hover{border-color:var(--brand);background:#f2f8fd}
+.tickbox.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.tickbox.static{cursor:default}
+tr.fu-done td{background:#f7fdf9}
+
 /* ------------------------------------------------ help desk ------------ */
 .inline-decline{display:flex;gap:6px;align-items:center}
 .inline-decline input{margin:0;font-size:12px;padding:5px 8px}
@@ -450,3 +458,68 @@ tr.past td{opacity:.5}
   background:rgba(15,32,44,.62);color:#fff;font-size:14px;line-height:1;
   cursor:pointer;padding:0}
 .att .rm button:hover{background:var(--bad)}
+
+/* ---- reports -------------------------------------------------------- */
+.page-head{display:flex;justify-content:space-between;align-items:flex-start;
+  flex-wrap:wrap;gap:12px}
+.page-head h1{margin-bottom:2px}
+
+.rep-cards{margin-top:6px}
+.rep-card{display:block;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;padding:16px 18px;color:var(--ink);transition:.15s}
+.rep-card:hover{text-decoration:none;border-color:var(--brand);
+  box-shadow:0 8px 20px rgba(15,32,44,.09);transform:translateY(-2px)}
+.rep-card .rc-t{font-weight:700;font-size:15px}
+.rep-card .rc-d{color:var(--muted);font-size:12.5px;margin-top:4px;line-height:1.45}
+.rep-card .rc-go{color:var(--brand);font-size:12px;font-weight:700;margin-top:10px}
+
+.filterbar{padding:14px 16px}
+.fb-row{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
+.fb-f label{margin-top:0;display:block;font-size:11px;font-weight:700;
+  letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.fb-f input,.fb-f select{width:100%}
+.fb-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin-top:12px;padding-top:11px;border-top:1px solid var(--line)}
+.fb-acts .m{font-size:11.5px;line-height:1.4;max-width:100%}
+.fb-sp{flex:1 1 auto}
+
+.tabs.presets{margin-bottom:10px}
+.tabs.presets a{font-size:12px;padding:4px 11px}
+
+.good-n{color:var(--ok);font-weight:600}
+table tr.subhead th{font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--muted);padding-top:0}
+table tr.tot-row td{background:#f4f7fa;border-top:2px solid var(--line)}
+
+.scoretable td.bif{font-size:11.5px;line-height:1.4}
+.scoretable td.bif b{font-size:14px;font-variant-numeric:tabular-nums}
+.score-pill{display:inline-block;min-width:44px;text-align:center;padding:4px 10px;
+  border-radius:20px;font-weight:800;font-size:14px;color:#fff}
+.score-pill.good{background:#1b8f5e}
+.score-pill.warn{background:#d08214}
+.score-pill.bad{background:#d4453b}
+
+/* ---- dashboard sections --------------------------------------------- */
+.sect{margin:26px 0 0}
+.sect-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.sect-head h2{margin:0;font-size:16px}
+.sect-head .count{background:var(--chip);color:var(--muted);border-radius:20px;
+  padding:2px 10px;font-size:11.5px;font-weight:700}
+.sect-head .count.bad{background:#fee2e2;color:#991b1b}
+.sect-head .count.warn{background:#fef3c7;color:#92400e}
+.sect-head .sp{flex:1 1 auto}
+.sect-head a{font-size:12px;font-weight:600}
+.sect-note{color:var(--muted);font-size:12.5px;margin:-4px 0 12px}
+
+.sub-h{font-size:12.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--muted);margin:20px 0 10px}
+a.kpi{display:block;color:var(--ink);transition:.15s}
+a.kpi:hover{text-decoration:none;border-color:var(--brand);
+  box-shadow:0 8px 20px rgba(15,32,44,.09);transform:translateY(-2px)}
+a.kpi.total:hover{border-color:transparent}
+
+/* Row action buttons keep together and never wrap mid-button. */
+td.rowacts{white-space:nowrap}
+td.rowacts>*{margin:0 2px 3px 0;vertical-align:middle}
+td.rowacts .m{display:block;white-space:normal;max-width:150px;margin-top:2px}

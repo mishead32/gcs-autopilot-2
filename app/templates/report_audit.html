@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_task_table.html" import task_table %}
+{% from "_filters.html" import filter_bar, date_presets, scope_note %}
+{% block title %}Audit report · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Audit — pending &amp; completed</h1>
+    <p class="sub">Across FMS, Checklist and Delegation.</p>
+  </div>
+  <a class="btn ghost" href="/reports">← All reports</a>
+</div>
+
+{{ scope_note(user) }}
+{{ date_presets(f) }}
+{{ filter_bar(f, basis='planned date') }}
+
+<div class="grid g3">
+  <div class="kpi warn"><div class="n">{{ grand.pending }}</div>
+    <div class="l">Audit pending</div></div>
+  <div class="kpi ok"><div class="n">{{ grand.completed }}</div>
+    <div class="l">Audit completed</div></div>
+  <div class="kpi"><div class="n">{{ grand.not_required }}</div>
+    <div class="l">Not required</div></div>
+  <div class="kpi total"><div class="n">{{ grand.rate }}%</div>
+    <div class="l">Audited</div>
+    <div class="m">of the {{ grand.pending + grand.completed }} that needed one</div></div>
+</div>
+
+<h2>By work type</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>Work type</th><th>Audit pending</th><th>Audit completed</th>
+      <th>Not required</th><th>Total</th></tr>
+  {% for k, c in sources.items() %}
+  <tr>
+    <td><strong>{{ c.label }}</strong></td>
+    <td class="{{ 'overdue' if grid[k].pending }}">{{ grid[k].pending }}</td>
+    <td class="good-n">{{ grid[k].completed }}</td>
+    <td class="m">{{ grid[k].not_required }}</td>
+    <td>{{ grid[k].total }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="tot-row">
+    <td><strong>All</strong></td>
+    <td><strong>{{ grand.pending }}</strong></td>
+    <td><strong>{{ grand.completed }}</strong></td>
+    <td><strong>{{ grand.not_required }}</strong></td>
+    <td><strong>{{ grand.total }}</strong></td>
+  </tr>
+</table>
+</div>
+
+<div class="tabs" style="margin-top:18px">
+  {% for k, label in [('pending', 'Audit pending'), ('completed', 'Audit completed'),
+                      ('not_required', 'Not required'), ('all', 'Everything')] %}
+  <a class="{{ 'active' if f.state == k }}" href="{{ f.url(state=k) }}">
+    {{ label }} ({{ grand[k] if k != 'all' else grand.total }})</a>
+  {% endfor %}
+</div>
+
+<h2>{{ rows|length }} task(s)</h2>
+{{ task_table(rows) }}
+{% endblock %}

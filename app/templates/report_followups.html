@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "_filters.html" import filter_bar, date_presets %}
+{% block title %}Follow-up report · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Follow-ups — pending &amp; completed</h1>
+    <p class="sub">Every open task has to be chased each day. One tick per task per day.</p>
+  </div>
+  <div>
+    <a class="btn ghost" href="/followups">Go and tick</a>
+    <a class="btn ghost" href="/reports">← All reports</a>
+  </div>
+</div>
+
+{{ date_presets(f) }}
+{{ filter_bar(f, basis='the day the task was open') }}
+
+<div class="grid g3">
+  <div class="kpi"><div class="n">{{ grand.due }}</div>
+    <div class="l">Follow-ups due</div><div class="m">open tasks × days</div></div>
+  <div class="kpi ok"><div class="n">{{ grand.done }}</div>
+    <div class="l">Follow-up completed</div></div>
+  <div class="kpi {{ 'bad' if grand.missed else 'ok' }}"><div class="n">{{ grand.missed }}</div>
+    <div class="l">Follow-up pending</div></div>
+  <div class="kpi total"><div class="n">{{ grand.rate }}%</div>
+    <div class="l">Chased</div><div class="m">{{ start.strftime('%d %b') }} – {{ end.strftime('%d %b %Y') }}</div></div>
+</div>
+
+<h2>By desk</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>Desk</th><th>Who holds it</th><th>Due</th>
+      <th>Completed</th><th>Pending</th><th>Chased</th></tr>
+  {% for k, c in desks.items() %}
+  <tr>
+    <td><strong>{{ c.label }}</strong></td>
+    <td>{% if desk_people[k] %}{{ desk_people[k]|join(', ') }}
+        {% else %}<span class="m">Nobody holds this right yet</span>{% endif %}</td>
+    <td>{{ totals[k].due }}</td>
+    <td class="good-n">{{ totals[k].done }}</td>
+    <td class="{{ 'overdue' if totals[k].missed }}">{{ totals[k].missed }}</td>
+    <td><div class="bar"><i style="width:{{ totals[k].rate }}%"></i></div>
+      <span class="m">{{ totals[k].rate }}%</span></td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Day by day</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>Day</th>
+    {% for k, c in desks.items() %}<th colspan="3">{{ c.short }}</th>{% endfor %}
+    <th>Chased by</th></tr>
+  <tr class="subhead"><th></th>
+    {% for k in desks %}<th>Due</th><th>Done</th><th>Pending</th>{% endfor %}
+    <th></th></tr>
+  {% for r in days %}
+  <tr>
+    <td><a href="/followups?day={{ r.day.isoformat() }}">{{ r.day.strftime('%a %d %b') }}</a></td>
+    {% for k in desks %}
+    <td>{{ r.desks[k].due }}</td>
+    <td class="good-n">{{ r.desks[k].done }}</td>
+    <td class="{{ 'overdue' if r.desks[k].missed }}">{{ r.desks[k].missed }}</td>
+    {% endfor %}
+    <td>{{ r.who or '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

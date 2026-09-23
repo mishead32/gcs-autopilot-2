@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
@@ -61,13 +62,13 @@ def help_form(request: Request, user: User = Depends(current_user),
     ).all()
     return templates.TemplateResponse(request, "help_new.html", {
         "user": user, "colleagues": colleagues, "priorities": list(Priority),
-        "default_due": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
+        "default_due": (clock.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
     })
 
 
 @router.post("/help/new")
 def raise_ticket(subject: str = Form(...), details: str = Form(""),
-                 helper_id: int = Form(...), priority: str = Form("normal"),
+                 helper_id: int = Form(...), priority: str = Form("medium"),
                  needed_by: str = Form(...),
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     helper = db.get(User, helper_id)
@@ -121,7 +122,7 @@ def decline(ticket_id: int, reason: str = Form(""),
 
     ticket.status = HelpStatus.DECLINED
     ticket.decline_reason = reason.strip() or None
-    ticket.closed_at = datetime.utcnow()
+    ticket.closed_at = clock.now()
 
     task = ticket.task
     if task and task.status not in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):

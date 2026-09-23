@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "_task_table.html" import task_table %}
+{% from "_filters.html" import filter_bar, date_presets, scope_note %}
+{% block title %}{{ cfg.label }} report · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ cfg.label }} — pending &amp; completed</h1>
+    <p class="sub">{{ cfg.blurb }}.</p>
+  </div>
+  <a class="btn ghost" href="/reports">← All reports</a>
+</div>
+
+<div class="tabs">
+  {% for k, c in [('delegation', 'Delegation'), ('checklist', 'Checklist'), ('fms', 'FMS')] %}
+  <a class="{{ 'active' if source == k }}"
+     href="{{ f.url(source=k) }}">{{ c }}</a>
+  {% endfor %}
+</div>
+
+{{ scope_note(user) }}
+{{ date_presets(f) }}
+{{ filter_bar(f, basis='planned date for pending, completion date for completed') }}
+
+<div class="grid g3">
+  <div class="kpi warn"><div class="n">{{ counts.pending }}</div>
+    <div class="l">Pending</div><div class="m">{{ weights.pending }} score weight</div></div>
+  <div class="kpi bad"><div class="n">{{ counts.overdue }}</div>
+    <div class="l">Overdue</div><div class="m">of the pending tasks</div></div>
+  <div class="kpi ok"><div class="n">{{ counts.completed }}</div>
+    <div class="l">Completed</div><div class="m">{{ weights.completed }} score weight</div></div>
+  <div class="kpi total"><div class="n">{{ rate }}%</div>
+    <div class="l">Completion rate</div>
+    <div class="m">{{ on_time_rate }}% of those were on time</div></div>
+</div>
+
+<div class="tabs" style="margin-top:18px">
+  {% for k, label in [('pending', 'Pending'), ('overdue', 'Overdue'),
+                      ('completed', 'Completed'), ('all', 'Both')] %}
+  <a class="{{ 'active' if f.state == k }}" href="{{ f.url(state=k) }}">
+    {{ label }} ({{ counts[k] }})</a>
+  {% endfor %}
+</div>
+
+<h2>{{ f.state|title }} — {{ rows|length }} task(s)</h2>
+{{ task_table(rows) }}
+{% endblock %}

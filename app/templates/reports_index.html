@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Reports · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>Reports</h1>
+<p class="sub">Every report filters the same way — a from date, a to date,
+  branch, employee and priority.</p>
+
+{% if user.report_scope != 'all' %}
+<div class="proof need">
+  <strong>These reports cover
+    {{ 'your own work' if user.report_scope == 'self'
+       else (user.branch.name if user.branch else 'your branch') }}.</strong>
+  The company-wide versions{% if not user.can_see_all_reports %} — including
+  everybody’s EM scores —{% endif %} need the “See everyone’s reports” right.
+  An admin can tick it on your user under Setup → Users.
+</div>
+{% endif %}
+
+<div class="grid g2 rep-cards">
+  {% for c in cards %}
+  <a class="rep-card" href="{{ c.url }}">
+    <div class="rc-t">{{ c.title }}</div>
+    <div class="rc-d">{{ c.desc }}</div>
+    <div class="rc-go">Open report →</div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

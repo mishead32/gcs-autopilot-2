@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..models import (
     Flow, FlowStep, FlowInstance, Task, TaskStatus, TaskSource, User
 )
@@ -19,7 +20,7 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     # The work still has to happen, so the step is never skipped — only its
     # deadline moves off a holiday. Skipping it would break the chain.
     due_at, _moved = holidays.shift_due(
-        db, inst.org_id, datetime.utcnow() + timedelta(hours=step.tat_hours),
+        db, inst.org_id, clock.now() + timedelta(hours=step.tat_hours),
         doer.branch_id)
 
     task = Task(
@@ -92,7 +93,7 @@ def advance_flow(db: Session, task: Task) -> Task | None:
     nxt = next((s for s in steps if s.position > done_pos), None)
 
     if nxt is None:
-        inst.completed_at = datetime.utcnow()
+        inst.completed_at = clock.now()
         db.commit()
         return None
 

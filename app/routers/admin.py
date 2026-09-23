@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select, func, or_, update, delete
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..db import get_db
 from ..deps import require_right
 from ..models import (
@@ -394,7 +395,7 @@ def delete_branch(branch_id: int, move_to: str = Form(""), confirm: str = Form("
 def holidays_page(request: Request, year: str = "",
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     from datetime import date as _date
-    yr = int(year) if year.isdigit() else _date.today().year
+    yr = int(year) if year.isdigit() else clock.today().year
     rows = db.scalars(
         select(Holiday).where(
             Holiday.org_id == user.org_id,
@@ -409,7 +410,7 @@ def holidays_page(request: Request, year: str = "",
         select(Holiday).where(Holiday.org_id == user.org_id)).all()} | {yr})
     return templates.TemplateResponse(request, "admin_holidays.html", {
         "user": user, "holidays": rows, "branches": branches,
-        "year": yr, "years": years, "today": _date.today(),
+        "year": yr, "years": years, "today": clock.today(),
     })
 
 

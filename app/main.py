@@ -14,7 +14,9 @@ from .db import Base, engine, SessionLocal
 from .deps import RedirectToLogin
 from . import migrate
 from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
-                      help as help_router, setup as setup_router)
+                      help as help_router, setup as setup_router,
+                      followups as followups_router,
+                      reports as reports_router)
 from .services import recurring
 from .templating import templates
 
@@ -119,6 +121,8 @@ app.include_router(attachments.router)
 app.include_router(bulk.router)
 app.include_router(help_router.router)
 app.include_router(setup_router.router)
+app.include_router(followups_router.router)
+app.include_router(reports_router.router)
 
 
 @app.get("/healthz")

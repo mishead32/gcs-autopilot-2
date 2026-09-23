@@ -4,10 +4,11 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
-from sqlalchemy import select, or_, update, delete as sa_delete
+from sqlalchemy import select, or_, update, case, delete as sa_delete
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
+from .. import clock
 from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
 from ..models import (
@@ -52,6 +53,21 @@ DATE_BASIS = {
 }
 
 
+# High first, then medium, then low. The database stores the name, so an
+# ordinary sort would give HIGH, LOW, MEDIUM alphabetically — hence the
+# explicit ranking.
+#
+# Written as separate comparisons rather than case({...}, value=Task.priority):
+# that shorter form leaves the enum values untyped, every row falls through to
+# the else, and the list quietly sorts by date alone. It looks right until you
+# check, which is exactly the kind of bug worth pinning down in a test.
+PRIORITY_RANK = case(
+    (Task.priority == Priority.HIGH, 0),
+    (Task.priority == Priority.MEDIUM, 1),
+    else_=2,
+)
+
+
 def _parse_day(raw: str):
     try:
         return datetime.strptime(raw.strip(), "%Y-%m-%d").date() if raw.strip() else None
@@ -64,7 +80,7 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
               date_from: str = "", date_to: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _visible_tasks_query(user)
-    now = datetime.utcnow()
+    now = clock.now()
 
     if scope == "mine":
         q = q.where(Task.doer_id == user.id)
@@ -97,8 +113,11 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
     if start or end:
         q = q.where(col.is_not(None))
 
-    order = col.desc() if col_name == "closed_at" else Task.due_at.asc()
-    tasks = db.scalars(q.order_by(order).limit(500)).all()
+    if col_name == "closed_at":
+        order = (col.desc(),)                     # newest completions first
+    else:
+        order = (PRIORITY_RANK, Task.due_at.asc())
+    tasks = db.scalars(q.order_by(*order).limit(500)).all()
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,
         "date_from": start.isoformat() if start else "",
@@ -121,7 +140,7 @@ def new_task_form(request: Request,
     return templates.TemplateResponse(request, "task_new.html", {
         "user": user, "doers": doers, "branches": branches,
         "priorities": list(Priority),
-        "default_due": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
+        "default_due": (clock.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
     })
 
 
@@ -132,7 +151,7 @@ async def create_task(
     details: str = Form(""),
     doer_id: int = Form(...),
     branch_id: str = Form(""),
-    priority: str = Form("normal"),
+    priority: str = Form("medium"),
     due_at: str = Form(...),
     requires_audit: str = Form(""),
     files: list[UploadFile] = File(default=[]),
@@ -241,7 +260,7 @@ def task_detail(task_id: int, request: Request,
 # ------------------------------------------------------- edit / delete -----
 @router.post("/tasks/{task_id}/edit")
 def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
-              doer_id: int = Form(...), priority: str = Form("normal"),
+              doer_id: int = Form(...), priority: str = Form("medium"),
               due_at: str = Form(...),
               user: User = Depends(require_right(Right.EDIT_TASK)),
               db: Session = Depends(get_db)):
@@ -317,7 +336,7 @@ def reopen_task(task_id: int, reason: str = Form(""),
     task.submitted_at = None
     task.reopen_count += 1
     task.reopened_by_id = user.id
-    task.reopened_at = datetime.utcnow()
+    task.reopened_at = clock.now()
     # the work has to be checked again once it comes back
     task.requires_audit = True
     task.audit_state = AuditState.PENDING
@@ -349,7 +368,7 @@ def false_mark(task_id: int, reason: str = Form(""), confirm: str = Form(""),
 
     task.false_marked = True
     task.false_marked_by_id = user.id
-    task.false_marked_at = datetime.utcnow()
+    task.false_marked_at = clock.now()
     task.false_mark_reason = reason.strip() or None
 
     # a false mark always sends the work back
@@ -386,7 +405,7 @@ def start_task(task_id: int, user: User = Depends(current_user),
         raise HTTPException(403, "Only the doer can start this task")
     if task.status == TaskStatus.PENDING:
         task.status = TaskStatus.IN_PROGRESS
-        task.started_at = datetime.utcnow()
+        task.started_at = clock.now()
         db.commit()
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
@@ -414,7 +433,7 @@ async def submit_task(task_id: int, request: Request,
     if captured:
         task.captured_data = json.dumps(captured)
 
-    task.submitted_at = datetime.utcnow()
+    task.submitted_at = clock.now()
     if task.requires_audit:
         task.status = TaskStatus.SUBMITTED
         task.audit_state = AuditState.PENDING
@@ -435,7 +454,7 @@ def close_help_ticket(db: Session, task: Task) -> None:
                                                 HelpTicket.status == HelpStatus.OPEN))
     if ticket:
         ticket.status = HelpStatus.CLOSED
-        ticket.closed_at = datetime.utcnow()
+        ticket.closed_at = clock.now()
 
 
 # --------------------------------------------------------- audit status ----
@@ -468,7 +487,7 @@ def set_audit_state(task_id: int, state: str = Form(...), remark: str = Form("")
         task.audit_remark = remark.strip()
     if new_state == AuditState.COMPLETED:
         task.auditor_id = user.id
-        task.audited_at = datetime.utcnow()
+        task.audited_at = clock.now()
     elif new_state == AuditState.NOT_REQUIRED:
         task.auditor_id = None
         task.audited_at = None
@@ -495,7 +514,7 @@ def audit_task(task_id: int, decision: str = Form(...), score: float = Form(8.0)
 
     task.auditor_id = user.id
     task.audit_remark = remark.strip() or None
-    task.audited_at = datetime.utcnow()
+    task.audited_at = clock.now()
 
     if decision == "approve":
         task.audit_score = max(0.0, min(10.0, score))

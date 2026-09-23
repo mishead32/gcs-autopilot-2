@@ -33,7 +33,7 @@
       <label>Priority</label>
       <select name="priority">
         {% for p in priorities %}
-        <option value="{{ p.value }}" {{ 'selected' if p.value=='normal' }}>{{ p.value|title }}</option>
+        <option value="{{ p.value }}" {{ 'selected' if p.value=='medium' }}>{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>
         {% endfor %}
       </select>
     </div>

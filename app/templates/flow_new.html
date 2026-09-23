@@ -34,7 +34,7 @@
     <div><label>TAT (hours)</label><input type="number" name="step_tat" value="24" min="1"></div>
     <div><label>Priority</label>
       <select name="step_priority">
-        {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='normal' }}>{{ p.value|title }}</option>{% endfor %}
+        {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='medium' }}>{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
       </select></div>
   </div>
   <label>Instructions</label><textarea name="step_instructions" style="min-height:52px"></textarea>

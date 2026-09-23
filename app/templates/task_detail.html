@@ -4,7 +4,8 @@
 <p class="sub"><a href="/tasks">&larr; All tasks</a></p>
 <h1>{{ task.title }}</h1>
 <p class="sub">
-  <span class="chip {{ task.priority.value }}">{{ task.priority.value }}</span>
+  <span class="chip {{ task.priority.value }}"
+        title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>
   <span class="chip {{ task.status.value }}">{{ task.status.value.replace('_',' ') }}</span>
   <span class="chip">{{ task.source.value }}</span>
   {% if task.branch %}<span class="chip">{{ task.branch.name }}</span>{% endif %}
@@ -33,6 +34,9 @@
         <tr><th style="background:0">Due</th>
             <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})</td></tr>
         <tr><th style="background:0">Created</th><td>{{ task.created_at|dt }}</td></tr>
+        <tr><th style="background:0">Score weight</th>
+            <td><strong>{{ task.weight_label }}</strong> — counts as {{ task.weight }}
+                task{{ '' if task.weight == 1 else 's' }} in {{ task.doer.name }}'s score</td></tr>
         <tr><th style="background:0">Proof</th>
             <td>{{ 'Required' if task.requires_attachment else 'Not required' }}</td></tr>
         {% if task.submitted_at %}<tr><th style="background:0">Submitted</th>
@@ -211,7 +215,7 @@
             {% endfor %}</select></div>
           <div><label>Priority</label><select name="priority">
             {% for pr in priorities %}
-            <option value="{{ pr.value }}" {{ 'selected' if pr == task.priority }}>{{ pr.value|title }}</option>
+            <option value="{{ pr.value }}" {{ 'selected' if pr == task.priority }}>{{ pr.value|title }} — {{ PRIORITY_WEIGHT[pr] }}×</option>
             {% endfor %}</select></div>
         </div>
         <label>Deadline</label>

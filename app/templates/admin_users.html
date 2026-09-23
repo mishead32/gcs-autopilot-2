@@ -24,14 +24,20 @@
             {% endfor %}
           {% else %}<span class="m">execute only</span>{% endif %}
         </td>
-        <td style="white-space:nowrap">
+        <td class="rowacts">
+          <a class="btn sm ghost" href="/admin/users/{{ p.id }}"
+             title="Edit {{ p.name }} — name, role, branch, rights, benchmark, password">Edit</a>
           {% if p.id != user.id %}
           <form method="post" action="/admin/users/{{ p.id }}/toggle" style="display:inline">
-            <button class="btn sm {{ '' if p.active else 'ghost' }}">{{ 'Active' if p.active else 'Disabled' }}</button>
+            <button class="btn sm {{ '' if p.active else 'ghost' }}"
+                    title="{{ 'Click to disable this login' if p.active else 'Click to switch the login back on' }}">
+              {{ 'Active' if p.active else 'Disabled' }}</button>
           </form>
           <a class="btn sm danger" href="/admin/users/{{ p.id }}/delete"
              title="Delete {{ p.name }}">Delete</a>
-          {% else %}<span class="m">you</span>{% endif %}
+          {% else %}
+          <span class="m">this is you — role and rights are locked</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

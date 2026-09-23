@@ -6,6 +6,7 @@ startup. (Swap for Alembic when the schema starts changing in ways that need
 real up/down migrations.)
 """
 from sqlalchemy import text, inspect
+from sqlalchemy import Enum as SAEnum
 
 from .db import engine, Base
 from . import models as _models      # noqa: F401 — registers every table on Base
@@ -67,6 +68,38 @@ def _ddl_for(ddl: str, dialect: str) -> str:
     return ddl
 
 
+PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
+
+
+def _detype_priority(conn, insp, dialect: str, existing_tables: set) -> list[str]:
+    """Convert a native PostgreSQL enum priority column to plain text.
+
+    Only PostgreSQL ever made it a real type; SQLite has always stored text.
+    Without this the rename below fails, because the database type still only
+    knows LOW / NORMAL / HIGH / CRITICAL and has never heard of MEDIUM.
+    """
+    if dialect != "postgresql":
+        return []
+    done = []
+    for table in PRIORITY_TABLES:
+        if table not in existing_tables:
+            continue
+        col = next((c for c in insp.get_columns(table)
+                    if c["name"] == "priority"), None)
+        if col is None:
+            continue
+        # Check the TYPE CLASS, not its string form: a native PostgreSQL enum
+        # prints as "VARCHAR(8)", so a text check here silently skips exactly
+        # the columns that need converting.
+        if not isinstance(col["type"], SAEnum):
+            continue                      # already plain text, nothing to do
+        conn.execute(text(
+            f"ALTER TABLE {table} ALTER COLUMN priority "
+            "TYPE VARCHAR(20) USING priority::text"))
+        done.append(f"{table}.priority -> text")
+    return done
+
+
 def run() -> list[str]:
     Base.metadata.create_all(engine)
     applied = []
@@ -75,6 +108,8 @@ def run() -> list[str]:
     existing_tables = set(insp.get_table_names())
 
     with engine.begin() as conn:
+        applied += _detype_priority(conn, insp, dialect, existing_tables)
+
         for table, cols in ADDITIONS.items():
             if table not in existing_tables:
                 continue
@@ -105,6 +140,19 @@ def run() -> list[str]:
             conn.execute(text(
                 "UPDATE tasks SET audit_state = 'COMPLETED' "
                 "WHERE auditor_id IS NOT NULL AND audit_state <> 'COMPLETED'"))
+
+            # Priority became three levels with a score weight: HIGH counts
+            # as five tasks, MEDIUM two, LOW one. The old NORMAL becomes
+            # MEDIUM and CRITICAL folds into HIGH — nothing is left pointing
+            # at a level the software no longer knows.
+            for table in PRIORITY_TABLES:
+                if table in existing_tables:
+                    conn.execute(text(
+                        f"UPDATE {table} SET priority = 'MEDIUM' "
+                        "WHERE priority = 'NORMAL'"))
+                    conn.execute(text(
+                        f"UPDATE {table} SET priority = 'HIGH' "
+                        "WHERE priority = 'CRITICAL'"))
 
             # There is no "accept the task" step any more — work starts when
             # it is assigned. Anything still sitting in PENDING was waiting on

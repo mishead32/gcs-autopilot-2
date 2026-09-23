@@ -14,6 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from . import clock
 from .db import Base
 
 
@@ -29,9 +30,32 @@ class Role(str, enum.Enum):
 
 class Priority(str, enum.Enum):
     LOW = "low"
-    NORMAL = "normal"
+    MEDIUM = "medium"
     HIGH = "high"
-    CRITICAL = "critical"
+
+
+# How much each priority counts for in the score. A HIGH task is worth five
+# ordinary tasks, MEDIUM two, LOW one. The doer still sees one task on their
+# list — the weight only changes what it is worth, never how many rows appear.
+PRIORITY_WEIGHT = {
+    Priority.HIGH: 5,
+    Priority.MEDIUM: 2,
+    Priority.LOW: 1,
+}
+PRIORITY_ORDER = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
+
+
+def weight_of(priority: "Priority") -> int:
+    return PRIORITY_WEIGHT.get(priority, 1)
+
+
+# Stored as plain text rather than a native PostgreSQL enum type. A native
+# enum is a schema object in its own right: renaming a level then means
+# ALTER TYPE, which cannot be done and used in the same transaction, and a
+# live upgrade dies on "invalid input value for enum priority". Text costs
+# nothing here and lets the levels change with an ordinary UPDATE.
+PriorityCol = Enum(Priority, native_enum=False, length=20,
+                   values_callable=lambda e: [m.name for m in e])
 
 
 class TaskStatus(str, enum.Enum):
@@ -85,6 +109,17 @@ class Right(str, enum.Enum):
     MANAGE_FLOW = "manage_flow"     # create / edit FMS templates
     MANAGE_USER = "manage_user"     # create users, set rights
     VIEW_ALL_BRANCHES = "view_all_branches"
+    # Who chases the work that has not been done. PC covers Checklist + FMS,
+    # EA covers Delegation. Kept as rights rather than a fixed job title so a
+    # stand-in can be given it for a week without inventing a new role.
+    FOLLOWUP_CHECKLIST_FMS = "followup_checklist_fms"   # the PC
+    FOLLOWUP_DELEGATION = "followup_delegation"         # the EA
+    # Reports are open to everybody, but without this right they only ever
+    # show a person their OWN work. Tick it and the same pages cover the
+    # whole company — including other people's EM scores. It is the one
+    # right here that widens what someone can SEE rather than what they can
+    # do, which is why it is not handed out with any role by default.
+    VIEW_ALL_REPORTS = "view_all_reports"
 
 
 RIGHT_LABELS = {
@@ -97,12 +132,18 @@ RIGHT_LABELS = {
     Right.MANAGE_FLOW: "Manage FMS flows",
     Right.MANAGE_USER: "Manage users & rights",
     Right.VIEW_ALL_BRANCHES: "See all branches",
+    Right.FOLLOWUP_CHECKLIST_FMS: "Follow up Checklist & FMS (PC)",
+    Right.FOLLOWUP_DELEGATION: "Follow up Delegation (EA)",
+    Right.VIEW_ALL_REPORTS: "See everyone's reports",
 }
 
 # What each role gets by default when a user is created.
 DEFAULT_RIGHTS = {
     Role.OWNER: [r for r in Right],
     Role.ADMIN: [r for r in Right],
+    # Deliberately NOT VIEW_ALL_REPORTS: a manager's reports stay inside the
+    # branch they run until somebody decides otherwise. Handing it out with
+    # the role would quietly widen what every existing manager can see.
     Role.MANAGER: [Right.CREATE_TASK, Right.EDIT_TASK, Right.AUDIT_TASK,
                    Right.REOPEN_TASK, Right.FALSE_MARK],
     Role.DOER: [],
@@ -130,7 +171,7 @@ class Organization(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     slug: Mapped[str] = mapped_column(String(60), unique=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="org")
     users: Mapped[list["User"]] = relationship(back_populates="org")
@@ -180,7 +221,7 @@ class User(Base):
     bm_checklist: Mapped[int] = mapped_column(Integer, default=20)
     bm_fms: Mapped[int] = mapped_column(Integer, default=20)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     org: Mapped[Organization] = relationship(back_populates="users")
     branch: Mapped[Branch | None] = relationship()
@@ -247,6 +288,35 @@ class User(Base):
     def has_edit_task(self) -> bool:
         return self.has(Right.EDIT_TASK)
 
+    @property
+    def can_see_all_reports(self) -> bool:
+        """May open the company-wide reports (EM score, follow-ups)."""
+        return self.can_manage or self.has(Right.VIEW_ALL_REPORTS)
+
+    @property
+    def report_scope(self) -> str:
+        """How wide the reports actually are for this person.
+
+        'all'    — the whole company
+        'branch' — a manager, limited to the branch they run
+        'self'   — an ordinary doer: their own work and nothing else
+
+        Kept as one property so the pages can say plainly whose figures are
+        on screen. A report that looks company-wide but is not is how people
+        end up quoting their own three tasks at a review.
+        """
+        if (self.role in (Role.OWNER, Role.ADMIN)
+                or self.has(Right.VIEW_ALL_REPORTS)
+                or self.has(Right.VIEW_ALL_BRANCHES)):
+            return "all"
+        return "branch" if self.role == Role.MANAGER else "self"
+
+    @property
+    def can_follow_up(self) -> bool:
+        """PC or EA — shows the Follow-ups menu to a plain doer who chases."""
+        return (Right.FOLLOWUP_DELEGATION.value in self.right_set
+                or Right.FOLLOWUP_CHECKLIST_FMS.value in self.right_set)
+
 
 # --------------------------------------------------------------------------
 # Flow Management System
@@ -260,7 +330,7 @@ class Flow(Base):
     name: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     steps: Mapped[list["FlowStep"]] = relationship(
         back_populates="flow", order_by="FlowStep.position", cascade="all, delete-orphan"
@@ -278,7 +348,7 @@ class FlowStep(Base):
     # who does it: a fixed user, or left blank to be picked at run time
     default_doer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     tat_hours: Mapped[int] = mapped_column(Integer, default=24)   # turnaround time
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.NORMAL)
+    priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=True)
     # comma separated field labels the doer must fill in on completion
@@ -296,7 +366,7 @@ class FlowInstance(Base):
     flow_id: Mapped[int] = mapped_column(ForeignKey("flows.id"))
     reference: Mapped[str] = mapped_column(String(200))   # member name / lead id / invoice no
     started_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_position: Mapped[int] = mapped_column(Integer, default=1)
     # JSON blob of field values carried across steps (MIDAP "Split FMS" carryover)
@@ -321,12 +391,12 @@ class Task(Base):
     assigner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     doer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.NORMAL)
+    priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.PENDING, index=True)
     source: Mapped[TaskSource] = mapped_column(Enum(TaskSource), default=TaskSource.DELEGATION)
 
     due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -383,13 +453,22 @@ class Task(Base):
     def is_overdue(self) -> bool:
         if self.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
             return False
-        return datetime.utcnow() > self.due_at
+        return clock.now() > self.due_at
 
     @property
     def was_on_time(self) -> bool | None:
         if not self.submitted_at:
             return None
         return self.submitted_at <= self.due_at
+
+    @property
+    def weight(self) -> int:
+        """What this task is worth in the score — 5, 2 or 1."""
+        return weight_of(self.priority)
+
+    @property
+    def weight_label(self) -> str:
+        return f"{self.weight}\u00d7"
 
     @property
     def audit_label(self) -> str:
@@ -417,7 +496,7 @@ def _on_task_created(mapper, connection, target: "Task") -> None:
     # way to look busy without doing anything.
     if target.status in (None, TaskStatus.PENDING):
         target.status = TaskStatus.IN_PROGRESS
-        target.started_at = target.started_at or datetime.utcnow()
+        target.started_at = target.started_at or clock.now()
 
 
 class TaskComment(Base):
@@ -427,7 +506,7 @@ class TaskComment(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     body: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     task: Mapped[Task] = relationship(back_populates="comments")
     author: Mapped[User] = relationship()
@@ -448,7 +527,7 @@ class Attachment(Base):
     # That is how a free host with no permanent disk keeps attachments across
     # restarts without a separate storage account.
     data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     task: Mapped[Task] = relationship(back_populates="attachments")
     uploaded_by: Mapped[User] = relationship()
@@ -472,7 +551,7 @@ class RecurringRule(Base):
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     doer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     assigner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.NORMAL)
+    priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     frequency: Mapped[Recurrence] = mapped_column(Enum(Recurrence), default=Recurrence.DAILY)
     # weekly -> 0=Mon..6=Sun ; monthly -> day of month
     day_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -502,12 +581,12 @@ class HelpTicket(Base):
 
     subject: Mapped[str] = mapped_column(String(250))
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.NORMAL)
+    priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     needed_by: Mapped[datetime] = mapped_column(DateTime)
     status: Mapped[HelpStatus] = mapped_column(Enum(HelpStatus), default=HelpStatus.OPEN,
                                                index=True)
     decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     raiser: Mapped[User] = relationship(foreign_keys=[raiser_id])
@@ -532,13 +611,35 @@ class Holiday(Base):
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     day: Mapped[date] = mapped_column(Date, index=True)
     name: Mapped[str] = mapped_column(String(120))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     branch: Mapped[Branch | None] = relationship()
 
     @property
     def scope(self) -> str:
         return self.branch.name if self.branch else "All branches"
+
+
+class Followup(Base):
+    """Evidence that someone chased an open task on a given day.
+
+    One row per task per day. The day is part of the identity on purpose: a
+    task pending for a fortnight needs chasing every day, and a tick from the
+    first morning must not make the next thirteen look covered.
+    """
+    __tablename__ = "followups"
+    __table_args__ = (UniqueConstraint("task_id", "day", name="uq_followup_task_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+
+    task: Mapped["Task"] = relationship()
+    by: Mapped[User] = relationship()
 
 
 class OutboundMessage(Base):
@@ -556,5 +657,5 @@ class OutboundMessage(Base):
     body: Mapped[str] = mapped_column(Text)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

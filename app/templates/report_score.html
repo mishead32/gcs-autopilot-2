@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% from "_filters.html" import filter_bar, date_presets %}
+{% block title %}EM score report · {{ APP_NAME }}{% endblock %}
+
+{% macro score_row(name, sub, card, link='') %}
+<tr>
+  <td>{% if link %}<a href="{{ link }}"><strong>{{ name }}</strong></a>
+      {% else %}<strong>{{ name }}</strong>{% endif %}
+    {% if sub %}<div class="m">{{ sub }}</div>{% endif %}</td>
+  <td><span class="score-pill {{ card.band }}">{{ card.score }}</span></td>
+  <td class="{{ 'overdue' if card.gap < 0 }}">{{ card.gap }}</td>
+  {% for s in card.source_list %}
+  <td class="bif">
+    <b>{{ s.subtotal }}</b>
+    <div class="m">not done {{ s.not_done_penalty }} · late {{ s.late_penalty }}</div>
+    <div class="m">{{ s.completed }} of {{ s.planned }} weight closed</div>
+  </td>
+  {% endfor %}
+  <td class="{{ 'overdue' if card.false_penalty }}">{{ card.false_penalty }}</td>
+  <td>{{ card.completion_rate }}%</td>
+  <td>{{ card.on_time_rate }}%</td>
+</tr>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>EM score — person-wise &amp; branch-wise</h1>
+    <p class="sub">Average, and the full bifurcation behind it.</p>
+  </div>
+  <a class="btn ghost" href="/reports">← All reports</a>
+</div>
+
+<div class="tabs">
+  <a class="{{ 'active' if view == 'person' }}" href="{{ f.url(view='person') }}">Person-wise</a>
+  <a class="{{ 'active' if view == 'branch' }}" href="{{ f.url(view='branch') }}">Branch-wise</a>
+</div>
+
+{{ date_presets(f) }}
+{{ filter_bar(f, basis='planned date', show_priority=false) }}
+
+<div class="grid g3">
+  <div class="kpi {{ 'ok' if avg >= 85 else ('warn' if avg >= 60 else 'bad') }}">
+    <div class="n">{{ avg }}</div><div class="l">Average score</div>
+    <div class="m">across {{ headcount }} employee(s)</div></div>
+  <div class="kpi ok"><div class="n">{{ best.card.score if best else '—' }}</div>
+    <div class="l">Best</div><div class="m">{{ best.user.name if best else 'No data yet' }}</div></div>
+  <div class="kpi bad"><div class="n">{{ worst.card.score if worst else '—' }}</div>
+    <div class="l">Needs attention</div><div class="m">{{ worst.user.name if worst else 'No data yet' }}</div></div>
+  <div class="kpi total"><div class="n">{{ board.overall.completion_rate }}%</div>
+    <div class="l">Work completed</div>
+    <div class="m">{{ board.overall.on_time_rate }}% of it on time</div></div>
+</div>
+
+{% set heads = board.overall.source_list %}
+
+{% if view == 'branch' %}
+<h2>Branch-wise</h2>
+<p class="sub">A branch score is the average of its employees' scores — each
+  employee is weighted by their own benchmark, so averaging the people is the
+  only honest way to roll it up.</p>
+<div class="table-wrap">
+<table class="scoretable">
+  <tr><th>Branch</th><th>Score</th><th>Gap</th>
+    {% for s in heads %}<th>{{ s.label }}</th>{% endfor %}
+    <th>False marking</th><th>Completed</th><th>On time</th></tr>
+  {% for r in units %}
+  {{ score_row(r.branch.name if r.branch else 'Unassigned', '', r.card,
+               f.url(view='person', branch=r.branch.id if r.branch else '')) }}
+  {% endfor %}
+  {% if not units %}
+  <tr><td colspan="{{ 6 + heads|length }}" class="m">No scored work in this range.</td></tr>
+  {% endif %}
+</table>
+</div>
+
+{% else %}
+<h2>Person-wise{% if f.branch_id %} — {{ f.summary }}{% endif %}</h2>
+{% if f.branch_id %}
+<p class="sub">Only this branch's employees are listed. Pick “All branches”
+  above to widen it again.</p>
+{% endif %}
+<div class="table-wrap">
+<table class="scoretable">
+  <tr><th>Employee</th><th>Score</th><th>Gap</th>
+    {% for s in heads %}<th>{{ s.label }}</th>{% endfor %}
+    <th>False marking</th><th>Completed</th><th>On time</th></tr>
+  {% for r in people %}
+  {{ score_row(r.user.name, r.user.branch.name if r.user.branch else 'No branch', r.card) }}
+  {% endfor %}
+  {% if not people %}
+  <tr><td colspan="{{ 6 + heads|length }}" class="m">No scored work in this range.</td></tr>
+  {% endif %}
+</table>
+</div>
+{% endif %}
+
+<p class="sub" style="margin-top:14px">
+  Each cell shows the penalty for that kind of work, then the split behind it:
+  work not done, and work not done on time. High-priority tasks count 5×,
+  medium 2×, low 1×, which is why the weight closed can be larger than the
+  number of tasks.
+</p>
+{% endblock %}

@@ -54,6 +54,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..models import Task, TaskStatus, TaskSource, User, Branch, Role
 
 FALSE_MARK_PENALTY = 10.0
@@ -79,7 +80,7 @@ def resolve_window(date_from: str | None, date_to: str | None,
             start, end = end, start
         return start, end
     d = days or 7
-    end = datetime.utcnow().replace(hour=23, minute=59, second=59)
+    end = clock.now().replace(hour=23, minute=59, second=59)
     start = (end - timedelta(days=d - 1)).replace(hour=0, minute=0, second=0)
     return start, end
 
@@ -211,17 +212,26 @@ DEFAULT_BENCHMARKS = {
 }
 
 
+def _w(tasks) -> int:
+    """Total score weight of a set of tasks (high 5, medium 2, low 1)."""
+    return sum(t.weight for t in tasks)
+
+
 def _build(planned: list[Task], closed_in_window: list[Task],
            benchmarks: dict | None = None) -> Card:
     bm = benchmarks or DEFAULT_BENCHMARKS
     c = Card(benchmarks=dict(bm))
-    c.planned = len(planned)
-    c.closed_in_window = len(closed_in_window)
+    # Everything below counts WEIGHT, not rows. A high-priority task is worth
+    # five, medium two, low one, so missing one high job costs what missing
+    # five ordinary ones would. The task lists still show one row per task —
+    # only the arithmetic changes.
+    c.planned = _w(planned)
+    c.closed_in_window = _w(closed_in_window)
 
     done = [t for t in planned if t.status in CLOSED]
-    c.completed = len(done)
+    c.completed = _w(done)
     c.not_done = c.planned - c.completed
-    c.on_time = sum(1 for t in done if t.was_on_time)
+    c.on_time = _w([t for t in done if t.was_on_time])
     c.late = c.completed - c.on_time
     c.still_open = sum(1 for t in planned if t.status not in
                        (TaskStatus.COMPLETED, TaskStatus.CANCELLED))
@@ -233,11 +243,11 @@ def _build(planned: list[Task], closed_in_window: list[Task],
         s = SourceScore(key=src.value, label=SOURCE_LABELS[src],
                         benchmark=bm.get(src.value, 0))
         rows = [t for t in planned if t.source == src]
-        s.planned = len(rows)
+        s.planned = _w(rows)
         sdone = [t for t in rows if t.status in CLOSED]
-        s.completed = len(sdone)
+        s.completed = _w(sdone)
         s.not_done = s.planned - s.completed
-        s.on_time = sum(1 for t in sdone if t.was_on_time)
+        s.on_time = _w([t for t in sdone if t.was_on_time])
         s.late = s.completed - s.on_time
         c.sources[src.value] = s.compute()
 
@@ -353,7 +363,8 @@ def visible_branches(db: Session, user: User) -> list[Branch]:
     from ..models import Right
     q = select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
     branches = list(db.scalars(q).all())
-    if user.has(Right.VIEW_ALL_BRANCHES) or user.role in (Role.OWNER, Role.ADMIN):
+    if (user.has(Right.VIEW_ALL_BRANCHES) or user.has(Right.VIEW_ALL_REPORTS)
+            or user.role in (Role.OWNER, Role.ADMIN)):
         return branches
     return [b for b in branches if b.id == user.branch_id]
 
