@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Users &amp; rights</h1>
+<p class="sub">Role sets what someone sees. Rights set what they can do. Owner and admin always hold every right.</p>
+
+<div class="grid g2 wide">
+  <div>
+    <div class="table-wrap"><table>
+      <tr><th>Name</th><th>Role</th><th>Branch</th><th>Benchmark<br>D / C / F</th><th>Rights</th><th></th></tr>
+      {% for p in people %}
+      <tr>
+        <td><a href="/admin/users/{{ p.id }}"><strong>{{ p.name }}</strong></a>
+          <div class="m">{{ p.email }}</div>
+          {% if p.phone %}<div class="m mono">{{ p.phone }}</div>{% endif %}</td>
+        <td><span class="chip">{{ p.role.value }}</span></td>
+        <td>{{ p.branch.name if p.branch else '—' }}</td>
+        <td class="mono" style="white-space:nowrap">{{ p.bm_delegation }} / {{ p.bm_checklist }} / {{ p.bm_fms }}</td>
+        <td>
+          {% if p.role.value in ['owner','admin'] %}
+            <span class="right-chip">all rights</span>
+          {% elif p.right_set %}
+            {% for r in rights if r.value in p.right_set %}
+            <span class="right-chip">{{ right_labels[r] }}</span>
+            {% endfor %}
+          {% else %}<span class="m">execute only</span>{% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          {% if p.id != user.id %}
+          <form method="post" action="/admin/users/{{ p.id }}/toggle" style="display:inline">
+            <button class="btn sm {{ '' if p.active else 'ghost' }}">{{ 'Active' if p.active else 'Disabled' }}</button>
+          </form>
+          <a class="btn sm danger" href="/admin/users/{{ p.id }}/delete"
+             title="Delete {{ p.name }}">Delete</a>
+          {% else %}<span class="m">you</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table></div>
+
+    <p class="m" style="margin-top:14px">
+      Branches are managed on their own page —
+      <a href="/admin/branches">open Branches</a>.
+    </p>
+  </div>
+
+  <form method="post" action="/admin/users" class="card">
+    <strong>Add user</strong>
+    <label>Full name</label><input name="name" required>
+    <label>Email</label><input type="email" name="email" required>
+    <label>WhatsApp number</label><input name="phone" placeholder="+9198xxxxxxxx">
+    <label>Temporary password</label><input name="password" required>
+    <div class="row">
+      <div><label>Role</label><select name="role" id="roleSel">
+        {% for r in roles %}<option value="{{ r.value }}" {{ 'selected' if r.value=='doer' }}>{{ r.value|title }}</option>{% endfor %}
+      </select></div>
+      <div><label>Branch</label><select name="branch_id"><option value="">—</option>
+        {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select></div>
+    </div>
+    <label>Department</label><select name="department_id"><option value="">—</option>
+      {% for d in depts %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select>
+
+    <label style="margin-top:18px">Rights</label>
+    <div class="m" style="margin-bottom:4px">
+      Ticked automatically from the role — adjust as needed.
+      Owner and admin get everything regardless.
+    </div>
+    <div class="rights" id="rightsBox">
+      {% for r in rights %}
+      <label><input type="checkbox" name="rights" value="{{ r.value }}"> {{ right_labels[r] }}</label>
+      {% endfor %}
+    </div>
+
+
+    <label style="margin-top:18px">Scoring benchmark</label>
+    <div class="m" style="margin-bottom:6px">
+      How much of this person's job each work type is. The three must add up to
+      <strong>100%</strong>. A benchmark caps how much that work type can cost them —
+      60% Delegation means Delegation can never take more than 60 points off.
+    </div>
+    <div class="bm" data-bm>
+      <div><label>Delegation</label>
+        <input type="number" name="bm_delegation" min="0" max="100" value="60" required></div>
+      <div><label>Checklist</label>
+        <input type="number" name="bm_checklist" min="0" max="100" value="20" required></div>
+      <div><label>FMS</label>
+        <input type="number" name="bm_fms" min="0" max="100" value="20" required></div>
+      <div class="bm-total"><label>Total</label>
+        <div class="tot-box"><span class="tv">100</span>%</div></div>
+    </div>
+    <div class="bm-msg" hidden></div>
+    <div style="margin-top:18px"><button class="btn">Create user</button></div>
+  </form>
+</div>
+
+<script>
+(function(){
+  var DEF = {{ default_rights|tojson }};
+  var sel = document.getElementById('roleSel'), box = document.getElementById('rightsBox');
+  function apply(){
+    var want = DEF[sel.value] || [];
+    box.querySelectorAll('input[name=rights]').forEach(function(cb){
+      cb.checked = want.indexOf(cb.value) !== -1;
+    });
+  }
+  sel.addEventListener('change', apply);
+  apply();
+})();
+</script>
+{% endblock %}

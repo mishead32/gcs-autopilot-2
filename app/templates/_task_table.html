@@ -1,0 +1,35 @@
+{% macro task_table(tasks, show_doer=true) %}
+{% if tasks %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Task</th>
+    {% if show_doer %}<th>Doer</th>{% endif %}
+    <th>Priority</th><th>Status</th><th>Audit</th><th>Planned</th>
+    <th>Completed</th><th>Source</th>
+  </tr>
+  {% for t in tasks %}
+  <tr>
+    <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
+      {% if t.branch %}<div class="m" style="color:var(--muted);font-size:12px">{{ t.branch.name }}</div>{% endif %}
+    </td>
+    {% if show_doer %}<td>{{ t.doer.name }}</td>{% endif %}
+    <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}</span></td>
+    <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>
+    <td><a class="chip audit_{{ t.audit_state.value }}" href="/tasks/{{ t.id }}#audit"
+           title="Open the audit for this task">{{ t.audit_label }}</a></td>
+    <td class="{{ 'overdue' if t.is_overdue }}">{{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
+      <span style="font-size:11px">{{ t.due_at|due }}</span></td>
+    <td>{% if t.closed_at %}{{ t.closed_at|dt('%d %b, %I:%M %p') }}
+        {% if t.was_on_time is not none %}<br><span style="font-size:11px"
+          class="{{ '' if t.was_on_time else 'overdue' }}">{{ 'on time' if t.was_on_time else 'late' }}</span>{% endif %}
+        {% else %}<span class="m">—</span>{% endif %}</td>
+    <td><span class="chip">{{ t.source.value }}</span></td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<div class="empty">Nothing here.</div>
+{% endif %}
+{% endmacro %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Set up — {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:460px;margin:40px auto">
+  <h1>Set up {{ APP_NAME }}</h1>
+  <p class="sub">
+    Nobody can sign in yet. Create the first administrator account — this page
+    disappears as soon as you do.
+  </p>
+
+  {% if error %}<div class="danger-box"><strong>{{ error }}</strong></div>{% endif %}
+
+  <form method="post" action="/setup">
+    <label>Your name</label>
+    <input name="name" required autofocus placeholder="Rajinder Singh">
+    <label>Email</label>
+    <input type="email" name="email" required placeholder="you@company.com">
+    <label>Password</label>
+    <input type="password" name="password" required minlength="8"
+           placeholder="At least 8 characters">
+    <label>Password again</label>
+    <input type="password" name="password2" required minlength="8">
+    <div style="margin-top:18px"><button class="btn">Create administrator</button></div>
+  </form>
+</div>
+{% endblock %}

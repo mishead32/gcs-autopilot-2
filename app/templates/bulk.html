@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Bulk import</h1>
+<p class="sub">Load many {{ kinds[kind]|lower }} at once from a spreadsheet.
+  Nothing is created until you confirm on the next screen.</p>
+
+<div class="tabs">
+  {% for k, label in kinds.items() %}
+  <a class="{{ 'active' if kind == k }}" href="/bulk?kind={{ k }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+{% if not parsed %}
+<div class="grid g2">
+  <div class="card">
+    <strong>1 · Get the template</strong>
+    <p class="sub" style="margin:8px 0 14px">
+      It already contains your people and companies on a second tab, with
+      dropdowns for priority and frequency, so nothing has to be typed twice.
+    </p>
+    <a class="btn" href="/bulk/template/{{ kind }}">Download {{ kinds[kind] }} template</a>
+    <div class="m" style="margin-top:12px">
+      Fill from <strong>row 3</strong> downwards. Row 2 holds the notes — leave
+      it or delete it, either is fine.
+    </div>
+  </div>
+
+  <form class="card" method="post" action="/bulk/preview" enctype="multipart/form-data">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <strong>2 · Upload it back</strong>
+    <p class="sub" style="margin:8px 0 14px">
+      Every row is checked first. You'll see what will be created, and any
+      rows with problems, before anything is saved.
+    </p>
+    <label>Your filled-in file</label>
+    <input type="file" name="file" accept=".xlsx,.xlsm" required>
+    <div style="margin-top:16px"><button class="btn">Check the file</button></div>
+    <div class="m" style="margin-top:10px">Up to 2,000 rows and 5 MB per file.</div>
+  </form>
+</div>
+
+<h2>What each column means</h2>
+<div class="table-wrap"><table>
+  <tr><th style="width:180px">Column</th><th>What to put</th></tr>
+  {% if kind == 'delegation' %}
+  <tr><td><strong>Task title</strong></td><td>Required. What must be done.</td></tr>
+  <tr><td>Details</td><td>Instructions, and what "done" looks like.</td></tr>
+  <tr><td><strong>Doer email</strong></td><td>Required. Must match an active user — see the People tab.</td></tr>
+  <tr><td>Branch</td><td>Leave blank to use the doer's own branch.</td></tr>
+  <tr><td>Priority</td><td>low / normal / high / critical. Blank means normal.</td></tr>
+  <tr><td><strong>Due date</strong></td><td>Required. DD/MM/YYYY, e.g. 25/09/2026.</td></tr>
+  <tr><td>Due time</td><td>HH:MM 24-hour. Blank means 18:00.</td></tr>
+  <tr><td>Needs audit</td><td>YES if a manager must approve it before it closes.</td></tr>
+  {% else %}
+  <tr><td><strong>Task title</strong></td><td>Required. The job that repeats.</td></tr>
+  <tr><td>Details</td><td>Instructions for the doer.</td></tr>
+  <tr><td><strong>Doer email</strong></td><td>Required. Must match an active user.</td></tr>
+  <tr><td>Branch</td><td>Leave blank to use the doer's own branch.</td></tr>
+  <tr><td><strong>Frequency</strong></td><td>daily, weekdays, weekly or monthly.</td></tr>
+  <tr><td>Day</td><td>Weekly → Mon–Sun. Monthly → 1–31. Daily/weekdays → blank.</td></tr>
+  <tr><td>Due time</td><td>HH:MM 24-hour. Blank means 18:00.</td></tr>
+  <tr><td>Priority</td><td>low / normal / high / critical.</td></tr>
+  <tr><td>Needs audit</td><td>YES if a manager must approve each occurrence.</td></tr>
+  {% endif %}
+</table></div>
+
+{% else %}
+{% set good = parsed.good %}
+{% set bad = parsed.bad %}
+
+<div class="grid g3">
+  <div class="kpi ok"><div class="n">{{ good|length }}</div>
+    <div class="l">Ready to import</div></div>
+  <div class="kpi {{ 'bad' if bad else '' }}"><div class="n">{{ bad|length }}</div>
+    <div class="l">Rows with problems</div></div>
+  <div class="kpi"><div class="n">{{ parsed.rows|length }}</div>
+    <div class="l">Rows found</div></div>
+</div>
+
+{% if bad %}
+<h2>These {{ bad|length }} row(s) will be skipped</h2>
+<div class="danger-box" style="margin-bottom:12px">
+  Fix them in the spreadsheet and upload again, or import the good ones now
+  and deal with these separately. Nothing is lost either way.
+</div>
+<div class="table-wrap"><table>
+  <tr><th style="width:80px">Excel row</th><th>Problem</th></tr>
+  {% for r in bad %}
+  <tr><td class="mono">{{ r.number }}</td><td class="overdue">{{ r.error }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+{% if good %}
+<h2>These {{ good|length }} will be created</h2>
+<div class="table-wrap"><table>
+  <tr>
+    <th style="width:70px">Row</th><th>Task</th><th>Doer</th>
+    {% if kind == 'delegation' %}<th>Priority</th><th>Due</th>
+    {% else %}<th>Schedule</th><th>Time</th>{% endif %}
+    <th>Audit</th>
+  </tr>
+  {% for r in good[:200] %}
+  <tr>
+    <td class="mono">{{ r.number }}</td>
+    <td><strong>{{ r.data.title }}</strong></td>
+    <td>{{ r.data.doer.name }}</td>
+    {% if kind == 'delegation' %}
+    <td><span class="chip {{ r.data.priority.value }}">{{ r.data.priority.value }}</span></td>
+    <td>{{ r.data.due_at|dt('%d %b %Y, %I:%M %p') }}</td>
+    {% else %}
+    <td><span class="chip">{{ r.data.frequency.value }}</span>
+      {% if r.data.day_of is not none %}
+        {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.data.day_of]
+           if r.data.frequency.value == 'weekly' else 'day ' ~ r.data.day_of }}
+      {% endif %}</td>
+    <td>{{ r.data.due_time }}</td>
+    {% endif %}
+    <td>{{ 'Yes' if r.data.requires_audit else '—' }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% if good|length > 200 %}
+<p class="m">Showing the first 200. All {{ good|length }} will be imported.</p>
+{% endif %}
+
+<form method="post" action="/bulk/commit" class="card" style="margin-top:16px">
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <input type="hidden" name="payload" value="{{ payload }}">
+  <strong>Ready?</strong>
+  <p class="sub" style="margin:8px 0 0">
+    This creates {{ good|length }} {{ kinds[kind]|lower }}
+    {% if kind == 'delegation' %}and notifies each doer{% endif %}.
+    {% if bad %}The {{ bad|length }} problem row(s) are skipped.{% endif %}
+  </p>
+  <div style="margin-top:16px">
+    <button class="btn">Import {{ good|length }} {{ kinds[kind]|lower }}</button>
+    <a class="btn ghost" href="/bulk?kind={{ kind }}">Start over</a>
+  </div>
+</form>
+{% else %}
+<div class="empty" style="margin-top:16px">
+  No usable rows in that file. Fix the problems above and try again.
+  <div style="margin-top:14px"><a class="btn ghost" href="/bulk?kind={{ kind }}">Back</a></div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

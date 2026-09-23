@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="sub"><a href="/help">&larr; Help Desk</a></p>
+<h1>Ask a colleague for help</h1>
+<p class="sub">
+  This lands on their dashboard as a Delegation task straight away, so it is
+  tracked like any other work. They can decline if they can't take it.
+</p>
+
+<div class="card" style="max-width:640px">
+  <form method="post" action="/help/new">
+    <label>What do you need help with?</label>
+    <input name="subject" required maxlength="200"
+           placeholder="e.g. Pull last month's PT renewal list from the CRM">
+
+    <label>Details</label>
+    <textarea name="details" rows="4"
+              placeholder="What exactly is needed, and anything they'll need to know."></textarea>
+
+    <div class="row">
+      <div>
+        <label>Who can help?</label>
+        <select name="helper_id" required>
+          <option value="">Choose a colleague…</option>
+          {% for c in colleagues %}
+          <option value="{{ c.id }}">{{ c.name }}{% if c.branch %} — {{ c.branch.name }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Priority</label>
+        <select name="priority">
+          {% for p in priorities %}
+          <option value="{{ p.value }}" {{ 'selected' if p.value == 'normal' }}>{{ p.value|title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <label>Needed by</label>
+    <input type="datetime-local" name="needed_by" value="{{ default_due }}" required>
+
+    <div style="margin-top:16px"><button class="btn">Send the request</button></div>
+  </form>
+</div>
+{% endblock %}

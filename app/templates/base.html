@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="{{ 'app' if user else 'anon' }}">
+{% if user %}
+{% set p = request.url.path %}
+<aside id="sidebar">
+  <div class="side-head">
+    <span class="logo">GA</span>
+    <span class="name">{{ APP_NAME }}</span>
+  </div>
+
+  <nav>
+    <a class="{{ 'active' if p == '/' }}" href="/" title="Dashboard">
+      <span class="ic">▤</span><span class="lb">Dashboard</span></a>
+    <a class="{{ 'active' if p == '/tasks' }}" href="/tasks?scope=mine&status=open" title="My Tasks">
+      <span class="ic">✓</span><span class="lb">My Tasks</span></a>
+    <a class="{{ 'active' if p.startswith('/help') }}" href="/help" title="Help Desk">
+      <span class="ic">☏</span><span class="lb">Help Desk</span></a>
+
+    {% if user.can_manage %}
+      <div class="side-sec"><span class="lb">Operations</span></div>
+      <a href="/tasks?scope=assigned&status=open" title="Delegation">
+        <span class="ic">➜</span><span class="lb">Delegation</span></a>
+      <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
+        <span class="ic">⇉</span><span class="lb">FMS</span></a>
+      <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
+        <span class="ic">☑</span><span class="lb">Checklist</span></a>
+      <a href="/tasks?scope=all&status=audit_pending" title="Audit pending">
+        <span class="ic">⚖</span><span class="lb">Audit pending</span></a>
+      <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
+        <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
+
+      <div class="side-sec"><span class="lb">Insight</span></div>
+      <a class="{{ 'active' if p == '/stats' }}" href="/stats" title="Performance">
+        <span class="ic">◉</span><span class="lb">Performance</span></a>
+      <a class="{{ 'active' if p == '/outbox' }}" href="/outbox" title="Outbox">
+        <span class="ic">✉</span><span class="lb">Outbox</span></a>
+      {% if user.has_manage_user %}
+      <a class="{{ 'active' if p.startswith('/sheet') }}" href="/sheet" title="Google Sheet">
+        <span class="ic">▦</span><span class="lb">Google Sheet</span></a>
+      {% endif %}
+    {% endif %}
+
+    {% if user.has_manage_user %}
+      <div class="side-sec"><span class="lb">Setup</span></div>
+      <a class="{{ 'active' if p.startswith('/admin/users') }}" href="/admin/users" title="Users">
+        <span class="ic">☰</span><span class="lb">Users</span></a>
+      <a class="{{ 'active' if p.startswith('/admin/branches') }}" href="/admin/branches" title="Branches">
+        <span class="ic">⌂</span><span class="lb">Branches</span></a>
+      <a class="{{ 'active' if p.startswith('/admin/holidays') }}" href="/admin/holidays" title="Holidays">
+        <span class="ic">☾</span><span class="lb">Holidays</span></a>
+    {% endif %}
+  </nav>
+
+  <div class="side-foot">
+    <div class="who">
+      <div class="lb"><strong>{{ user.name }}</strong></div>
+      <div class="lb" style="opacity:.7">{{ user.role.value|title }}</div>
+    </div>
+    <a class="signout" href="/logout" title="Sign out"><span class="ic">⏻</span><span class="lb">Sign out</span></a>
+  </div>
+</aside>
+
+<header class="topbar">
+  <button id="toggle" title="Toggle menu" aria-label="Toggle menu">☰</button>
+  <span class="crumb">{{ user.branch.name if user.branch else 'All branches' }}</span>
+</header>
+<div id="scrim"></div>
+{% endif %}
+
+<main>
+  {% if BANNER %}<div class="banner">{{ BANNER }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+
+{% if user %}
+<script>
+(function(){
+  var body = document.body, btn = document.getElementById('toggle'),
+      scrim = document.getElementById('scrim'), KEY = 'ga.sidebar';
+
+  function narrow(){ return window.innerWidth <= 900; }
+
+  function apply(collapsed){
+    body.classList.toggle('collapsed', collapsed);
+    try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch(e){}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch(e){}
+  apply(narrow() ? true : saved === '1');
+
+  btn.addEventListener('click', function(){
+    apply(!body.classList.contains('collapsed'));
+  });
+  scrim.addEventListener('click', function(){ apply(true); });
+})();
+</script>
+{% endif %}
+<script src="/static/benchmark.js"></script>
+<script src="/static/upload.js"></script>
+</body>
+</html>

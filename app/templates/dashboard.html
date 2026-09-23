@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% from "_task_table.html" import task_table %}
+{% block content %}
+<h1>Good day, {{ user.name.split()[0] }}</h1>
+<p class="sub">Your doer dashboard — {{ user.branch.name if user.branch else 'All branches' }}</p>
+
+<div class="grid g3">
+  <div class="kpi bad"><div class="n">{{ buckets.overdue|length }}</div><div class="l">Overdue</div></div>
+  <div class="kpi warn"><div class="n">{{ buckets.today|length }}</div><div class="l">Due today</div></div>
+  <div class="kpi"><div class="n">{{ buckets.upcoming|length }}</div><div class="l">Upcoming</div></div>
+  <div class="kpi {{ 'ok' if card.band=='good' else ('warn' if card.band=='warn' else 'bad') }}">
+    <div class="n">{{ card.score }}</div><div class="l">My 30-day score</div></div>
+</div>
+
+<h2>My score — last 30 days</h2>
+<div class="board" id="myBoard">
+  {% for s in card.source_list %}
+  <div class="tile {{ 'zero' if s.subtotal == 0 }}" style="--i:{{ loop.index0 }}">
+    <div class="tile-in">
+      <div class="cap-row">
+        <span class="cap">{{ s.label }}</span>
+        <span class="bm-pill">{{ s.benchmark }}%</span>
+      </div>
+      <div class="big" data-src="{{ s.key }}">{{ s.subtotal }}</div>
+      <div class="rows">
+        <div><span>Work not done</span><b data-src-nd="{{ s.key }}">{{ s.not_done_penalty }}</b></div>
+        <div><span>Not done on time</span><b data-src-lt="{{ s.key }}">{{ s.late_penalty }}</b></div>
+      </div>
+      <div class="foot">{{ s.completed }} of {{ s.planned }} closed{% if s.late %} · {{ s.late }} late{% endif %}<br>
+        Raw {{ s.raw_not_done }} / {{ s.raw_late }} at {{ s.benchmark }}% benchmark</div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="tile {{ 'zero' if card.false_penalty == 0 }}" style="--i:3">
+    <div class="tile-in">
+      <div class="cap-row"><span class="cap">False marking</span></div>
+      <div class="big" id="fmBig">{{ card.false_penalty }}</div>
+      <div class="rows">
+        <div><span>Flagged by auditor</span><b id="fmCount">{{ card.false_marks }}</b></div>
+        <div><span>Penalty each</span><b>−10</b></div>
+      </div>
+      <div class="foot">{{ 'Clean — nothing flagged' if not card.false_marks else 'Raised against your closed tasks' }}</div>
+    </div>
+  </div>
+
+  <div class="tile total" style="--i:4">
+    <div class="tile-in">
+      <div class="cap-row"><span class="cap">Total score</span>
+        <span class="bm-pill">{{ card.benchmarks.delegation }}/{{ card.benchmarks.recurring }}/{{ card.benchmarks.flow }}</span></div>
+      <div class="big" id="totBig">{{ card.total_penalty }}</div>
+      <div class="rows">
+        <div><span>Net out of 100</span><b id="netBig">{{ card.score }}</b></div>
+        <div><span>On time</span><b>{{ card.on_time_rate }}%</b></div>
+      </div>
+      <div class="foot">Delegation + Checklist + FMS + false marking,
+        each capped by your benchmark</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function set(sel, v){ var e = document.querySelector(sel); if (e) e.textContent = v; }
+  setInterval(function(){
+    fetch('/api/my-score?days=30').then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        if (!d) return;
+        (d.sources || []).forEach(function(s){
+          set('[data-src="'+s.key+'"]', s.subtotal);
+          set('[data-src-nd="'+s.key+'"]', s.not_done_penalty);
+          set('[data-src-lt="'+s.key+'"]', s.late_penalty);
+        });
+        set('#fmBig', d.false_penalty);
+        set('#fmCount', d.false_marks);
+        set('#totBig', d.total_penalty);
+        set('#netBig', d.score);
+      }).catch(function(){});
+  }, 30000);
+})();
+</script>
+
+{% if buckets.overdue %}
+<h2>Overdue</h2>{{ task_table(buckets.overdue, false) }}
+{% endif %}
+
+<h2>Due today</h2>{{ task_table(buckets.today, false) }}
+
+<h2>Upcoming</h2>{{ task_table(buckets.upcoming, false) }}
+
+{% if submitted %}
+<h2>Waiting on audit</h2>{{ task_table(submitted, false) }}
+{% endif %}
+
+{% if awaiting_audit %}
+<h2>Pending your audit ({{ awaiting_audit|length }})</h2>{{ task_table(awaiting_audit) }}
+{% endif %}
+{% endblock %}

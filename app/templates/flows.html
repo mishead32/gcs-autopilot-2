@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+  <div><h1>FMS</h1><p class="sub">Flow Management System — define a workflow once, run it for every member, lead or invoice.</p></div>
+  {% if user.has_manage_flow %}<a class="btn" href="/flows/new">+ New flow</a>{% endif %}
+</div>
+
+<h2>Templates</h2>
+{% if flows %}
+<div class="table-wrap"><table>
+  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Status</th></tr>
+  {% for f in flows %}
+  <tr>
+    <td><a href="/flows/{{ f.id }}"><strong>{{ f.name }}</strong></a>
+      {% if f.description %}<div style="color:var(--muted);font-size:12px">{{ f.description }}</div>{% endif %}</td>
+    <td>{{ f.branch.name if f.branch else 'All' }}</td>
+    <td>{{ f.steps|length }}</td>
+    <td><span class="chip {{ 'completed' if f.active else 'rejected' }}">{{ 'active' if f.active else 'off' }}</span></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}<div class="empty">No flows configured yet.</div>{% endif %}
+
+<h2>Running now ({{ running|length }})</h2>
+{% if running %}
+<div class="table-wrap"><table>
+  <tr><th>Reference</th><th>Flow</th><th>Progress</th><th>Started</th></tr>
+  {% for i in running %}
+  {% set p = progress[i.id] %}
+  <tr>
+    <td><a href="/flows/instance/{{ i.id }}"><strong>{{ i.reference }}</strong></a></td>
+    <td>{{ i.flow.name }}</td>
+    <td><div class="inline"><div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div>
+      <span style="font-size:12px">{{ p[0] }}/{{ p[1] }}</span></div></td>
+    <td>{{ i.started_at|dt('%d %b, %I:%M %p') }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}<div class="empty">Nothing running.</div>{% endif %}
+{% endblock %}

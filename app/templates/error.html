@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:620px;margin-top:20px">
+  <h1 style="margin-bottom:10px">{{ heading }}</h1>
+  <p class="sub" style="margin-bottom:0">{{ detail }}</p>
+
+  {% if code == 404 %}
+  <p class="m" style="margin-top:14px">
+    If this page used to work, the software was probably updated while it was
+    running. Stop it (close the black window) and start it again.
+  </p>
+  {% endif %}
+
+  <div style="margin-top:18px">
+    <a class="btn" href="/">Back to the dashboard</a>
+    {% if user %}<a class="btn ghost" href="/tasks?scope=mine&status=open">My tasks</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

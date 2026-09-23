@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Google Sheet backup</h1>
+<p class="sub">Every table is mirrored into one Google Sheet — your backup, and
+  somewhere to pivot the data with tools you already use.</p>
+
+{% if result %}
+  {% if result.ok %}
+  <div class="card" style="border-color:#86e0ac;background:#f2fdf6">
+    <strong style="color:var(--ok)">Synced — {{ result.total }} rows written at {{ result.at }}</strong>
+    <div class="m" style="margin-top:8px">
+      {% for tab, n in result.counts.items() %}{{ tab }}: {{ n }}{{ ", " if not loop.last }}{% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="danger-box">
+    <strong>Sync failed.</strong>
+    <div style="margin-top:6px">{{ result.error or 'Some tabs could not be written.' }}</div>
+    {% if result.errors %}
+    <ul style="margin:8px 0 0;padding-left:18px">
+      {% for tab, e in result.errors.items() %}<li>{{ tab }}: {{ e }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endif %}
+
+<div class="grid g2">
+  <div class="card">
+    <strong>Status</strong>
+    <table style="margin-top:10px">
+      <tr><th style="background:0">Connected</th>
+        <td>{% if enabled %}<span class="chip completed">yes</span>
+            {% else %}<span class="chip rejected">not configured</span>{% endif %}</td></tr>
+      {% if enabled %}
+      <tr><th style="background:0">Sheet</th>
+        <td><a href="{{ url }}" target="_blank" rel="noopener">Open in Google Sheets</a></td></tr>
+      {% endif %}
+      <tr><th style="background:0">Refreshes</th><td>Automatically, then on demand below</td></tr>
+    </table>
+
+    {% if enabled %}
+    <form method="post" action="/sheet/sync" style="margin-top:16px">
+      <button class="btn">Sync now</button>
+      <span class="m" style="margin-left:8px">Takes a few seconds.</span>
+    </form>
+    {% else %}
+    <div class="m" style="margin-top:14px">
+      Set <code>GOOGLE_SHEET_ID</code> and <code>GOOGLE_SERVICE_ACCOUNT</code>
+      on the server, then restart. See DEPLOY-RENDER.md.
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <strong>What goes across</strong>
+    <ul style="margin:10px 0 0;padding-left:18px;line-height:1.9">
+      {% for t in tabs %}<li>{{ t }}</li>{% endfor %}
+    </ul>
+    <div class="danger-box" style="margin-top:14px">
+      <strong>One direction only.</strong> The app writes, the Sheet receives.
+      Anything you type into the Sheet is overwritten on the next sync — make
+      changes in the app, not the spreadsheet.
+    </div>
+    <div class="m" style="margin-top:10px">
+      Attachments appear as links, not files. The files themselves live in
+      object storage; the Sheet records what exists and where.
+    </div>
+  </div>
+</div>
+{% endblock %}

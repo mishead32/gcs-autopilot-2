@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="login-wrap">
+  <h1 style="text-align:center;margin-bottom:6px">{{ APP_NAME }}</h1>
+  <p class="sub" style="text-align:center">Operations autopilot — flows, delegation, scoring</p>
+  <div class="card">
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <label>Email</label>
+      <input type="email" name="email" required autofocus>
+      <label>Password</label>
+      <input type="password" name="password" required>
+      <div style="margin-top:18px"><button class="btn" style="width:100%">Sign in</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

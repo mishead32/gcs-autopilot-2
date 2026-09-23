@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Performance</h1>
+<p class="sub">
+  Score starts at 100. Work not done, work done late and false marking each pull it down.
+  <span id="livedot" class="live">● live</span>
+</p>
+
+<form class="card filters" method="get" action="/stats" id="filters">
+  <div>
+    <label>Branch</label>
+    <select name="branch" id="branchSel" {{ 'disabled' if pinned }}>
+      {% if not pinned %}<option value="">All companies</option>{% endif %}
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if branch_id == b.id }}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Doer</label>
+    <select name="doer" id="doerSel">
+      <option value="">All doers</option>
+      {% for d in all_doers %}
+      <option value="{{ d.id }}" data-branch="{{ d.branch_id or '' }}"
+        {{ 'selected' if doer_id == d.id }}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="quick">
+    <label>&nbsp;</label>
+    <div>
+      <button class="btn">Apply</button>
+      <a class="btn ghost" href="/stats?days=7">This week</a>
+      <a class="btn ghost" href="/stats?days=30">30 days</a>
+    </div>
+  </div>
+</form>
+
+{% set o = board.overall %}
+
+<h2>Score make-up
+  {% if doer_id %}<span class="m" style="text-transform:none">— filtered to one doer</span>{% endif %}
+</h2>
+<div class="grid g3">
+  {% for s in o.source_list %}
+  <div class="kpi {{ 'bad' if s.subtotal < 0 else 'ok' }}">
+    <div class="n">{{ s.subtotal }}</div>
+    <div class="l">{{ s.label }}</div>
+    <div class="m" style="margin-top:6px">
+      Not done {{ s.not_done_penalty }} · Not on time {{ s.late_penalty }}
+      {% if doer_id %}<br>Benchmark {{ s.benchmark }}%{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="kpi {{ 'bad' if o.false_penalty < 0 else 'ok' }}">
+    <div class="n">{{ o.false_penalty }}</div>
+    <div class="l">False marking</div>
+    <div class="m" style="margin-top:6px">{{ o.false_marks }} flagged by auditor</div>
+  </div>
+  <div class="kpi total">
+    <div class="n">{{ o.total_penalty }}</div>
+    <div class="l">Total score</div>
+    <div class="m" style="margin-top:6px">Net {{ o.score }} / 100</div>
+  </div>
+</div>
+
+<h2>Live scores — {{ board.people|length }} doer(s)</h2>
+{% if board.people %}
+<div class="scene" id="scene">
+  {% for r in board.people %}
+  {% set c = r.card %}
+  <div class="scard {{ c.band }}" data-uid="{{ r.user.id }}" style="--i:{{ loop.index0 }}">
+    <div class="scard-in">
+      <div class="who">
+        <div class="nm">{{ r.user.name }}</div>
+        <div class="br">{{ r.user.branch.name if r.user.branch else '—' }}
+          · {{ r.user.bm_delegation }}/{{ r.user.bm_checklist }}/{{ r.user.bm_fms }}</div>
+      </div>
+      <div class="score" data-v="{{ c.score }}">{{ c.score }}</div>
+      <div class="gap" data-v="{{ c.total_penalty }}">{{ c.total_penalty }}</div>
+      <div class="meter"><i style="width:{{ c.score }}%"></i></div>
+      <div class="lines">
+        {% for s in c.source_list %}
+        <div class="ln"><span>{{ s.label }} <em>{{ s.benchmark }}%</em></span>
+          <b data-src="{{ s.key }}">{{ s.subtotal }}</b></div>
+        {% endfor %}
+        <div class="ln"><span>False marking</span>
+          <b class="v-false">{{ c.false_penalty }}</b></div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">No tasks planned in this window.</div>
+{% endif %}
+
+<h2>Branch total</h2>
+<div class="grid g3">
+  <div class="kpi {{ 'ok' if o.band=='good' else ('warn' if o.band=='warn' else 'bad') }}">
+    <div class="n">{{ o.score }}</div><div class="l">Net score</div></div>
+  <div class="kpi"><div class="n">{{ o.gap }}</div><div class="l">Gap to 100</div></div>
+  <div class="kpi"><div class="n">{{ o.planned }}</div><div class="l">Planned in window</div></div>
+  <div class="kpi bad"><div class="n">{{ o.not_done }}</div><div class="l">Not done</div></div>
+  <div class="kpi warn"><div class="n">{{ o.late }}</div><div class="l">Done late</div></div>
+  <div class="kpi bad"><div class="n">{{ o.false_marks }}</div><div class="l">False marked</div></div>
+  <div class="kpi ok"><div class="n">{{ o.closed_in_window }}</div><div class="l">Closed in window</div></div>
+</div>
+
+<h2>Doer breakdown</h2>
+<div class="table-wrap"><table class="bd">
+  <tr class="grp">
+    <th rowspan="2">#</th><th rowspan="2">Name</th><th rowspan="2">Branch</th>
+    <th colspan="3">Delegation</th>
+    <th colspan="3">Checklist</th>
+    <th colspan="3">FMS</th>
+    <th rowspan="2" class="pen">False<br>marking</th>
+    <th rowspan="2" class="pen">Total</th>
+    <th rowspan="2">Net<br>score</th>
+  </tr>
+  <tr>
+    {% for _ in range(3) %}
+    <th class="pen sm2">Not done</th><th class="pen sm2">Not on time</th>
+    <th class="pen sm2">Score</th>
+    {% endfor %}
+  </tr>
+  {% for r in board.people %}{% set c = r.card %}
+  <tr>
+    <td>{{ loop.index }}</td>
+    <td><strong>{{ r.user.name }}</strong></td>
+    <td>{{ r.user.branch.name if r.user.branch else '—' }}
+      <div class="m mono">{{ r.user.bm_delegation }}/{{ r.user.bm_checklist }}/{{ r.user.bm_fms }}</div></td>
+    {% for s in c.source_list %}
+    <td class="pen">{{ s.not_done_penalty }} <span class="m">({{ s.not_done }}/{{ s.planned }})</span></td>
+    <td class="pen">{{ s.late_penalty }} <span class="m">({{ s.late }})</span></td>
+    <td class="pen sub">{{ s.subtotal }}</td>
+    {% endfor %}
+    <td class="pen">{{ c.false_penalty }} <span class="m">({{ c.false_marks }})</span></td>
+    <td class="pen tot">{{ c.total_penalty }}</td>
+    <td><div class="inline"><div class="bar" style="width:56px"><i style="width:{{ c.score }}%"></i></div>
+      <strong>{{ c.score }}</strong></div></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="15" style="text-align:center;color:var(--muted)">Nothing planned in this window.</td></tr>
+  {% endfor %}
+</table></div>
+<p class="m" style="margin-top:6px">
+  Penalties are already weighted by each doer's benchmark (shown under their branch).
+  Brackets show the underlying counts: <em>not done / planned</em>, and the number closed late.
+  Branch and group rows are the average of their doers' scores, since every doer carries
+  their own benchmark.
+</p>
+
+<h2>By branch</h2>
+<div class="table-wrap"><table>
+  <tr><th>Branch</th><th>Planned</th><th>Completed</th>
+    <th class="pen">Not done</th><th class="pen">Late</th><th class="pen">False mark</th>
+    <th>Net score</th><th>Gap</th></tr>
+  {% for r in board.branches %}{% set c = r.card %}
+  <tr>
+    <td><strong>{{ r.branch.name if r.branch else 'Unassigned' }}</strong></td>
+    <td>{{ c.planned }}</td><td>{{ c.completed }}</td>
+    <td class="pen">{{ c.not_done_penalty }}</td>
+    <td class="pen">{{ c.late_penalty }}</td>
+    <td class="pen">{{ c.false_penalty }}</td>
+    <td><div class="inline"><div class="bar" style="width:64px"><i style="width:{{ c.score }}%"></i></div>
+      <strong>{{ c.score }}</strong></div></td>
+    <td class="pen">{{ c.gap }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+
+<p class="sub" style="margin-top:18px">
+  <strong>How it is calculated.</strong>
+  Planned = tasks due between {{ board.start|dt('%d %b %Y') }} and {{ board.end|dt('%d %b %Y') }}.
+  For each work type: raw not done = −(not completed ÷ planned × 100),
+  raw not on time = −(closed late ÷ completed × 100). Each raw figure is then scaled by
+  half the doer's benchmark for that work type, so the work type can never cost more than
+  its benchmark. False marking = −10 each, on top. Net score = 100 minus the total,
+  floored at zero.
+</p>
+
+<script>
+(function(){
+  var q = new URLSearchParams(window.location.search);
+  var url = '/api/stats?' + q.toString();
+
+  function paint(el, v){
+    if (!el) return;
+    el.textContent = v;
+  }
+
+  function tick(){
+    fetch(url, {headers:{'Accept':'application/json'}})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        if (!d) return;
+        document.getElementById('livedot').classList.add('beat');
+        setTimeout(function(){
+          document.getElementById('livedot').classList.remove('beat');
+        }, 600);
+
+        d.people.forEach(function(p){
+          var card = document.querySelector('.scard[data-uid="'+p.id+'"]');
+          if (!card) return;
+          var sc = card.querySelector('.score');
+          if (sc && sc.textContent.trim() !== String(p.score)){
+            card.classList.add('flip');
+            setTimeout(function(){ card.classList.remove('flip'); }, 700);
+          }
+          paint(sc, p.score);
+          paint(card.querySelector('.gap'), p.total_penalty);
+          (p.sources || []).forEach(function(s){
+            paint(card.querySelector('b[data-src="'+s.key+'"]'), s.subtotal);
+          });
+          paint(card.querySelector('.v-false'), p.false_penalty);
+          var m = card.querySelector('.meter > i');
+          if (m) m.style.width = p.score + '%';
+          card.classList.remove('good','warn','bad');
+          card.classList.add(p.band);
+        });
+      })
+      .catch(function(){});
+  }
+
+  setInterval(tick, 20000);
+
+  // Doer dropdown follows the branch: picking a branch hides doers who
+  // don't belong to it, and clears the selection if it no longer applies.
+  var bSel = document.getElementById('branchSel'),
+      dSel = document.getElementById('doerSel');
+  if (bSel && dSel){
+    var opts = Array.prototype.slice.call(dSel.options);
+    function syncDoers(){
+      var b = bSel.value;
+      opts.forEach(function(o){
+        if (!o.value) return;                       // keep "All doers"
+        var mine = !b || o.getAttribute('data-branch') === b;
+        o.hidden = !mine;
+        o.disabled = !mine;
+        if (!mine && o.selected){ dSel.value = ''; }
+      });
+    }
+    bSel.addEventListener('change', syncDoers);
+    syncDoers();
+  }
+
+  // subtle 3D tilt toward the cursor
+  document.querySelectorAll('.scard').forEach(function(card){
+    card.addEventListener('mousemove', function(e){
+      var b = card.getBoundingClientRect();
+      var rx = ((e.clientY - b.top) / b.height - .5) * -12;
+      var ry = ((e.clientX - b.left) / b.width - .5) * 14;
+      card.querySelector('.scard-in').style.transform =
+        'rotateX('+rx+'deg) rotateY('+ry+'deg) translateZ(14px)';
+    });
+    card.addEventListener('mouseleave', function(){
+      card.querySelector('.scard-in').style.transform = '';
+    });
+  });
+})();
+</script>
+{% endblock %}

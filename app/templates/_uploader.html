@@ -1,0 +1,66 @@
+{% macro uploader(task, user) %}
+{% if UPLOADS_ON() %}
+<div id="uploader" data-task="{{ task.id }}" data-mode="{{ UPLOAD_MODE() }}"
+     data-max="{{ MAX_UPLOAD_MB }}">
+  <label>Attach proof</label>
+  <div class="two-up">
+    <div class="drop">
+      <strong>Tap to choose a file</strong>
+      <span>or drag it here — photo, PDF, Excel or Word, up to {{ MAX_UPLOAD_MB }} MB each</span>
+    </div>
+    <div class="paste-zone" tabindex="0">
+      <strong>Or paste a screenshot</strong>
+      <span>Take the screenshot, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> —
+            no need to save the file first</span>
+    </div>
+  </div>
+  {% if UPLOAD_MODE() == 's3' %}
+    <input type="file" multiple accept="{{ UPLOAD_ACCEPT }}" hidden>
+  {% else %}
+    <form method="post" action="/tasks/{{ task.id }}/attach/local"
+          enctype="multipart/form-data" id="localUploadForm">
+      <input type="file" name="files" multiple accept="{{ UPLOAD_ACCEPT }}" hidden>
+    </form>
+  {% endif %}
+  <div class="up-list"></div>
+</div>
+{% else %}
+<label>Attach proof</label>
+<div class="m">
+  File attachments are turned off on this hosted demo — the server has no
+  permanent disk. They work as soon as file storage is connected.
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro attachment_list(task, user, can_remove=false) %}
+{% if task.attachments %}
+<div class="att-grid">
+  {% for a in task.attachments %}
+  <div class="att {{ 'img' if a.is_image }}">
+    {% if a.is_image %}
+    <a href="/attachments/{{ a.id }}/view" target="_blank" rel="noopener" class="thumb">
+      <img src="/attachments/{{ a.id }}/view" alt="{{ a.filename }}" loading="lazy">
+    </a>
+    {% else %}
+    <a href="/attachments/{{ a.id }}" class="thumb file">
+      <span class="ext">{{ a.filename.rsplit('.', 1)[-1][:4]|upper if '.' in a.filename else 'FILE' }}</span>
+    </a>
+    {% endif %}
+    <div class="meta">
+      <a href="/attachments/{{ a.id }}" class="fn" title="{{ a.filename }}">{{ a.filename }}</a>
+      <div class="m">{{ a.size_label }} · {{ a.uploaded_by.name.split()[0] }}
+        · {{ a.created_at|dt('%d %b, %I:%M %p') }}</div>
+    </div>
+    {% if can_remove and (a.uploaded_by_id == user.id or user.has_edit_task) %}
+    <form method="post" action="/attachments/{{ a.id }}/delete" class="rm"
+          onsubmit="return confirm('Remove {{ a.filename }}?')">
+      <button title="Remove">×</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

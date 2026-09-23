@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="sub"><a href="/admin/users">&larr; Users</a></p>
+<h1>Delete {{ target.name }}</h1>
+<p class="sub">{{ target.email }} · <span class="chip">{{ target.role.value }}</span>
+  {% if target.branch %}<span class="chip">{{ target.branch.name }}</span>{% endif %}</p>
+
+{% if blocker %}
+<div class="danger-box" style="max-width:720px">
+  <strong>This account can't be deleted.</strong>
+  <div style="margin-top:6px">{{ blocker }}</div>
+  <div style="margin-top:12px">
+    <a class="btn ghost" href="/admin/users">Back to users</a>
+  </div>
+</div>
+{% else %}
+
+{% set total = links.doing + links.assigned + links.notes + links.rules + links.steps + links.runs + links.help %}
+
+<div class="card" style="max-width:720px">
+  <strong>What is linked to this person</strong>
+  {% if total %}
+  <div class="table-wrap" style="margin-top:12px">
+    <table>
+      <tr><th>Record</th><th style="width:90px">Count</th></tr>
+      <tr><td>Tasks assigned <em>to</em> them</td><td><strong>{{ links.doing }}</strong></td></tr>
+      <tr><td>Tasks they delegated to others</td><td><strong>{{ links.assigned }}</strong></td></tr>
+      <tr><td>Notes they wrote</td><td><strong>{{ links.notes }}</strong></td></tr>
+      <tr><td>Checklist rules</td><td><strong>{{ links.rules }}</strong></td></tr>
+      <tr><td>FMS steps where they are the default doer</td><td><strong>{{ links.steps }}</strong></td></tr>
+      <tr><td>FMS runs they started</td><td><strong>{{ links.runs }}</strong></td></tr>
+      <tr><td>Help Desk requests</td><td><strong>{{ links.help }}</strong></td></tr>
+    </table>
+  </div>
+  <p class="m" style="margin-top:10px">
+    Deleting the person does not automatically delete this work — choose below what happens to it.
+  </p>
+  {% else %}
+  <p style="color:var(--muted);margin:10px 0 0">
+    Nothing is linked to this account. It can be removed cleanly.
+  </p>
+  {% endif %}
+</div>
+
+<form method="post" action="/admin/users/{{ target.id }}/delete" class="card"
+      style="max-width:720px" id="delForm">
+
+  {% if total %}
+  <strong>What should happen to their work?</strong>
+  <div style="margin-top:14px">
+    <label class="pick">
+      <input type="radio" name="mode" value="transfer" checked>
+      <span>
+        <b>Hand it over to someone else</b> (recommended)
+        <em>Their open tasks, notes, checklist rules and flow steps move to the person
+        you pick. Nothing is lost, and history stays intact.</em>
+      </span>
+    </label>
+
+    <div style="margin:6px 0 16px 28px;max-width:360px">
+      <label>Transfer everything to</label>
+      <select name="transfer_to" id="heir">
+        {% for o in others %}
+        <option value="{{ o.id }}">{{ o.name }} — {{ o.role.value }}{% if o.branch %} ({{ o.branch.name }}){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <label class="pick">
+      <input type="radio" name="mode" value="purge">
+      <span>
+        <b>Delete their work too</b>
+        <em>Removes {{ links.doing + links.assigned }} task(s) with their notes and
+        attachments, and {{ links.rules }} checklist rule(s). Past scores that counted
+        this work will change. This cannot be undone.</em>
+      </span>
+    </label>
+  </div>
+  {% else %}
+  <input type="hidden" name="mode" value="purge">
+  {% endif %}
+
+  <div class="danger-box" style="margin-top:16px">
+    <strong>Audit records are kept either way.</strong>
+    If this person audited, reopened or false-marked someone's task, those events stay
+    on the task — the auditor name is simply cleared.
+  </div>
+
+  <label>Type <strong style="color:var(--ink)">{{ target.name }}</strong> to confirm</label>
+  <input name="confirm" id="confirmName" autocomplete="off"
+         placeholder="{{ target.name }}" required>
+  <div class="bm-msg" id="nameMsg" hidden>The name doesn't match yet.</div>
+
+  <div style="margin-top:20px">
+    <button class="btn danger" id="delBtn" disabled>Delete this user</button>
+    <a class="btn ghost" href="/admin/users">Cancel</a>
+  </div>
+</form>
+
+<p class="sub" style="max-width:720px">
+  Not sure? <strong>Disabling</strong> the account instead keeps every record and score
+  intact but blocks the person from signing in — use the Active button on the Users list.
+</p>
+
+<script>
+(function(){
+  var want = {{ target.name|tojson }};
+  var input = document.getElementById('confirmName'),
+      btn = document.getElementById('delBtn'),
+      msg = document.getElementById('nameMsg');
+  function check(){
+    var ok = input.value.trim() === want.trim();
+    btn.disabled = !ok;
+    msg.hidden = ok || input.value.trim() === '';
+  }
+  input.addEventListener('input', check);
+  check();
+})();
+</script>
+{% endif %}
+{% endblock %}

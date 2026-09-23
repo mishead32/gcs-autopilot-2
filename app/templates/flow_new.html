@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>New FMS flow</h1>
+<p class="sub">Steps run in order. When one is closed, the next is automatically assigned to its doer.</p>
+
+<form method="post" action="/flows/new" class="card" style="max-width:920px">
+  <div class="row">
+    <div><label>Flow name</label>
+      <input name="name" required placeholder="e.g. New PT Member Onboarding"></div>
+    <div><label>Branch</label>
+      <select name="branch_id"><option value="">All branches</option>
+        {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <label>Description</label>
+  <textarea name="description" style="min-height:56px"></textarea>
+
+  <h2 style="margin-top:24px">Steps</h2>
+  <div id="steps"></div>
+  <button type="button" class="btn ghost sm" onclick="addStep()">+ Add step</button>
+
+  <div style="margin-top:22px"><button class="btn">Create flow</button>
+    <a class="btn ghost" href="/flows">Cancel</a></div>
+</form>
+
+<template id="tpl">
+<div class="card" style="background:#fafbfd">
+  <div class="row">
+    <div style="flex:2"><label>Step title</label><input name="step_title" placeholder="e.g. Collect payment"></div>
+    <div><label>Default doer</label>
+      <select name="step_doer"><option value="">Pick at run time</option>
+        {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+      </select></div>
+    <div><label>TAT (hours)</label><input type="number" name="step_tat" value="24" min="1"></div>
+    <div><label>Priority</label>
+      <select name="step_priority">
+        {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='normal' }}>{{ p.value|title }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <label>Instructions</label><textarea name="step_instructions" style="min-height:52px"></textarea>
+  <div class="row">
+    <div><label>Fields the doer must capture (comma separated)</label>
+      <input name="step_fields" placeholder="Receipt No, Amount"></div>
+    <div style="max-width:150px"><label>Needs audit</label>
+      <select name="step_audit"><option value="0">No</option><option value="1">Yes</option></select></div>
+    <div style="max-width:150px"><label>Proof required</label>
+      <select name="step_proof"><option value="1">Yes</option><option value="0">No</option></select></div>
+  </div>
+  <button type="button" class="btn ghost sm" style="margin-top:10px"
+          onclick="this.closest('.card').remove()">Remove step</button>
+</div>
+</template>
+
+<script>
+function addStep(){
+  document.getElementById('steps')
+    .appendChild(document.getElementById('tpl').content.cloneNode(true));
+}
+addStep(); addStep();
+</script>
+{% endblock %}

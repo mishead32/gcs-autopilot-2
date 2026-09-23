@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_task_table.html" import task_table %}
+{% block content %}
+<p class="sub"><a href="/flows/{{ inst.flow_id }}">&larr; {{ inst.flow.name }}</a></p>
+<h1>{{ inst.reference }}</h1>
+<p class="sub">
+  Started {{ inst.started_at|dt }} by {{ inst.started_by.name }}
+  <span class="chip {{ 'completed' if inst.completed_at else 'in_progress' }}">
+    {{ 'completed' if inst.completed_at else 'running' }}</span>
+</p>
+
+<div class="card">
+  <div class="inline">
+    <div class="bar" style="flex:1"><i style="width:{{ (100*progress[0]/progress[1])|round }}%"></i></div>
+    <strong>{{ progress[0] }} of {{ progress[1] }} steps done</strong>
+  </div>
+</div>
+
+<h2>Step tasks</h2>
+{{ task_table(tasks) }}
+{% endblock %}

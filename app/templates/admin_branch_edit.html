@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="sub"><a href="/admin/branches">&larr; Branches</a></p>
+<h1>{{ branch.name }}</h1>
+<p class="sub">Rename it freely — every task, score and report follows the new
+name, because they are filed against the branch itself and not its spelling.</p>
+
+<div class="grid g2">
+  <div>
+    <form method="post" action="/admin/branches/{{ branch.id }}" class="card">
+      <strong>Details</strong>
+      <label>Name</label>
+      <input name="name" value="{{ branch.name }}" required maxlength="120">
+      <label>City</label>
+      <input name="city" value="{{ branch.city or '' }}" maxlength="80">
+      <div style="margin-top:14px"><button class="btn">Save changes</button></div>
+    </form>
+
+    <div class="card">
+      <strong>What is filed under this branch</strong>
+      <table style="margin-top:12px">
+        <tr><td>Staff</td><td><strong>{{ links.staff }}</strong></td></tr>
+        <tr><td>Tasks</td><td><strong>{{ links.tasks }}</strong></td></tr>
+        <tr><td>Checklist rules</td><td><strong>{{ links.rules }}</strong></td></tr>
+        <tr><td>FMS flows</td><td><strong>{{ links.flows }}</strong></td></tr>
+        <tr><td>Departments</td><td><strong>{{ links.depts }}</strong></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <strong>Delete this branch</strong>
+      {% set total = links.staff + links.tasks + links.rules + links.flows + links.depts %}
+      {% if total %}
+      <p class="sub" style="margin:8px 0 0">
+        {{ total }} record(s) are filed under it. Deleting the branch does not
+        delete them — choose where they should go instead. If you leave it as
+        <em>Unassigned</em>, they stay in the system but stop appearing under any
+        branch filter on the Performance page.
+      </p>
+      {% else %}
+      <p class="sub" style="margin:8px 0 0">
+        Nothing is filed under this branch, so deleting it changes nothing else.
+      </p>
+      {% endif %}
+
+      <form method="post" action="/admin/branches/{{ branch.id }}/delete" id="delForm"
+            style="margin-top:14px">
+        {% if total %}
+        <label>Move everything to</label>
+        <select name="move_to" id="moveTo">
+          <option value="">Unassigned — no branch</option>
+          {% for o in others %}
+          <option value="{{ o.id }}">{{ o.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+
+        <label>Type <strong>{{ branch.name }}</strong> to confirm</label>
+        <input name="confirm" id="confirmName" autocomplete="off"
+               placeholder="{{ branch.name }}">
+
+        <div style="margin-top:14px">
+          <button type="button" class="btn danger" id="delOpen">Delete branch</button>
+        </div>
+      </form>
+    </div>
+
+    <dialog class="confirm" id="delDialog">
+      <div class="body">
+        <h3>Delete “{{ branch.name }}”?</h3>
+        <p id="delWhat">This cannot be undone.</p>
+      </div>
+      <div class="acts">
+        <button class="btn ghost" id="delCancel" type="button">Cancel</button>
+        <button class="btn danger" id="delConfirm" type="button">Delete</button>
+      </div>
+    </dialog>
+  </div>
+</div>
+
+<script>
+(function(){
+  var o=document.getElementById('delOpen'), d=document.getElementById('delDialog'),
+      c=document.getElementById('delCancel'), k=document.getElementById('delConfirm'),
+      f=document.getElementById('delForm'), mv=document.getElementById('moveTo'),
+      what=document.getElementById('delWhat'), name=document.getElementById('confirmName');
+  var TOTAL={{ total }}, NAME={{ branch.name|tojson }};
+
+  o.addEventListener('click', function(){
+    if(name.value.trim() !== NAME){
+      alert('Type the branch name exactly — "' + NAME + '" — to confirm.');
+      name.focus();
+      return;
+    }
+    if(TOTAL){
+      var to = mv && mv.value
+        ? mv.options[mv.selectedIndex].text
+        : 'Unassigned (no branch)';
+      what.textContent = TOTAL + ' record(s) will move to ' + to
+        + '. The branch itself is removed. This cannot be undone.';
+    }
+    if(d.showModal) d.showModal(); else f.submit();
+  });
+  if(c) c.addEventListener('click', function(){ d.close(); });
+  if(k) k.addEventListener('click', function(){ d.close(); f.submit(); });
+})();
+</script>
+{% endblock %}

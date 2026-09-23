@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Holidays</h1>
+<p class="sub">
+  Days on which no work is expected, so none is created.
+</p>
+
+<div class="card">
+  <strong>What happens on a holiday</strong>
+  <table style="margin-top:12px">
+    <tr><td style="width:110px"><strong>Checklist</strong></td>
+        <td>The rule does not fire that day, and is not owed the next day
+            either. A daily register check on Diwali is simply skipped.</td></tr>
+    <tr><td><strong>FMS</strong></td>
+        <td>The step's deadline moves to the next working day. The work still
+            has to happen — skipping it would break the chain.</td></tr>
+    <tr><td><strong>Delegation</strong></td>
+        <td>The same. Set a deadline on a holiday and it moves forward, with a
+            note on the task saying why, instead of marking the doer late for
+            a day nobody was in.</td></tr>
+  </table>
+</div>
+
+<div class="grid g2 wide">
+  <div>
+    <div class="tabs">
+      {% for y in years %}
+      <a class="{{ 'active' if y == year }}" href="/admin/holidays?year={{ y }}">{{ y }}</a>
+      {% endfor %}
+      <a href="/admin/holidays?year={{ year + 1 }}">{{ year + 1 }}</a>
+    </div>
+
+    {% if holidays %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Date</th><th>Day</th><th>Holiday</th><th>Applies to</th><th></th></tr>
+      {% for h in holidays %}
+      <tr class="{{ 'past' if h.day < today }}">
+        <td style="white-space:nowrap"><strong>{{ h.day.strftime('%d %b %Y') }}</strong></td>
+        <td>{{ h.day.strftime('%A') }}</td>
+        <td>{{ h.name }}</td>
+        <td>{% if h.branch %}<span class="chip">{{ h.branch.name }}</span>
+            {% else %}<span class="chip normal">All branches</span>{% endif %}</td>
+        <td><form method="post" action="/admin/holidays/{{ h.id }}/delete"
+                  onsubmit="return confirm('Remove {{ h.name }} on {{ h.day.strftime('%d %b %Y') }}?')">
+              <button class="btn sm ghost">Remove</button></form></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    <p class="m" style="margin-top:10px">
+      {{ holidays|length }} holiday(s) in {{ year }}.
+      Removing one does not change tasks that were already created.
+    </p>
+    {% else %}
+    <div class="empty">No holidays set for {{ year }}.</div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/admin/holidays" class="card">
+    <strong>Add a holiday</strong>
+    <label>Date</label>
+    <input type="date" name="day" required>
+    <label>Name</label>
+    <input name="name" required maxlength="120" placeholder="e.g. Diwali">
+    <label>Applies to</label>
+    <select name="branch_id">
+      <option value="">All branches</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}">{{ b.name }} only</option>
+      {% endfor %}
+    </select>
+    <div class="m" style="margin-top:6px">
+      Pick a branch for a local festival — Jharkhand can close on a day
+      Chandigarh works.
+    </div>
+    <div style="margin-top:16px"><button class="btn">Add holiday</button></div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Message outbox</h1>
+<p class="sub">Notifications the system generated. Plug a WhatsApp provider adapter in to actually send them.</p>
+{% if msgs %}
+<div class="table-wrap"><table>
+  <tr><th>To</th><th>Template</th><th>Message</th><th>Status</th><th>Queued</th></tr>
+  {% for m in msgs %}
+  <tr>
+    <td class="mono">{{ m.to_phone }}</td>
+    <td><span class="chip">{{ m.template }}</span></td>
+    <td style="white-space:pre-wrap;max-width:460px">{{ m.body }}</td>
+    <td><span class="chip">{{ m.status }}</span></td>
+    <td>{{ m.created_at|dt('%d %b, %I:%M %p') }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}<div class="empty">Outbox is empty.</div>{% endif %}
+{% endblock %}

@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% from "_uploader.html" import uploader, attachment_list %}
+{% block content %}
+<p class="sub"><a href="/tasks">&larr; All tasks</a></p>
+<h1>{{ task.title }}</h1>
+<p class="sub">
+  <span class="chip {{ task.priority.value }}">{{ task.priority.value }}</span>
+  <span class="chip {{ task.status.value }}">{{ task.status.value.replace('_',' ') }}</span>
+  <span class="chip">{{ task.source.value }}</span>
+  {% if task.branch %}<span class="chip">{{ task.branch.name }}</span>{% endif %}
+  <a class="chip audit_{{ task.audit_state.value }}" href="#audit"
+     title="Audit status — click to change">{{ task.audit_label }}</a>
+  {% if task.false_marked %}<span class="chip falsemark">false marking −10</span>{% endif %}
+  {% if task.reopen_count %}<span class="chip reopened">reopened ×{{ task.reopen_count }}</span>{% endif %}
+</p>
+
+{% if task.false_marked %}
+<div class="danger-box">
+  <strong>Flagged as false marking by {{ task.false_marked_by.name }}</strong>
+  on {{ task.false_marked_at|dt }} — this carries a −10 penalty on
+  {{ task.doer.name }}'s score.
+  {% if task.false_mark_reason %}<div style="margin-top:6px">{{ task.false_mark_reason }}</div>{% endif %}
+</div>
+{% endif %}
+
+<div class="grid g2">
+  <div>
+    <div class="card">
+      {% if task.details %}<p style="white-space:pre-wrap;margin-top:0">{{ task.details }}</p>{% endif %}
+      <table style="border:0">
+        <tr><th style="background:0">Assigned by</th><td>{{ task.assigner.name }}</td></tr>
+        <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>
+        <tr><th style="background:0">Due</th>
+            <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})</td></tr>
+        <tr><th style="background:0">Created</th><td>{{ task.created_at|dt }}</td></tr>
+        <tr><th style="background:0">Proof</th>
+            <td>{{ 'Required' if task.requires_attachment else 'Not required' }}</td></tr>
+        {% if task.submitted_at %}<tr><th style="background:0">Submitted</th>
+          <td>{{ task.submitted_at|dt }} — {{ 'on time' if task.was_on_time else 'late' }}</td></tr>{% endif %}
+        {% if task.audit_score is not none %}<tr><th style="background:0">Audit score</th>
+          <td>{{ task.audit_score }}/10 by {{ task.auditor.name }}</td></tr>{% endif %}
+        {% if task.audit_remark %}<tr><th style="background:0">Audit remark</th><td>{{ task.audit_remark }}</td></tr>{% endif %}
+        {% if task.flow_instance %}<tr><th style="background:0">Flow</th>
+          <td><a href="/flows/instance/{{ task.flow_instance.id }}">{{ task.flow_instance.flow.name }} — {{ task.flow_instance.reference }}</a></td></tr>{% endif %}
+      </table>
+
+      {% if task.attachments %}
+      <label>Attachments ({{ task.attachments|length }})</label>
+      {{ attachment_list(task, user, can_remove=true) }}
+      {% endif %}
+
+      {% if captured %}
+      <label>Captured data</label>
+      <table>{% for k,v in captured.items() %}<tr><th style="background:0">{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
+      {% endif %}
+
+      {% if task.completion_note %}
+      <label>Completion note</label>
+      <p style="white-space:pre-wrap;margin:0">{{ task.completion_note }}</p>
+      {% endif %}
+    </div>
+
+    {% if is_doer and task.status.value in ['pending','in_progress','rejected','reopened'] %}
+    <div class="card">
+      <strong>Your actions</strong>
+      {% if task.requires_attachment %}
+        {% if task.attachments %}
+      <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
+        {% else %}
+      <div class="proof need">
+        <strong>Proof is required for this task.</strong>
+        Attach a photo, screenshot or file below — or paste a screenshot with
+        Ctrl+V — before you submit.
+      </div>
+        {% endif %}
+      {% endif %}
+      <form method="post" action="/tasks/{{ task.id }}/submit" style="margin-top:12px">
+        {% for f in capture_fields %}
+        <label>{{ f }}</label><input name="field_{{ f }}" value="{{ captured.get(f,'') }}">
+        {% endfor %}
+        <label>Completion note</label>
+        <textarea name="completion_note" placeholder="What did you do? Any issues?"></textarea>
+        <div style="margin-top:12px">
+          <button class="btn" {{ 'disabled' if task.requires_attachment and not task.attachments }}
+            title="{{ 'Attach proof first' if task.requires_attachment and not task.attachments else '' }}">
+            {{ 'Submit for audit' if task.requires_audit else 'Mark complete' }}</button>
+        </div>
+      </form>
+
+      <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+        {{ uploader(task, user) }}
+        <div class="m" style="margin-top:8px">
+          Attach before you submit — photos of the register, receipts, signed forms.
+          Each file is saved as soon as you pick it.
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card" id="audit">
+      <strong>Audit status</strong>
+      <p class="sub" style="margin:8px 0 0">
+        Currently <span class="chip audit_{{ task.audit_state.value }}">{{ task.audit_label }}</span>
+        {% if task.auditor %}— set by {{ task.auditor.name }}
+          {% if task.audited_at %}on {{ task.audited_at|dt }}{% endif %}{% endif %}
+      </p>
+      {% if task.audit_remark %}
+      <label>Audit remark</label>
+      <p style="white-space:pre-wrap;margin:0">{{ task.audit_remark }}</p>
+      {% endif %}
+
+      {% if can_set_audit %}
+      <form method="post" action="/tasks/{{ task.id }}/audit-state" style="margin-top:14px">
+        <label>Audit remark {% if task.audit_state.value != 'completed' %}
+          <span class="m">(required to mark it completed)</span>{% endif %}</label>
+        <textarea name="remark" placeholder="What did you check, and what did you find?"
+                  >{{ task.audit_remark or '' }}</textarea>
+        <div class="audit-pick">
+          {% for st in audit_states %}
+          <button class="btn {{ 'ghost' if st != task.audit_state }} sm"
+                  name="state" value="{{ st.value }}"
+                  {{ 'disabled' if st == task.audit_state }}>{{ audit_labels[st] }}</button>
+          {% endfor %}
+        </div>
+      </form>
+      {% else %}
+      <p class="m" style="margin-top:10px">
+        Only someone with the audit right can change this.
+      </p>
+      {% endif %}
+    </div>
+
+    {% if can_audit %}
+    <div class="card">
+      <strong>Audit this submission</strong>
+      <form method="post" action="/tasks/{{ task.id }}/audit" style="margin-top:12px">
+        <label>Quality score (0–10)</label>
+        <input type="number" name="score" min="0" max="10" step="0.5" value="8">
+        <label>Remark</label>
+        <textarea name="remark" placeholder="Feedback for the doer"></textarea>
+        <div style="margin-top:12px">
+          <button class="btn" name="decision" value="approve">Approve &amp; close</button>
+          <button class="btn danger" name="decision" value="reject">Send back</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if can_reopen %}
+    <div class="card">
+      <strong>Reopen this task</strong>
+      <p class="sub" style="margin:8px 0 0">
+        Puts it back on {{ task.doer.name }}'s dashboard. The original deadline stands,
+        so if it has passed the task counts as not done until it is closed again.
+      </p>
+      <form method="post" action="/tasks/{{ task.id }}/reopen" style="margin-top:12px">
+        <label>Reason</label>
+        <input name="reason" placeholder="What still needs doing?">
+        <div style="margin-top:12px"><button class="btn">Reopen</button></div>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if can_false_mark %}
+    <div class="card">
+      <strong>False marking</strong>
+      <p class="sub" style="margin:8px 0 0">
+        Use this only when {{ task.doer.name }} closed the task without actually
+        doing the work. It reopens the task and applies a −10 penalty to their score.
+      </p>
+      <form method="post" action="/tasks/{{ task.id }}/false-mark" id="fmForm"
+            style="margin-top:12px">
+        <input type="hidden" name="confirm" value="yes">
+        <label>Reason</label>
+        <input name="reason" id="fmReason" placeholder="What was not actually done?">
+        <div style="margin-top:12px">
+          <button type="button" class="btn danger" id="fmOpen">Mark as false marking</button>
+        </div>
+      </form>
+    </div>
+
+    <dialog class="confirm" id="fmDialog">
+      <div class="body">
+        <h3>Submit this task as false marking?</h3>
+        <p>
+          <strong>{{ task.doer.name }}</strong> will receive a
+          <strong>−10 negative score</strong> for “{{ task.title }}”, the task will be
+          reopened, and they will be notified. This is recorded permanently against
+          your name as auditor.
+        </p>
+        <p style="margin:0"><strong>Are you sure you want to submit it?</strong></p>
+      </div>
+      <div class="acts">
+        <button class="btn ghost" id="fmCancel" type="button">Cancel</button>
+        <button class="btn danger" id="fmConfirm" type="button">Yes, apply −10</button>
+      </div>
+    </dialog>
+    {% endif %}
+
+    {% if can_edit or can_delete %}
+    <div class="card">
+      <strong>Manage</strong>
+      {% if can_edit %}
+      <form method="post" action="/tasks/{{ task.id }}/edit" style="margin-top:12px">
+        <label>Title</label><input name="title" value="{{ task.title }}" required>
+        <label>Details</label><textarea name="details">{{ task.details or '' }}</textarea>
+        <div class="row">
+          <div><label>Doer</label><select name="doer_id">
+            {% for d in doers %}
+            <option value="{{ d.id }}" {{ 'selected' if d.id == task.doer_id }}>{{ d.name }}</option>
+            {% endfor %}</select></div>
+          <div><label>Priority</label><select name="priority">
+            {% for pr in priorities %}
+            <option value="{{ pr.value }}" {{ 'selected' if pr == task.priority }}>{{ pr.value|title }}</option>
+            {% endfor %}</select></div>
+        </div>
+        <label>Deadline</label>
+        <input type="datetime-local" name="due_at" value="{{ task.due_at.strftime('%Y-%m-%dT%H:%M') }}" required>
+        <div style="margin-top:12px"><button class="btn">Save changes</button></div>
+      </form>
+      {% endif %}
+
+      {% if can_delete %}
+      <form method="post" action="/tasks/{{ task.id }}/delete" id="delForm"
+            style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+        <button type="button" class="btn danger sm" id="delOpen">Delete this task</button>
+        <span class="m" style="margin-left:8px">Permanent — it disappears from every report.</span>
+      </form>
+
+      <dialog class="confirm" id="delDialog">
+        <div class="body">
+          <h3>Delete this task permanently?</h3>
+          <p>“{{ task.title }}” and its notes and attachments will be removed.
+             Past scores that counted this task will change. This cannot be undone.</p>
+        </div>
+        <div class="acts">
+          <button class="btn ghost" id="delCancel" type="button">Cancel</button>
+          <button class="btn danger" id="delConfirm" type="button">Delete</button>
+        </div>
+      </dialog>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div id="notes">
+    <div class="card">
+      <strong>Notes</strong>
+      <div style="margin-top:14px">
+        {% for c in task.comments %}
+        <div class="note">
+          <div class="who">{{ c.author.name }} <span class="when">{{ c.created_at|dt }}</span></div>
+          <div style="white-space:pre-wrap">{{ c.body }}</div>
+        </div>
+        {% else %}
+        <p style="color:var(--muted)">No notes yet.</p>
+        {% endfor %}
+      </div>
+      <form method="post" action="/tasks/{{ task.id }}/comment">
+        <textarea name="body" placeholder="Add a note…" required></textarea>
+        <div style="margin-top:10px"><button class="btn sm">Post note</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+function wireConfirm(openId, dialogId, cancelId, okId, formId){
+  var o=document.getElementById(openId), d=document.getElementById(dialogId),
+      c=document.getElementById(cancelId), k=document.getElementById(okId),
+      f=document.getElementById(formId);
+  if(!o||!d||!f) return;
+  o.addEventListener('click', function(){
+    if (d.showModal) d.showModal();
+    else if (confirm('Are you sure you want to submit this?')) f.submit();
+  });
+  if(c) c.addEventListener('click', function(){ d.close(); });
+  if(k) k.addEventListener('click', function(){ d.close(); f.submit(); });
+}
+wireConfirm('fmOpen','fmDialog','fmCancel','fmConfirm','fmForm');
+wireConfirm('delOpen','delDialog','delCancel','delConfirm','delForm');
+</script>
+{% endblock %}

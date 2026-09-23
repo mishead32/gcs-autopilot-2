@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Branches</h1>
+<p class="sub">
+  Every task, staff member and score is filed under a branch. These are what
+  the Performance page filters by.
+</p>
+
+<div class="grid g2 wide">
+  <div>
+    {% if branches %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Name</th><th>City</th><th>Staff</th><th>Tasks</th>
+          <th>Checklist</th><th>FMS</th><th></th></tr>
+      {% for b in branches %}
+      <tr>
+        <td><a href="/admin/branches/{{ b.id }}"><strong>{{ b.name }}</strong></a></td>
+        <td>{{ b.city or '—' }}</td>
+        <td>{{ branch_use[b.id].staff }}</td>
+        <td>{{ branch_use[b.id].tasks }}</td>
+        <td>{{ branch_use[b.id].rules }}</td>
+        <td>{{ branch_use[b.id].flows }}</td>
+        <td><a class="btn sm ghost" href="/admin/branches/{{ b.id }}">Edit</a></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% else %}
+    <div class="empty">No branches yet. Add your first one on the right.</div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/admin/branches" class="card">
+    <strong>Add a branch</strong>
+    <label>Name</label>
+    <input name="name" required placeholder="e.g. GCS Jharkhand" maxlength="120">
+    <label>City</label>
+    <input name="city" value="Chandigarh" maxlength="80">
+    <div style="margin-top:16px"><button class="btn">Add branch</button></div>
+  </form>
+</div>
+{% endblock %}

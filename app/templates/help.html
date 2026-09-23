@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% macro ticket_rows(rows, mine, empty) %}
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <tr><th>Request</th><th>{{ 'From' if mine else 'Asked' }}</th>
+      <th>Priority</th><th>Needed by</th><th>Status</th><th></th></tr>
+  {% for t in rows %}
+  <tr>
+    <td>
+      {% if t.task %}<a href="/tasks/{{ t.task.id }}"><strong>{{ t.subject }}</strong></a>
+      {% else %}<strong>{{ t.subject }}</strong>{% endif %}
+      {% if t.details %}<div class="m" style="font-size:12px">{{ t.details[:120] }}{{ '…' if t.details|length > 120 }}</div>{% endif %}
+      {% if t.decline_reason %}<div class="m" style="font-size:12px;color:var(--bad)">Declined: {{ t.decline_reason }}</div>{% endif %}
+    </td>
+    <td>{{ t.raiser.name if mine else t.helper.name }}</td>
+    <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}</span></td>
+    <td>{{ t.needed_by|dt('%d %b, %I:%M %p') }}</td>
+    <td><span class="chip {{ 'in_progress' if t.status.value == 'open'
+                             else 'completed' if t.status.value == 'closed'
+                             else 'rejected' }}">{{ t.status.value }}</span></td>
+    <td>
+      {% if mine and t.status.value == 'open' %}
+      <form method="post" action="/help/{{ t.id }}/decline" class="inline-decline">
+        <input name="reason" placeholder="Why not?" style="width:130px">
+        <button class="btn ghost sm">Decline</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<div class="empty">{{ empty }}</div>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<h1>Help Desk</h1>
+<p class="sub">
+  Ask a colleague for something without going through a manager. Every request
+  becomes a Delegation task, so it shows on their dashboard and counts in the
+  scores like the rest of the work.
+</p>
+
+<p><a class="btn" href="/help/new">Ask for help</a></p>
+
+<div class="card">
+  <strong>People have asked you for</strong>
+  <div style="margin-top:12px">
+    {{ ticket_rows(asked_of_me, true, "Nobody has asked you for help.") }}
+  </div>
+</div>
+
+<div class="card">
+  <strong>You have asked for</strong>
+  <div style="margin-top:12px">
+    {{ ticket_rows(i_asked, false, "You haven't raised a help request yet.") }}
+  </div>
+</div>
+
+{% if others %}
+<div class="card">
+  <strong>Everyone else</strong>
+  <div style="margin-top:12px">
+    {{ ticket_rows(others, false, "Nothing here.") }}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

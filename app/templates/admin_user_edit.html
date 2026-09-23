@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="sub"><a href="/admin/users">&larr; Users</a></p>
+<h1>{{ target.name }}</h1>
+<p class="sub">{{ target.email }} · <span class="chip">{{ target.role.value }}</span></p>
+
+<form method="post" action="/admin/users/{{ target.id }}" class="card" style="max-width:760px">
+  <div class="row">
+    <div><label>Full name</label><input name="name" value="{{ target.name }}" required></div>
+    <div><label>WhatsApp number</label><input name="phone" value="{{ target.phone or '' }}"></div>
+  </div>
+  <div class="row">
+    <div><label>Role</label>
+      <select name="role" {{ 'disabled' if target.id == user.id }}>
+        {% for r in roles %}
+        <option value="{{ r.value }}" {{ 'selected' if r == target.role }}>{{ r.value|title }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label>Branch</label><select name="branch_id"><option value="">—</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if b.id == target.branch_id }}>{{ b.name }}</option>
+      {% endfor %}</select></div>
+    <div><label>Department</label><select name="department_id"><option value="">—</option>
+      {% for d in depts %}
+      <option value="{{ d.id }}" {{ 'selected' if d.id == target.department_id }}>{{ d.name }}</option>
+      {% endfor %}</select></div>
+  </div>
+
+  <label style="margin-top:18px">Rights</label>
+  {% if target.id == user.id %}
+    <div class="danger-box" style="margin-top:6px">
+      <strong>This is your own account.</strong> Role and rights are locked here so you
+      can't accidentally lock yourself out. Ask another admin to change them.
+    </div>
+  {% elif target.role.value in ['owner','admin'] %}
+    <div class="m" style="margin-bottom:6px">
+      {{ target.role.value|title }}s hold every right automatically. These ticks only
+      take effect if you change the role to manager or doer.
+    </div>
+  {% endif %}
+  <div class="rights">
+    {% for r in rights %}
+    <label><input type="checkbox" name="rights" value="{{ r.value }}"
+      {{ 'checked' if r.value in target.right_set }}
+      {{ 'disabled' if target.id == user.id }}> {{ right_labels[r] }}</label>
+    {% endfor %}
+  </div>
+
+
+    <label style="margin-top:18px">Scoring benchmark</label>
+    <div class="m" style="margin-bottom:6px">
+      How much of this person's job each work type is. The three must add up to
+      <strong>100%</strong>. A benchmark caps how much that work type can cost them —
+      60% Delegation means Delegation can never take more than 60 points off.
+    </div>
+    <div class="bm" data-bm>
+      <div><label>Delegation</label>
+        <input type="number" name="bm_delegation" min="0" max="100" value="{{ target.bm_delegation }}" required></div>
+      <div><label>Checklist</label>
+        <input type="number" name="bm_checklist" min="0" max="100" value="{{ target.bm_checklist }}" required></div>
+      <div><label>FMS</label>
+        <input type="number" name="bm_fms" min="0" max="100" value="{{ target.bm_fms }}" required></div>
+      <div class="bm-total"><label>Total</label>
+        <div class="tot-box"><span class="tv">100</span>%</div></div>
+    </div>
+    <div class="bm-msg" hidden></div>
+  <label style="margin-top:18px">Reset password</label>
+  <input name="password" placeholder="Leave blank to keep the current password">
+
+  <div style="margin-top:20px">
+    <button class="btn">Save</button>
+    <a class="btn ghost" href="/admin/users">Cancel</a>
+    {% if target.id != user.id %}
+    <a class="btn danger" style="float:right"
+       href="/admin/users/{{ target.id }}/delete">Delete this user</a>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

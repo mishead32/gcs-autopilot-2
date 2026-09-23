@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Delegate a task</h1>
+<p class="sub">The doer is notified on WhatsApp and it lands on their dashboard immediately.</p>
+
+<form method="post" action="/tasks/new" enctype="multipart/form-data" class="card" style="max-width:760px">
+  <label>Task title</label>
+  <input name="title" required placeholder="e.g. Verify PT trainer allocation for September">
+
+  <label>Details / instructions</label>
+  <textarea name="details" placeholder="What exactly needs to be done, and what does 'done' look like?"></textarea>
+
+  <div class="row">
+    <div>
+      <label>Assign to</label>
+      <select name="doer_id" required>
+        {% for d in doers %}
+        <option value="{{ d.id }}">{{ d.name }} — {{ d.role.value }}{% if d.branch %} ({{ d.branch.name }}){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Branch</label>
+      <select name="branch_id">
+        <option value="">— use doer's branch —</option>
+        {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Priority</label>
+      <select name="priority">
+        {% for p in priorities %}
+        <option value="{{ p.value }}" {{ 'selected' if p.value=='normal' }}>{{ p.value|title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Deadline</label>
+      <input type="datetime-local" name="due_at" value="{{ default_due }}" required>
+    </div>
+  </div>
+
+  {% if EPHEMERAL_STORAGE %}
+  <label>Attachments</label>
+  <div class="m">
+    File attachments are turned off on this hosted demo — the server has no
+    permanent disk, so uploads would disappear within minutes. They work
+    normally on a server with storage.
+  </div>
+  {% else %}
+  <label>Attachments</label>
+  <input type="file" name="files" multiple>
+  {% endif %}
+
+  <label style="margin-top:16px">Proof</label>
+  <div class="inline">
+    <input type="hidden" name="requires_attachment" value="0">
+    <input type="checkbox" name="requires_attachment" value="1" id="rat" checked>
+    <label for="rat" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">
+      The doer must attach proof before this can be submitted
+      <span class="m">— on by default; untick only where there is nothing to show</span>
+    </label>
+  </div>
+
+  <label style="margin-top:16px">Audit</label>
+  <div class="inline">
+    <input type="checkbox" name="requires_audit" value="1" id="ra">
+    <label for="ra" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">
+      Require a manager to review and score this before it closes
+    </label>
+  </div>
+
+  <div style="margin-top:20px"><button class="btn">Assign task</button>
+    <a class="btn ghost" href="/tasks">Cancel</a></div>
+</form>
+{% endblock %}

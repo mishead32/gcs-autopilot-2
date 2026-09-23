@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+midap.db
+midap-backup-*.db
+uploads/*
+!uploads/.gitkeep
+.env
+.vercel/
+setup-log.txt

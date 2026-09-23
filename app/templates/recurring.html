@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px"><div><h1>Checklist</h1></div><a class="btn ghost" href="/bulk?kind=checklist">Bulk import</a></div>
+<p class="sub">Rules spawn a fresh task automatically on schedule — no one has to remember.</p>
+
+<div class="grid g2">
+  <div>
+    {% if rules %}
+    <div class="table-wrap"><table>
+      <tr><th>Task</th><th>Doer</th><th>Schedule</th><th>Due</th><th></th></tr>
+      {% for r in rules %}
+      <tr>
+        <td><strong>{{ r.title }}</strong>
+          <div style="color:var(--muted);font-size:12px">
+            last spawned {{ r.last_spawned_on or 'never' }}</div></td>
+        <td>{{ r.doer.name }}</td>
+        <td><span class="chip">{{ r.frequency.value }}</span>
+          {% if r.frequency.value=='weekly' %}
+            {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.day_of or 0] }}
+          {% elif r.frequency.value=='monthly' %}day {{ r.day_of or 1 }}{% endif %}</td>
+        <td>{{ r.due_time }}</td>
+        <td><form method="post" action="/recurring/{{ r.id }}/toggle">
+          <button class="btn sm {{ '' if r.active else 'ghost' }}">{{ 'On' if r.active else 'Off' }}</button>
+        </form></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    <form method="post" action="/recurring/run" style="margin-top:14px">
+      <button class="btn ghost sm">Run spawner now</button>
+    </form>
+    {% else %}<div class="empty">No checklist items yet.</div>{% endif %}
+  </div>
+
+  <form method="post" action="/recurring" class="card">
+    <strong>New checklist item</strong>
+    <label>Task title</label>
+    <input name="title" required placeholder="e.g. Post daily sales MIS to CMD">
+    <label>Details</label><textarea name="details" style="min-height:56px"></textarea>
+    <div class="row">
+      <div><label>Doer</label><select name="doer_id" required>
+        {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+      <div><label>Branch</label><select name="branch_id"><option value="">Doer's branch</option>
+        {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="row">
+      <div><label>Frequency</label><select name="frequency">
+        {% for f in frequencies %}<option value="{{ f.value }}">{{ f.value|title }}</option>{% endfor %}</select></div>
+      <div><label>Day (weekly 0=Mon / monthly 1–31)</label><input type="number" name="day_of" min="0" max="31"></div>
+      <div><label>Due time</label><input name="due_time" value="18:00" placeholder="HH:MM"></div>
+    </div>
+    <div class="row">
+      <div><label>Priority</label><select name="priority">
+        {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='normal' }}>{{ p.value|title }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="inline" style="margin-top:14px">
+      <input type="hidden" name="requires_attachment" value="0">
+      <input type="checkbox" name="requires_attachment" value="1" id="rat2" checked>
+      <label for="rat2" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">Proof required before submitting</label>
+    </div>
+    <div class="inline" style="margin-top:10px">
+      <input type="checkbox" name="requires_audit" value="1" id="ra2">
+      <label for="ra2" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">Requires audit</label>
+    </div>
+    <div style="margin-top:18px"><button class="btn">Create rule</button></div>
+  </form>
+</div>
+{% endblock %}

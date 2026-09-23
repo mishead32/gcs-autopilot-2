@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="sub"><a href="/flows">&larr; FMS</a></p>
+<h1>{{ flow.name }}</h1>
+<p class="sub">{{ flow.description or '' }} {% if flow.branch %}· {{ flow.branch.name }}{% endif %}</p>
+
+<div class="grid g2">
+  <div class="card">
+    <strong>Steps</strong>
+    <ul class="steps" style="margin-top:14px">
+      {% for s in flow.steps %}
+      <li>
+        <div class="t">{{ s.position }}. {{ s.title }}</div>
+        <div class="m">
+          {{ s.default_doer.name if s.default_doer else 'Doer picked at run time' }}
+          · TAT {{ s.tat_hours }}h · {{ s.priority.value }}
+          {% if s.requires_audit %} · audited{% endif %}
+        </div>
+        {% if s.instructions %}<div class="m">{{ s.instructions }}</div>{% endif %}
+        {% if s.capture_fields %}<div class="m">Captures: {{ s.capture_fields }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div>
+    {% if user.has_create_task %}
+    <div class="card">
+      <strong>Start this flow</strong>
+      <form method="post" action="/flows/{{ flow.id }}/start" style="margin-top:12px">
+        <label>Reference</label>
+        <input name="reference" required placeholder="Member name / lead id / invoice no.">
+        <label>First step doer (override)</label>
+        <select name="first_doer"><option value="">Use default</option>
+          {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select>
+        <div style="margin-top:14px"><button class="btn">Start flow</button></div>
+      </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <strong>Recent runs</strong>
+      {% if instances %}
+      <table style="margin-top:10px">
+        {% for i in instances %}{% set p = progress[i.id] %}
+        <tr>
+          <td><a href="/flows/instance/{{ i.id }}">{{ i.reference }}</a></td>
+          <td style="width:120px"><div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div></td>
+          <td style="width:70px;font-size:12px">{{ p[0] }}/{{ p[1] }}</td>
+          <td style="width:90px"><span class="chip {{ 'completed' if i.completed_at else 'in_progress' }}">
+            {{ 'done' if i.completed_at else 'running' }}</span></td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% else %}<p style="color:var(--muted)">Never run yet.</p>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
