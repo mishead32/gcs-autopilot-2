@@ -390,6 +390,124 @@ def delete_branch(branch_id: int, move_to: str = Form(""), confirm: str = Form("
     return RedirectResponse("/admin/branches", status_code=303)
 
 
+# ------------------------------------------------------------ departments ---
+# A department belongs to one branch, or to none when it spans the group
+# (Accounts, HR). It is only ever a label on a person — no task, score or
+# report is filed under it — which is why deleting one is far simpler than
+# deleting a branch: the people keep everything, they just lose the label.
+def _dept_or_404(db: Session, user: User, dept_id: int) -> Department:
+    d = db.get(Department, dept_id)
+    if not d or d.org_id != user.org_id:
+        raise HTTPException(404, "Department not found")
+    return d
+
+
+def _dept_staff(db: Session, dept: Department) -> int:
+    return db.scalar(select(func.count()).select_from(User)
+                     .where(User.department_id == dept.id)) or 0
+
+
+def _dept_clash(db: Session, user: User, name: str, branch_id, skip_id=None):
+    """Same name twice under the same branch. The same name under two
+    different branches is fine — 'Front Desk' exists at every one of them."""
+    q = select(Department).where(Department.org_id == user.org_id,
+                                 Department.name == name,
+                                 Department.branch_id.is_(None)
+                                 if branch_id is None
+                                 else Department.branch_id == branch_id)
+    if skip_id:
+        q = q.where(Department.id != skip_id)
+    return db.scalar(q)
+
+
+@router.get("/departments", response_class=HTMLResponse)
+def departments_page(request: Request, user: User = Depends(manage),
+                     db: Session = Depends(get_db)):
+    depts = db.scalars(
+        select(Department).where(Department.org_id == user.org_id)
+        .order_by(Department.name)
+    ).all()
+    branches = db.scalars(
+        select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
+    ).all()
+    by_id = {b.id: b for b in branches}
+    return templates.TemplateResponse(request, "admin_departments.html", {
+        "user": user, "depts": depts, "branches": branches, "branch_of": by_id,
+        "staff": {d.id: _dept_staff(db, d) for d in depts},
+    })
+
+
+@router.post("/departments")
+def create_department(name: str = Form(...), branch_id: str = Form(""),
+                      user: User = Depends(manage), db: Session = Depends(get_db)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Give the department a name.")
+    bid = int(branch_id) if branch_id.strip().isdigit() else None
+    if bid is not None:
+        _branch_or_404(db, user, bid)
+    if _dept_clash(db, user, name, bid):
+        where = "that branch" if bid else "the all-branches list"
+        raise HTTPException(400, f"'{name}' is already on {where}.")
+    db.add(Department(org_id=user.org_id, name=name, branch_id=bid))
+    db.commit()
+    return RedirectResponse("/admin/departments", status_code=303)
+
+
+@router.get("/departments/{dept_id}", response_class=HTMLResponse)
+def edit_department_form(dept_id: int, request: Request,
+                         user: User = Depends(manage), db: Session = Depends(get_db)):
+    dept = _dept_or_404(db, user, dept_id)
+    branches = db.scalars(
+        select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
+    ).all()
+    people = db.scalars(
+        select(User).where(User.department_id == dept.id).order_by(User.name)
+    ).all()
+    return templates.TemplateResponse(request, "admin_department_edit.html", {
+        "user": user, "dept": dept, "branches": branches, "people": people,
+    })
+
+
+@router.post("/departments/{dept_id}")
+def edit_department(dept_id: int, name: str = Form(...), branch_id: str = Form(""),
+                    user: User = Depends(manage), db: Session = Depends(get_db)):
+    dept = _dept_or_404(db, user, dept_id)
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Give the department a name.")
+    bid = int(branch_id) if branch_id.strip().isdigit() else None
+    if bid is not None:
+        _branch_or_404(db, user, bid)
+    if _dept_clash(db, user, name, bid, skip_id=dept.id):
+        where = "that branch" if bid else "the all-branches list"
+        raise HTTPException(400, f"'{name}' is already on {where}.")
+    # Renaming is safe: people point at the id, not the name.
+    dept.name = name
+    dept.branch_id = bid
+    db.commit()
+    return RedirectResponse("/admin/departments", status_code=303)
+
+
+@router.post("/departments/{dept_id}/delete")
+def delete_department(dept_id: int, confirm: str = Form(""),
+                      user: User = Depends(manage), db: Session = Depends(get_db)):
+    """Remove a department. Anyone in it simply loses the label.
+
+    Nothing is filed under a department, so nobody's tasks, history or score
+    is touched — but the people are unhooked first anyway, because Postgres
+    enforces the foreign key even where SQLite lets it slide.
+    """
+    dept = _dept_or_404(db, user, dept_id)
+    if confirm != dept.name.strip():
+        raise HTTPException(400, "Type the department name exactly to confirm.")
+    db.execute(update(User).where(User.department_id == dept.id)
+               .values(department_id=None))
+    db.delete(dept)
+    db.commit()
+    return RedirectResponse("/admin/departments", status_code=303)
+
+
 # --------------------------------------------------------------- holidays ---
 @router.get("/holidays", response_class=HTMLResponse)
 def holidays_page(request: Request, year: str = "",

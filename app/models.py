@@ -195,6 +195,15 @@ class Department(Base):
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(120))
 
+    branch: Mapped["Branch | None"] = relationship(lazy="joined")
+
+    @property
+    def label(self) -> str:
+        """Name plus branch — 'Front Desk' exists at three of them, so the
+        name alone is ambiguous in a dropdown."""
+        return f"{self.name} — {self.branch.name}" if self.branch else \
+               f"{self.name} — all branches"
+
 
 class User(Base):
     __tablename__ = "users"

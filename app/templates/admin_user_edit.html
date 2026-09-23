@@ -22,8 +22,12 @@
       {% endfor %}</select></div>
     <div><label>Department</label><select name="department_id"><option value="">—</option>
       {% for d in depts %}
-      <option value="{{ d.id }}" {{ 'selected' if d.id == target.department_id }}>{{ d.name }}</option>
-      {% endfor %}</select></div>
+      <option value="{{ d.id }}" {{ 'selected' if d.id == target.department_id }}>{{ d.label }}</option>
+      {% endfor %}</select>
+      <div class="m" style="margin-top:4px">
+        {% if depts %}Manage the list on <a href="/admin/departments">Departments</a>.
+        {% else %}No departments yet — <a href="/admin/departments">add one</a>.{% endif %}
+      </div></div>
   </div>
 
   <label style="margin-top:18px">Rights</label>

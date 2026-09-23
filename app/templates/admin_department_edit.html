@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ dept.name }} · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<p class="sub"><a href="/admin/departments">&larr; Departments</a></p>
+<h1>{{ dept.name }}</h1>
+<p class="sub">{{ people|length }} person(s) in this department</p>
+
+<form method="post" action="/admin/departments/{{ dept.id }}" class="card" style="max-width:640px">
+  <div class="row">
+    <div><label>Name</label>
+      <input name="name" value="{{ dept.name }}" required maxlength="120"></div>
+    <div><label>Branch</label>
+      <select name="branch_id">
+        <option value="">— All branches —</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}" {{ 'selected' if b.id == dept.branch_id }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+  </div>
+  <div class="m" style="margin-top:8px">
+    Renaming is safe — everyone stays in it, because people point at the
+    department itself rather than its name.
+  </div>
+  <div style="margin-top:20px">
+    <button class="btn">Save</button>
+    <a class="btn ghost" href="/admin/departments">Cancel</a>
+  </div>
+</form>
+
+{% if people %}
+<h2>Who is in it</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>Name</th><th>Role</th><th>Branch</th><th></th></tr>
+  {% for p in people %}
+  <tr>
+    <td><strong>{{ p.name }}</strong><div class="m">{{ p.email }}</div></td>
+    <td><span class="chip">{{ p.role.value }}</span></td>
+    <td>{{ p.branch.name if p.branch else '—' }}</td>
+    <td><a class="btn sm ghost" href="/admin/users/{{ p.id }}">Edit person</a></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+<h2>Delete this department</h2>
+<div class="danger-box" style="max-width:640px">
+  {% if people %}
+  <p><strong>{{ people|length }} person(s) are in it.</strong> They keep every task,
+    attachment and score — they simply lose the label. Nothing else changes.</p>
+  {% else %}
+  <p>Nobody is in it, so nothing at all is affected.</p>
+  {% endif %}
+  <form method="post" action="/admin/departments/{{ dept.id }}/delete">
+    <label>Type <strong>{{ dept.name }}</strong> to confirm</label>
+    <input name="confirm" placeholder="{{ dept.name }}" autocomplete="off" required>
+    <div style="margin-top:14px">
+      <button class="btn danger">Delete department</button>
+      <a class="btn ghost" href="/admin/departments">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

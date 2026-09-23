@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Departments · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<h1>Departments</h1>
+<p class="sub">
+  A department sits under one branch — Front Desk at Bodyzone, Housekeeping at
+  Spa Kora — or under none when it covers the whole group, like Accounts or HR.
+  It is a label on a person, so it never changes anyone's tasks or score.
+</p>
+
+<div class="grid g2 wide">
+  <div>
+    {% if depts %}
+    <div class="table-wrap">
+    <table>
+      <tr><th>Department</th><th>Branch</th><th>Staff</th><th></th></tr>
+      {% for d in depts %}
+      <tr>
+        <td><a href="/admin/departments/{{ d.id }}"><strong>{{ d.name }}</strong></a></td>
+        <td>{% if d.branch_id and d.branch_id in branch_of %}
+              <span class="chip">{{ branch_of[d.branch_id].name }}</span>
+            {% else %}<span class="chip normal">All branches</span>{% endif %}</td>
+        <td>{{ staff[d.id] }}</td>
+        <td class="rowacts">
+          <a class="btn sm ghost" href="/admin/departments/{{ d.id }}"
+             title="Edit {{ d.name }}">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% else %}
+    <div class="empty">No departments yet. Add your first one on the right —
+      or leave them out entirely; they are optional.</div>
+    {% endif %}
+
+    <p class="m" style="margin-top:14px">
+      People are managed on their own page — <a href="/admin/users">open Users</a>.
+      Branches are on <a href="/admin/branches">Branches</a>.
+    </p>
+  </div>
+
+  <form method="post" action="/admin/departments" class="card">
+    <strong>Add a department</strong>
+    <label>Name</label>
+    <input name="name" required placeholder="e.g. Front Desk" maxlength="120">
+    <label>Branch</label>
+    <select name="branch_id">
+      <option value="">— All branches —</option>
+      {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+    </select>
+    <div class="m" style="margin-top:6px">
+      Leave it on “All branches” for a department that spans the group.
+      The same name may be used under two different branches.
+    </div>
+    <div style="margin-top:16px"><button class="btn">Add department</button></div>
+  </form>
+</div>
+{% endblock %}

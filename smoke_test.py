@@ -1509,5 +1509,81 @@ with _SLC() as _d:
           abs((_row.created_at - _dt.now(_IST).replace(tzinfo=None)).total_seconds()) < 120,
           str(_row.created_at))
 
+print("\n== departments: see, add, edit, delete ==")
+from app.db import SessionLocal as _SLD
+from app.models import Department as _Dept, Branch as _Brn, User as _UD
+from sqlalchemy import select as _sd
+
+_dp = admin.get("/admin/departments")
+check("the departments page opens", _dp.status_code == 200, _dp.status_code)
+check("it is reachable from the sidebar", "/admin/departments" in admin.get("/").text)
+check("and from the user form", "/admin/departments" in admin.get("/admin/users").text)
+
+with _SLD() as _d:
+    _bz = _d.scalar(_sd(_Brn).where(_Brn.name.like("Bodyzone%"))).id
+    _sk = _d.scalar(_sd(_Brn).where(_Brn.name.like("Spa Kora%"))).id
+
+_name = f"Front Desk {RUN}"
+admin.post("/admin/departments", data={"name": _name, "branch_id": str(_bz)})
+with _SLD() as _d:
+    _new = _d.scalar(_sd(_Dept).where(_Dept.name == _name))
+check("a department can be added", _new is not None)
+check("it is listed", _name in admin.get("/admin/departments").text)
+_did = _new.id
+
+check("a blank name is refused",
+      admin.post("/admin/departments", data={"name": "  ", "branch_id": ""}).status_code == 400)
+check("the same name twice in one branch is refused",
+      admin.post("/admin/departments",
+                 data={"name": _name, "branch_id": str(_bz)}).status_code == 400)
+# But the same name under a DIFFERENT branch is normal — every branch has a
+# front desk — so that must be allowed.
+check("the same name under another branch is allowed",
+      admin.post("/admin/departments",
+                 data={"name": _name, "branch_id": str(_sk)}).status_code == 200)
+
+check("the edit page opens", admin.get(f"/admin/departments/{_did}").status_code == 200)
+admin.post(f"/admin/departments/{_did}",
+           data={"name": f"Reception {RUN}", "branch_id": ""})
+with _SLD() as _d:
+    _r = _d.get(_Dept, _did)
+    check("renaming works", _r.name == f"Reception {RUN}", _r.name)
+    check("and it can be moved to all-branches", _r.branch_id is None)
+
+# Put a person in it, then delete it: they must keep everything but the label.
+_person = admin.post("/admin/users", data={"name": f"Dept Tester {RUN}",
+    "email": f"dept.{RUN}@gcs.local", "phone": "", "password": "deptpass123",
+    "role": "doer", "branch_id": str(_bz), "department_id": str(_did),
+    "rights": [], "bm_delegation": 60, "bm_checklist": 20, "bm_fms": 20})
+with _SLD() as _d:
+    _pu = _d.scalar(_sd(_UD).where(_UD.email == f"dept.{RUN}@gcs.local"))
+    _puid, _pu_branch = _pu.id, _pu.branch_id
+    check("a person can be put in a department", _pu.department_id == _did)
+# Two branches can both have a "Front Desk", so the dropdown has to say which.
+_udrop = admin.get("/admin/users").text
+_opts = re.findall(r'<option value="\d+">([^<]*Front Desk[^<]*)</option>', _udrop)
+check("the department dropdown names the branch",
+      _opts and all("—" in o for o in _opts), _opts)
+check("so two same-named departments are distinguishable",
+      len(set(_opts)) == len(_opts), _opts)
+
+check("the edit page lists who is in it",
+      f"Dept Tester {RUN}" in admin.get(f"/admin/departments/{_did}").text)
+
+check("deleting needs the name typed exactly",
+      admin.post(f"/admin/departments/{_did}", data={}, follow_redirects=False) is not None)
+_bad = TestClient(app, follow_redirects=False)
+_bad.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+check("a wrong confirmation is refused",
+      _bad.post(f"/admin/departments/{_did}/delete",
+                data={"confirm": "wrong"}).status_code == 400)
+admin.post(f"/admin/departments/{_did}/delete", data={"confirm": f"Reception {RUN}"})
+with _SLD() as _d:
+    check("the department is gone", _d.get(_Dept, _did) is None)
+    _pu2 = _d.get(_UD, _puid)
+    check("but the person survives", _pu2 is not None)
+    check("with no department", _pu2.department_id is None)
+    check("and their branch untouched", _pu2.branch_id == _pu_branch)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
