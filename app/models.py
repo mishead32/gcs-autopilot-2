@@ -370,7 +370,23 @@ class FlowStep(Base):
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     # who does it: a fixed user, or left blank to be picked at run time
     default_doer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    tat_hours: Mapped[int] = mapped_column(Integer, default=24)   # turnaround time
+    # Turnaround time, as a unit and a number: 30 minutes, 2 days, 1 month.
+    # tat_hours is the original column and is kept so older rows and the
+    # bulk importer keep working; tat_unit/tat_value are what the engine
+    # actually reads now.
+    tat_hours: Mapped[int] = mapped_column(Integer, default=24)
+    tat_unit: Mapped[str] = mapped_column(String(10), default="hours")
+    tat_value: Mapped[int] = mapped_column(Integer, default=24)
+
+    # Whose planned date this step's turnaround is measured from.
+    #
+    #   NULL     -> from the moment this step opens (the usual case)
+    #   a number -> from THAT step's planned date
+    #
+    # The second one matters when a whole chain hangs off one date: "CMD
+    # approval is due 2 days after the bill was due to be verified" should
+    # not drift just because the earlier step was closed late.
+    due_from_pos: Mapped[int | None] = mapped_column(Integer, nullable=True)
     priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -400,6 +416,11 @@ class FlowStep(Base):
     default_doer: Mapped[User | None] = relationship()
 
     @property
+    def tat_label(self) -> str:
+        return clock.span_label(self.tat_unit or "hours",
+                                self.tat_value or self.tat_hours or 0)
+
+    @property
     def yes_label(self) -> str:
         return (self.pass_label or "").strip() or "Approved"
 
@@ -411,6 +432,32 @@ class FlowStep(Base):
         """Which position to go to next. 0 means the flow ends here."""
         return self.fail_step_pos if (self.is_decision and outcome == "fail") \
             else self.next_step_pos
+
+
+@event.listens_for(FlowStep, "before_insert")
+def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
+    """Keep the unit and the legacy hour count telling the same story.
+
+    A step can be built by the flow form (which sets unit + value), by the
+    bulk importer or the seed (which set only tat_hours), or by a future
+    caller that does neither. Rather than trusting every call site to
+    remember, the two are reconciled once, here.
+    """
+    if not target.tat_unit:
+        target.tat_unit = "hours"
+    if target.tat_unit == "hours":
+        # Whichever of the two was actually given wins; if both were, the
+        # explicit value does.
+        if target.tat_value in (None, 0):
+            target.tat_value = target.tat_hours or 24
+        elif target.tat_value != target.tat_hours:
+            # Only one of them was meant: the form always sends both equal,
+            # so a difference means tat_hours was set on its own.
+            target.tat_value = target.tat_hours \
+                if target.tat_value == 24 else target.tat_value
+        target.tat_hours = target.tat_value
+    else:
+        target.tat_value = target.tat_value or 1
 
 
 class FlowInstance(Base):

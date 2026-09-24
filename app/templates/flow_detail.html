@@ -13,7 +13,8 @@
         <div class="t">{{ s.position }}. {{ s.title }}</div>
         <div class="m">
           {{ s.default_doer.name if s.default_doer else 'Doer picked at run time' }}
-          · TAT {{ s.tat_hours }}h · {{ s.priority.value }}
+          · TAT {{ s.tat_label }}{% if s.due_from_pos %} from step {{ s.due_from_pos }}'s date{% endif %}
+          · {{ s.priority.value }}
           {% if s.requires_audit %} · audited{% endif %}
         </div>
         {% if s.instructions %}<div class="m">{{ s.instructions }}</div>{% endif %}

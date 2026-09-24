@@ -45,6 +45,9 @@ ADDITIONS = {
     ],
     "flow_steps": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+        ("tat_unit", "VARCHAR(10) DEFAULT 'hours'"),
+        ("tat_value", "INTEGER DEFAULT 24"),
+        ("due_from_pos", "INTEGER"),
         # Left NULL on purpose for flows built before routing existed — the
         # engine reads NULL as "whatever comes next in order", so every
         # existing flow keeps running exactly as it did.
@@ -165,6 +168,23 @@ def run() -> list[str]:
                     conn.execute(text(
                         f"UPDATE {table} SET priority = 'HIGH' "
                         "WHERE priority = 'CRITICAL'"))
+
+            # Turnaround time grew a unit. Everything that existed before was
+            # expressed in hours, so that is exactly what it becomes — no
+            # deadline shifts, the same number simply gains its unit.
+            if "flow_steps" in existing_tables:
+                conn.execute(text(
+                    "UPDATE flow_steps SET tat_unit = 'hours' WHERE tat_unit IS NULL"))
+                # Not "WHERE tat_value IS NULL": the ALTER above carries
+                # DEFAULT 24, so every upgraded row already reads 24 and a
+                # NULL check silently matches nothing — a 4-hour step would
+                # quietly become 24. For an hours step the two columns must
+                # agree, and tat_hours is the one that was really set, so it
+                # wins. Safe to run for ever: rows that already agree are
+                # untouched, and a step in days/weeks/months is not matched.
+                conn.execute(text(
+                    "UPDATE flow_steps SET tat_value = tat_hours "
+                    "WHERE tat_unit = 'hours' AND tat_value <> tat_hours"))
 
             # There is no "accept the task" step any more — work starts when
             # it is assigned. Anything still sitting in PENDING was waiting on

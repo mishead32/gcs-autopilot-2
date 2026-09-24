@@ -50,3 +50,67 @@ def today() -> date:
 def stamp(fmt: str = "%d %b %Y, %I:%M %p") -> str:
     """Current IST time, formatted — for 'last updated' lines."""
     return now().strftime(fmt)
+
+
+# --------------------------------------------------------------- spans ----
+# A turnaround time is not always a number of hours. "Submit within 2 days",
+# "review every month", "call back in 30 minutes" are all natural ways to
+# describe the same field, and forcing them into hours makes a monthly step
+# read as 720 — which is both unreadable and wrong, because months are not
+# all the same length.
+SPAN_UNITS = {
+    "minutes": "minute(s)",
+    "hours": "hour(s)",
+    "days": "day(s)",
+    "weeks": "week(s)",
+    "months": "month(s)",
+}
+
+# What each unit offers in its second box. Whole numbers people actually use,
+# rather than a free-text field that invites "0" and "999".
+SPAN_CHOICES = {
+    "minutes": [5, 10, 15, 20, 30, 45],
+    "hours": [1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48, 72],
+    "days": [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 30],
+    "weeks": [1, 2, 3, 4, 6, 8],
+    "months": [1, 2, 3, 4, 6, 12],
+}
+
+
+def add_months(start: datetime, months: int) -> datetime:
+    """Calendar months, not 30-day blocks.
+
+    31 Jan + 1 month is 28 Feb (29 in a leap year), not 3 March. Clamping to
+    the last day of the shorter month is what every calendar does and what
+    anybody setting a monthly deadline means.
+    """
+    month_index = start.month - 1 + months
+    year = start.year + month_index // 12
+    month = month_index % 12 + 1
+    # last day of the destination month
+    if month == 12:
+        last = 31
+    else:
+        last = (date(year, month + 1, 1) - timedelta(days=1)).day
+    return start.replace(year=year, month=month, day=min(start.day, last))
+
+
+def add_span(start: datetime, unit: str, value: int) -> datetime:
+    """start + value units. Unknown units fall back to hours."""
+    value = max(0, int(value or 0))
+    if unit == "months":
+        return add_months(start, value)
+    if unit == "weeks":
+        return start + timedelta(weeks=value)
+    if unit == "days":
+        return start + timedelta(days=value)
+    if unit == "minutes":
+        return start + timedelta(minutes=value)
+    return start + timedelta(hours=value)
+
+
+def span_label(unit: str, value: int) -> str:
+    """'2 days', '1 month' — for reading back on a page."""
+    value = int(value or 0)
+    word = (unit or "hours").rstrip("s")
+    return f"{value} {word}" + ("" if value == 1 else "s")

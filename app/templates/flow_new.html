@@ -59,7 +59,14 @@
       <select name="step_doer"><option value="">Pick at run time</option>
         {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select></div>
-    <div><label>TAT (hours)</label><input type="number" name="step_tat" value="24" min="1"></div>
+    <div style="max-width:150px"><label>TAT — measured in</label>
+      <select name="step_tat_unit" class="tatunit">
+        {% for k, lbl in span_units.items() %}
+        <option value="{{ k }}" {{ 'selected' if k == 'hours' }}>{{ k|title }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="max-width:120px"><label>How many</label>
+      <select name="step_tat" class="tatval"></select></div>
     <div><label>Priority</label>
       <select name="step_priority">
         {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='medium' }}>{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
@@ -96,6 +103,18 @@
         <input type="number" name="step_fail" min="0" placeholder="e.g. 1"></div>
     </div>
     <div class="m">0 finishes the flow here · an earlier number sends it back for rework</div>
+
+    <div class="row" style="margin-top:12px">
+      <div style="max-width:300px"><label>Count the TAT from</label>
+        <input type="number" name="step_due_from" min="1"
+               placeholder="leave blank — from when this step opens">
+        <div class="m" style="margin-top:4px">
+          Put another step's number here to hang this step's planned date off
+          <em>that</em> step's planned date, so the chain does not drift when
+          somebody closes an earlier step late.
+        </div>
+      </div>
+    </div>
   </div>
 
   <button type="button" class="btn ghost sm" style="margin-top:10px"
@@ -104,6 +123,8 @@
 </template>
 
 <script>
+var SPAN_CHOICES = {{ span_choices|tojson }};
+
 function renumber(){
   document.querySelectorAll('#steps .stepcard').forEach(function(card, i){
     card.querySelector('.num').textContent = i + 1;
@@ -128,6 +149,25 @@ function wire(card){
   }
   sel.addEventListener('change', apply);
   apply();
+
+  // The second TAT box offers whole numbers that suit the unit: minutes in
+  // fives, weeks one to eight, months one to twelve. Rebuilt on every change,
+  // keeping the current number when the new unit also offers it.
+  var unit = card.querySelector('.tatunit'), val = card.querySelector('.tatval');
+  function fillValues(){
+    var opts = SPAN_CHOICES[unit.value] || SPAN_CHOICES.hours;
+    var keep = val.value;
+    val.innerHTML = '';
+    opts.forEach(function(n){
+      var o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      val.appendChild(o);
+    });
+    val.value = opts.indexOf(Number(keep)) !== -1 ? keep
+              : (unit.value === 'hours' ? 24 : opts[0]);
+  }
+  unit.addEventListener('change', fillValues);
+  fillValues();
 }
 
 function addStep(){

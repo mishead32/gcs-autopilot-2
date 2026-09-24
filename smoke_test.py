@@ -1878,5 +1878,143 @@ check("submitting says so", "Marked complete" in _a.post(
 check("the toast is switched off for reduced motion",
       "prefers-reduced-motion" in _c.get("/static/app.css").text)
 
+print("\n== TAT is a unit and a number, not just hours ==")
+from app import clock as _ck
+from datetime import datetime as _dtu
+check("months are calendar months, not 30-day blocks",
+      _ck.add_months(_dtu(2026, 1, 31, 10, 0)) if False else
+      _ck.add_months(_dtu(2026, 1, 31, 10, 0), 1) == _dtu(2026, 2, 28, 10, 0),
+      str(_ck.add_months(_dtu(2026, 1, 31, 10, 0), 1)))
+check("and they roll over the year",
+      _ck.add_months(_dtu(2026, 12, 15, 9, 0), 2) == _dtu(2027, 2, 15, 9, 0))
+check("a leap February is handled",
+      _ck.add_months(_dtu(2028, 1, 31, 9, 0), 1) == _dtu(2028, 2, 29, 9, 0),
+      str(_ck.add_months(_dtu(2028, 1, 31, 9, 0), 1)))
+for _u, _v, _want in [("minutes", 30, _dtu(2026, 3, 1, 10, 30)),
+                      ("hours", 5, _dtu(2026, 3, 1, 15, 0)),
+                      ("days", 2, _dtu(2026, 3, 3, 10, 0)),
+                      ("weeks", 2, _dtu(2026, 3, 15, 10, 0))]:
+    check(f"{_v} {_u}", _ck.add_span(_dtu(2026, 3, 1, 10, 0), _u, _v) == _want)
+
+_fp = admin.get("/flows/new").text
+check("the builder offers every unit",
+      all(f'value="{u}"' in _fp for u in ["minutes", "hours", "days", "weeks", "months"]))
+check("and a second box for the number", 'class="tatval"' in _fp)
+check("with sensible choices per unit", '"weeks": [1, 2, 3, 4, 6, 8]' in _fp
+      or '"weeks":[1,2,3,4,6,8]' in _fp.replace(" ", ""))
+check("the builder asks what to count the TAT from",
+      'name="step_due_from"' in _fp)
+
+print("\n== a step can hang its date off another step's date ==")
+from app.models import Flow as _FLT, FlowInstance as _FIT, Task as _TKT
+_made2 = admin.post("/flows/new", data={
+    "name": f"TAT units {RUN}", "branch_id": "", "description": "", "start_fields": "",
+    "step_title": ["Raise it", "Chase it", "Close it"],
+    "step_doer": ["6", "6", "6"], "step_instructions": ["", "", ""],
+    "step_fields": ["", "", ""], "step_audit": ["0", "0", "0"],
+    "step_proof": ["0", "0", "0"], "step_decision": ["0", "0", "0"],
+    "step_yes": ["", "", ""], "step_no": ["", "", ""],
+    "step_priority": ["medium", "medium", "medium"],
+    "step_tat_unit": ["days", "weeks", "months"],
+    "step_tat": ["2", "1", "1"],
+    "step_next": ["2", "3", "0"],
+    "step_fail": ["", "", ""],
+    # step 3's date is measured from step 1's date, not from when it opens
+    "step_due_from": ["", "", "1"],
+})
+check("the flow saves", _made2.status_code == 200, _made2.status_code)
+with _SLP() as _d:
+    _f2 = _d.scalar(_sp(_FLT).where(_FLT.name == f"TAT units {RUN}"))
+    _f2id = _f2.id
+    _st = {x.position: x for x in _f2.steps}
+    check("step 1 is 2 days", (_st[1].tat_unit, _st[1].tat_value) == ("days", 2))
+    check("step 2 is 1 week", (_st[2].tat_unit, _st[2].tat_value) == ("weeks", 1))
+    check("step 3 is 1 month", (_st[3].tat_unit, _st[3].tat_value) == ("months", 1))
+    check("and reads back in words", _st[3].tat_label == "1 month", _st[3].tat_label)
+    check("step 3 is tied to step 1's date", _st[3].due_from_pos == 1)
+
+check("a date tied to a step that does not exist is refused",
+      admin.post("/flows/new", data={
+          "name": f"bad link {RUN}", "branch_id": "", "description": "",
+          "step_title": ["one"], "step_doer": ["6"], "step_tat": ["1"],
+          "step_tat_unit": ["days"], "step_priority": ["medium"],
+          "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+          "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+          "step_no": [""], "step_next": ["0"], "step_fail": [""],
+          "step_due_from": ["7"]}).status_code == 400)
+check("a step cannot take its date from itself",
+      admin.post("/flows/new", data={
+          "name": f"self link {RUN}", "branch_id": "", "description": "",
+          "step_title": ["one"], "step_doer": ["6"], "step_tat": ["1"],
+          "step_tat_unit": ["days"], "step_priority": ["medium"],
+          "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+          "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+          "step_no": [""], "step_next": ["0"], "step_fail": [""],
+          "step_due_from": ["1"]}).status_code == 400)
+
+# Walk it and check the real deadlines the engine produced.
+admin.post(f"/flows/{_f2id}/start", data={"reference": f"TATRUN-{RUN}"})
+with _SLP() as _d:
+    _i2 = _d.scalar(_sp(_FIT).where(_FIT.reference == f"TATRUN-{RUN}"))
+    _i2id = _i2.id
+_t, _pos = _open_step(_i2id)
+with _SLP() as _d:
+    _due1 = _d.get(_TKT, _t).due_at
+check("step 1 is due about two days out",
+      1 <= (_due1 - _ck.now()).days <= 2, str(_due1))
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_i2id)
+with _SLP() as _d:
+    _due2 = _d.get(_TKT, _t).due_at
+check("step 2 is due about a week out",
+      6 <= (_due2 - _ck.now()).days <= 8, str(_due2))
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_i2id)
+with _SLP() as _d:
+    _due3 = _d.get(_TKT, _t).due_at
+# Step 3 is a month after STEP 1's date, not a month from now — that is the
+# whole point of tying it. Step 1 was due ~2 days out, so this lands near
+# a month and two days from now, not a month from now.
+check("step 3 counts its month from step 1's date, not from today",
+      _ck.add_months(_due1, 1).date() == _due3.date(),
+      f"step1 {_due1.date()} +1m = {_ck.add_months(_due1,1).date()} but got {_due3.date()}")
+check("which is later than a month from now",
+      _due3 > _ck.add_months(_ck.now(), 1) - __import__("datetime").timedelta(days=1))
+
+print("\n== old flows keep their hours ==")
+with _SLP() as _d:
+    # Steps that came from the SEED, not from anything this run created.
+    # Filtering on the step title missed them, because a step this test made
+    # is called "Raise it" — the flow it belongs to is what carries the run id.
+    _mine = {f.id for f in _d.scalars(_sp(_FLT)).all() if RUN in f.name}
+    _legacy = [x for x in _d.scalars(_sp(_FS)).all() if x.flow_id not in _mine]
+    check("there are older steps to check", bool(_legacy))
+    check("every pre-existing step has a unit after upgrade",
+          all(x.tat_unit for x in _legacy), "some are NULL")
+    check("and it is hours", all(x.tat_unit == "hours" for x in _legacy))
+    check("with the number it always had",
+          all(x.tat_value == x.tat_hours for x in _legacy),
+          str([(x.tat_value, x.tat_hours) for x in _legacy[:3]]))
+
+# The upgrade path itself, not just freshly seeded rows: the new column
+# carries DEFAULT 24, so a backfill keyed on NULL matches nothing and a
+# 4-hour step silently becomes 24. Prove the real database upgrade keeps
+# every number, and that running it twice changes nothing.
+import shutil as _sh, tempfile as _tf, subprocess as _sub, os as _os, json as _js
+_probe = _os.path.join(_tf.mkdtemp(), "upgrade.db")
+_sh.copy("midap-backup-20260910-072235.db", _probe)
+_code = ("from app import migrate; migrate.run(); migrate.run();"
+         "from app.db import SessionLocal; from app.models import FlowStep;"
+         "from sqlalchemy import select; import json;"
+         "d=SessionLocal(); r=d.scalars(select(FlowStep)).all();"
+         "print(json.dumps([[s.tat_hours, s.tat_value, s.tat_unit] for s in r]))")
+_out = _sub.run([__import__("sys").executable, "-c", _code], capture_output=True, text=True,
+                env={**_os.environ, "DATABASE_URL": f"sqlite:///{_probe}"})
+_rows = _js.loads(_out.stdout.strip().splitlines()[-1]) if _out.stdout.strip() else []
+check("an existing database upgrades with its TAT numbers intact",
+      _rows and all(h == v and u == "hours" for h, v, u in _rows),
+      _out.stderr[-200:] or str(_rows[:4]))
+check("and the upgrade is safe to run twice", bool(_rows))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

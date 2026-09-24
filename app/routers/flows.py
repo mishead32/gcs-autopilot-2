@@ -1,167 +1,215 @@
-"""Flow Management System engine.
-
-start_flow()   -> creates a FlowInstance and spawns the task for step 1
-advance_flow() -> called when a flow task closes; spawns whatever comes next
-
-Steps are not simply run in numerical order. Each one names where the flow
-goes when it closes, which is what makes a real process expressible:
-
-    1 Verify the bill                     -> 2
-    2 Submit to the manager               -> 3
-    3 Verified or rejected?   (decision)  -> verified: 4   rejected: 1
-    4 Send to CMD for approval            -> finish
-
-Step 3 is a DECISION: the person doing it picks one of two outcomes when they
-submit, and each outcome routes somewhere of its own. "Rejected" going back to
-step 1 is an ordinary rework loop, not a special case.
-
-A step whose route is 0 ends the flow. A step whose route is NULL predates
-routing altogether and falls back to "the next step in order", so flows built
-before this keep behaving exactly as they did.
-"""
-import json
-from datetime import datetime, timedelta
-
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, Request, Form, HTTPException
+from fastapi.responses import RedirectResponse, HTMLResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..models import (
-    Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus, TaskSource, User
-)
-from . import notify, holidays
+from ..db import get_db
+from ..deps import current_user, manager_up, require_right
+from ..models import Flow, FlowStep, FlowInstance, Task, User, Branch, Priority, Right
+from ..services import flows as flow_svc
+from ..templating import templates
+
+router = APIRouter()
 
 
-def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
-                     doer: User, assigner: User) -> Task:
-    # The work still has to happen, so the step is never skipped — only its
-    # deadline moves off a holiday. Skipping it would break the chain.
-    due_at, _moved = holidays.shift_due(
-        db, inst.org_id, clock.now() + timedelta(hours=step.tat_hours),
-        doer.branch_id)
+@router.get("/flows", response_class=HTMLResponse)
+def flow_list(request: Request, user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    flows = db.scalars(
+        select(Flow).where(Flow.org_id == user.org_id).order_by(Flow.name)
+    ).all()
+    running = db.scalars(
+        select(FlowInstance)
+        .where(FlowInstance.org_id == user.org_id, FlowInstance.completed_at.is_(None))
+        .order_by(FlowInstance.started_at.desc()).limit(50)
+    ).all()
+    return templates.TemplateResponse(request, "flows.html", {
+        "user": user, "flows": flows, "running": running,
+        "progress": {i.id: flow_svc.flow_progress(i) for i in running},
+    })
 
-    task = Task(
-        org_id=inst.org_id,
-        branch_id=doer.branch_id,
-        title=f"{step.title} — {inst.reference}",
-        details=step.instructions,
-        assigner_id=assigner.id,
-        doer_id=doer.id,
-        priority=step.priority,
-        source=TaskSource.FLOW,
-        due_at=due_at,
-        flow_instance_id=inst.id,
-        flow_step_id=step.id,
-        requires_audit=step.requires_audit,
-        requires_attachment=step.requires_attachment,
+
+@router.get("/flows/new", response_class=HTMLResponse)
+def new_flow_form(request: Request, user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                  db: Session = Depends(get_db)):
+    branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)).all()
+    doers = db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True)).order_by(User.name)
+    ).all()
+    return templates.TemplateResponse(request, "flow_new.html", {
+        "user": user, "branches": branches, "doers": doers,
+        "priorities": list(Priority),
+        "span_units": clock.SPAN_UNITS, "span_choices": clock.SPAN_CHOICES,
+    })
+
+
+@router.post("/flows/new")
+async def create_flow(request: Request, user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                      db: Session = Depends(get_db)):
+    form = await request.form()
+    flow = Flow(
+        org_id=user.org_id,
+        branch_id=int(form["branch_id"]) if form.get("branch_id") else None,
+        name=form["name"].strip(),
+        description=(form.get("description") or "").strip() or None,
+        start_fields=(form.get("start_fields") or "").strip() or None,
     )
-    db.add(task)
-    db.flush()
-    notify.queue(
-        db, doer, "flow_step_ready", task,
-        title=step.title, flow=inst.flow.name, reference=inst.reference,
-        due=task.due_at.strftime("%d %b, %I:%M %p"),
-    )
-    return task
-
-
-def start_flow(db: Session, flow: Flow, reference: str, starter: User,
-               doer_overrides: dict[int, int] | None = None,
-               context: dict | None = None) -> FlowInstance:
-    """doer_overrides maps flow_step.id -> user.id for steps with no default doer."""
-    if not flow.steps:
-        raise ValueError("This flow has no steps configured.")
-
-    inst = FlowInstance(
-        org_id=flow.org_id,
-        flow_id=flow.id,
-        reference=reference,
-        started_by_id=starter.id,
-        current_position=flow.steps[0].position,
-        context=json.dumps(context or {}),
-    )
-    db.add(inst)
+    db.add(flow)
     db.flush()
 
-    first = flow.steps[0]
-    doer_id = (doer_overrides or {}).get(first.id) or first.default_doer_id or starter.id
-    doer = db.get(User, doer_id)
-    _spawn_step_task(db, inst, first, doer, starter)
+    # steps arrive as parallel arrays: step_title[], step_doer[], ...
+    titles = form.getlist("step_title")
+    doers = form.getlist("step_doer")
+    tats = form.getlist("step_tat")
+    tat_units = form.getlist("step_tat_unit")
+    dfroms = form.getlist("step_due_from")
+    prios = form.getlist("step_priority")
+    audits = form.getlist("step_audit")
+    proofs = form.getlist("step_proof")
+    fields = form.getlist("step_fields")
+    instr = form.getlist("step_instructions")
+    nexts = form.getlist("step_next")
+    fails = form.getlist("step_fail")
+    decides = form.getlist("step_decision")
+    yes_lbl = form.getlist("step_yes")
+    no_lbl = form.getlist("step_no")
+
+    def _pos(values, i):
+        """A routing box: a step number, or 0 meaning 'the flow ends here'.
+
+        Blank is read as 'the step after this one', which is what somebody
+        who ignored the box almost certainly meant.
+        """
+        raw = (values[i] if i < len(values) else "").strip()
+        if raw == "":
+            return None
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return None
+
+    pos = 0
+    for i, title in enumerate(titles):
+        if not title.strip():
+            continue
+        pos += 1
+        db.add(FlowStep(
+            flow_id=flow.id,
+            position=pos,
+            title=title.strip(),
+            instructions=(instr[i] if i < len(instr) else "").strip() or None,
+            default_doer_id=int(doers[i]) if i < len(doers) and doers[i] else None,
+            tat_hours=int(tats[i]) if i < len(tats) and tats[i] else 24,
+            tat_unit=(tat_units[i] if i < len(tat_units)
+                      and tat_units[i] in clock.SPAN_UNITS else "hours"),
+            tat_value=int(tats[i]) if i < len(tats) and tats[i] else 24,
+            due_from_pos=_pos(dfroms, i) or None,
+            priority=Priority(prios[i]) if i < len(prios) and prios[i] else Priority.MEDIUM,
+            requires_audit=(audits[i] == "1") if i < len(audits) else False,
+            # proof is required unless the step explicitly says otherwise
+            requires_attachment=(proofs[i] != "0") if i < len(proofs) else True,
+            capture_fields=(fields[i] if i < len(fields) else "").strip() or None,
+            next_step_pos=_pos(nexts, i),
+            fail_step_pos=_pos(fails, i),
+            is_decision=(decides[i] == "1") if i < len(decides) else False,
+            pass_label=(yes_lbl[i] if i < len(yes_lbl) else "").strip() or None,
+            fail_label=(no_lbl[i] if i < len(no_lbl) else "").strip() or None,
+        ))
+
+    if pos == 0:
+        raise HTTPException(400, "Add at least one step")
+    db.flush()
+
+    # A route pointing at a step that does not exist would strand the run, so
+    # it is caught here rather than discovered by whoever is holding the bill.
+    valid = {s.position for s in db.scalars(
+        select(FlowStep).where(FlowStep.flow_id == flow.id)).all()}
+    for st in db.scalars(select(FlowStep).where(FlowStep.flow_id == flow.id)).all():
+        for label, target in (("goes to", st.next_step_pos),
+                              ("rejected route", st.fail_step_pos)):
+            if target and target not in valid:
+                raise HTTPException(
+                    400, f"Step {st.position} ({st.title}): its {label} points at "
+                         f"step {target}, which this flow does not have. "
+                         f"Steps are numbered 1 to {max(valid)}.")
+        if st.due_from_pos and st.due_from_pos not in valid:
+            raise HTTPException(
+                400, f"Step {st.position} ({st.title}): its planned date is tied "
+                     f"to step {st.due_from_pos}, which this flow does not have.")
+        if st.due_from_pos == st.position:
+            raise HTTPException(
+                400, f"Step {st.position} ({st.title}) cannot take its planned "
+                     "date from itself.")
+        if st.is_decision and st.fail_step_pos is None:
+            raise HTTPException(
+                400, f"Step {st.position} ({st.title}) is a decision step, so it "
+                     "needs a step number for the second outcome too "
+                     "(or 0 to end the flow there).")
     db.commit()
-    return inst
+    return RedirectResponse(f"/flows/{flow.id}", status_code=303)
 
 
-# A rework loop that never converges would spawn tasks forever. Nobody legs
-# a bill round a five-step flow forty times, so this is a runaway, not a
-# workload — the run is stopped and the trail left in place to look at.
-MAX_STEPS_PER_RUN = 200
+@router.get("/flows/{flow_id}", response_class=HTMLResponse)
+def flow_detail(flow_id: int, request: Request, user: User = Depends(current_user),
+                db: Session = Depends(get_db)):
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.org_id != user.org_id:
+        raise HTTPException(404, "Flow not found")
+    instances = db.scalars(
+        select(FlowInstance).where(FlowInstance.flow_id == flow.id)
+        .order_by(FlowInstance.started_at.desc()).limit(50)
+    ).all()
+    doers = db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True)).order_by(User.name)
+    ).all()
+    return templates.TemplateResponse(request, "flow_detail.html", {
+        "user": user, "flow": flow, "instances": instances, "doers": doers,
+        "progress": {i.id: flow_svc.flow_progress(i) for i in instances},
+    })
 
 
-def advance_flow(db: Session, task: Task) -> Task | None:
-    """Close out a flow step and open whatever it routes to."""
-    inst = task.flow_instance
-    if inst is None or inst.completed_at:
-        return None
+@router.post("/flows/{flow_id}/start")
+async def start_flow(flow_id: int, request: Request,
+                     user: User = Depends(require_right(Right.CREATE_TASK)),
+                     db: Session = Depends(get_db)):
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.org_id != user.org_id:
+        raise HTTPException(404, "Flow not found")
+    form = await request.form()
+    reference = (form.get("reference") or "").strip()
+    if not reference:
+        raise HTTPException(400, "A reference is required (member name, lead id, invoice no.)")
 
-    # carry the doer's captured field values forward into the flow context
-    try:
-        ctx = json.loads(inst.context or "{}")
-        ctx.update(json.loads(task.captured_data or "{}"))
-        inst.context = json.dumps(ctx)
-    except json.JSONDecodeError:
-        pass
+    overrides = {}
+    first = flow.steps[0] if flow.steps else None
+    if first and form.get("first_doer"):
+        overrides[first.id] = int(form["first_doer"])
 
-    steps = sorted(inst.flow.steps, key=lambda s: s.position)
-    step = task.flow_step
-    done_pos = step.position if step else inst.current_position
+    # Whatever this particular flow asks for at the start — a bill number, a
+    # member name — goes straight into the run's context, where every later
+    # step can read it.
+    context = {}
+    for label in flow.start_field_list:
+        value = (form.get(f"sf_{label}") or "").strip()
+        if not value:
+            raise HTTPException(400, f"'{label}' is needed to start this flow.")
+        context[label] = value
 
-    spawned = db.scalar(select(func.count()).select_from(Task)
-                        .where(Task.flow_instance_id == inst.id)) or 0
-    if spawned >= MAX_STEPS_PER_RUN:
-        inst.completed_at = clock.now()
-        db.add(TaskComment(
-            task_id=task.id, author_id=task.doer_id,
-            body=f"This run was stopped after {spawned} steps — the flow is "
-                 "looping without finishing. Check where the decision steps "
-                 "route to."))
-        db.commit()
-        return None
-
-    target = step.route(task.decision or "pass") if step else None
-    if target is None:
-        # Built before routing existed: carry on down the list, as before.
-        nxt = next((s for s in steps if s.position > done_pos), None)
-    elif target == 0:
-        nxt = None                      # this step deliberately ends the flow
-    else:
-        nxt = next((s for s in steps if s.position == target), None)
-        if nxt is None:
-            # Routed at a step that has since been removed. Ending the run is
-            # honest; silently sliding to the next one would hide it.
-            nxt = None
-
-    if nxt is None:
-        inst.completed_at = clock.now()
-        db.commit()
-        return None
-
-    inst.current_position = nxt.position
-    doer = db.get(User, nxt.default_doer_id) if nxt.default_doer_id else task.doer
-    new_task = _spawn_step_task(db, inst, nxt, doer, task.assigner)
-    db.commit()
-    return new_task
+    inst = flow_svc.start_flow(db, flow, reference, user, overrides, context)
+    return RedirectResponse(f"/flows/instance/{inst.id}", status_code=303)
 
 
-def flow_progress(inst: FlowInstance) -> tuple[int, int]:
-    """How far along a run is.
-
-    Counting positions behind the current one stops meaning anything once a
-    flow can loop backwards — a rejected bill returning to step 1 would read
-    as "0 of 5 done" after four steps of real work. So this counts the steps
-    actually CLOSED on this run, which only ever goes up.
-    """
-    total = len(inst.flow.steps)
-    if inst.completed_at:
-        return total, total
-    done = sum(1 for t in inst.tasks if t.status == TaskStatus.COMPLETED)
-    return min(done, total), total
+@router.get("/flows/instance/{instance_id}", response_class=HTMLResponse)
+def instance_detail(instance_id: int, request: Request, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)):
+    inst = db.get(FlowInstance, instance_id)
+    if not inst or inst.org_id != user.org_id:
+        raise HTTPException(404, "Not found")
+    tasks = db.scalars(
+        select(Task).where(Task.flow_instance_id == inst.id).order_by(Task.created_at)
+    ).all()
+    return templates.TemplateResponse(request, "flow_instance.html", {
+        "user": user, "inst": inst, "tasks": tasks,
+        "progress": flow_svc.flow_progress(inst),
+    })
