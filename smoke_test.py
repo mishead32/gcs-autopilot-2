@@ -225,13 +225,44 @@ try:
     check("split over 100 rejected", False, "no error raised")
 except ValueError as e:
     check("split over 100 rejected", "100" in str(e))
-try:
-    u.set_benchmarks(10, 10, 10)
-    check("split under 100 rejected", False, "no error raised")
-except ValueError:
-    check("split under 100 rejected", True)
 check("rejected split leaves the old values", (u.bm_delegation, u.bm_checklist,
       u.bm_fms) == (50, 30, 20), (u.bm_delegation, u.bm_checklist, u.bm_fms))
+try:
+    u.set_benchmarks(-5, 10, 10)
+    check("a negative benchmark is rejected", False, "no error raised")
+except ValueError:
+    check("a negative benchmark is rejected", True)
+
+# A split under 100 is now deliberate, not an error: part of the EM score is
+# judged by hand, so 40/10/10 means the software scores 60 and a person the
+# other 40.
+u.set_benchmarks(40, 10, 10)
+check("a split under 100 is accepted", u.benchmark_total == 60, u.benchmark_total)
+check("it saves exactly what was typed",
+      (u.bm_delegation, u.bm_checklist, u.bm_fms) == (40, 10, 10))
+check("and it says how much the software scores", u.scored_by_system == 60)
+check("and how much is left to judge by hand", u.scored_by_hand == 40)
+u.set_benchmarks(0, 0, 0)
+check("all-zero is allowed — nothing is scored by software",
+      u.benchmark_total == 0 and u.scored_by_hand == 100)
+u.set_benchmarks(60, 20, 20)
+
+# With only 60 points in play the software can never push anybody below 40,
+# so the good/warn/bad bands have to move with the benchmark or every such
+# person reads as failing.
+_part = Card(benchmarks={"delegation": 40, "recurring": 10, "flow": 10})
+# 40 is this person's floor, so 85% and 60% of the 60 in play land at 91
+# and 76 — not at 85 and 60.
+for _sc, _want in [(95, "good"), (80, "warn"), (70, "bad")]:
+    _part.score = _sc
+    check(f"a 60-point person scoring {_sc} bands as {_want}",
+          _part.band == _want, _part.band)
+check("and the page can say 60 of 100 are scored here",
+      _part.scored_by_system == 60 and _part.partly_manual)
+_full = Card(benchmarks={"delegation": 60, "recurring": 20, "flow": 20})
+_full.score = 90
+check("a full-100 person is unaffected",
+      _full.band == "good" and not _full.partly_manual)
 
 print("\n== per-source breakdown ==")
 
@@ -2160,6 +2191,58 @@ with _SLP() as _d:
           str(_old_style.start_form_fields))
     check("and they are all short-text",
           all(f["type"] == "text" for f in _old_style.start_form_fields))
+
+print("\n== the user form accepts a split under 100 ==")
+from app.db import SessionLocal as _SLB
+from app.models import User as _UB
+from sqlalchemy import select as _sb
+
+_r = admin.post("/admin/users", data={
+    "name": f"Partly manual {RUN}", "email": f"pm.{RUN}@gcs.local", "phone": "",
+    "password": "pmpass1234", "role": "doer", "branch_id": "", "department_id": "",
+    "rights": [], "bm_delegation": 40, "bm_checklist": 10, "bm_fms": 10})
+check("40 / 10 / 10 is accepted", _r.status_code == 200, _r.status_code)
+with _SLB() as _d:
+    _pm = _d.scalar(_sb(_UB).where(_UB.email == f"pm.{RUN}@gcs.local"))
+    check("the user is created", _pm is not None)
+    check("with exactly those benchmarks",
+          (_pm.bm_delegation, _pm.bm_checklist, _pm.bm_fms) == (40, 10, 10),
+          str((_pm.bm_delegation, _pm.bm_checklist, _pm.bm_fms)))
+    _pmid = _pm.id
+
+_bad = TestClient(app, follow_redirects=False)
+_bad.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+check("but over 100 is still refused",
+      _bad.post("/admin/users", data={
+          "name": f"Over {RUN}", "email": f"over.{RUN}@gcs.local", "phone": "",
+          "password": "overpass123", "role": "doer", "branch_id": "",
+          "department_id": "", "rights": [], "bm_delegation": 60,
+          "bm_checklist": 60, "bm_fms": 60}).status_code == 400)
+
+check("editing to a sub-100 split works",
+      admin.post(f"/admin/users/{_pmid}", data={
+          "name": f"Partly manual {RUN}", "phone": "", "role": "doer",
+          "branch_id": "", "department_id": "", "rights": [],
+          "bm_delegation": 30, "bm_checklist": 20,
+          "bm_fms": 0}).status_code == 200)
+with _SLB() as _d:
+    check("and saves", _d.get(_UB, _pmid).benchmark_total == 50)
+
+check("the page no longer demands 100",
+      "must add up to" not in admin.get("/admin/users").text)
+check("it explains what a sub-100 split means",
+      "do not have to add up to 100" in admin.get("/admin/users").text)
+_js = admin.get("/static/benchmark.js").text
+check("and the browser no longer blocks it", "t === 100" not in _js)
+check("while still stopping a total over 100", "t > 100" in _js)
+
+# Their own score page has to say so, or 50 reads as a result rather than as
+# "the software had 50 points to give".
+_pmc = login(f"pm.{RUN}@gcs.local", "pmpass1234")
+_dash = _pmc.get("/").text
+check("the doer's dashboard says how much is scored by software",
+      "50 of the 100 points are scored by the" in _dash
+      or "50 of 100 scored here" in _dash, "no note shown")
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

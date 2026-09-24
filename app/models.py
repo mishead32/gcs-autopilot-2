@@ -271,15 +271,37 @@ class User(Base):
         return self.bm_delegation + self.bm_checklist + self.bm_fms
 
     def set_benchmarks(self, delegation: int, checklist: int, fms: int) -> None:
-        total = delegation + checklist + fms
-        if total != 100:
-            raise ValueError(
-                f"Benchmarks must add up to 100% — you entered {total}% "
-                f"(Delegation {delegation} + Checklist {checklist} + FMS {fms})."
-            )
+        """The three shares of this person's job the software scores.
+
+        They no longer have to total 100. Part of an EM score is judged by
+        hand — attitude, quality of a conversation, things no task list
+        sees — so a split of 40/10/10 is a deliberate statement that the
+        software accounts for 60 points and a person decides the other 40.
+
+        What each number still means is unchanged: a benchmark is the most
+        that kind of work can cost, so the software can never take away more
+        than the three added together. That figure is `scored_by_system`,
+        and the pages show it so nobody mistakes "60" for a full mark.
+        """
         if min(delegation, checklist, fms) < 0:
             raise ValueError("A benchmark cannot be negative.")
+        total = delegation + checklist + fms
+        if total > 100:
+            raise ValueError(
+                f"The three benchmarks add up to {total}%, which is more than "
+                "100. Together they are the most the software can deduct, so "
+                "they cannot exceed the whole score."
+            )
         self.bm_delegation, self.bm_checklist, self.bm_fms = delegation, checklist, fms
+
+    @property
+    def scored_by_system(self) -> int:
+        """How many of the 100 points the software decides. The rest is manual."""
+        return self.benchmark_total
+
+    @property
+    def scored_by_hand(self) -> int:
+        return max(0, 100 - self.benchmark_total)
 
     # --- shorthands the templates use, so views stay free of role literals ---
     @property

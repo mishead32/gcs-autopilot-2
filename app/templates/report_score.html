@@ -7,7 +7,11 @@
   <td>{% if link %}<a href="{{ link }}"><strong>{{ name }}</strong></a>
       {% else %}<strong>{{ name }}</strong>{% endif %}
     {% if sub %}<div class="m">{{ sub }}</div>{% endif %}</td>
-  <td><span class="score-pill {{ card.band }}">{{ card.score }}</span></td>
+  <td><span class="score-pill {{ card.band }}">{{ card.score }}</span>
+    {% if card.partly_manual %}
+    <div class="m" title="The rest of this person's score is judged by hand">
+      of {{ card.scored_by_system }}</div>
+    {% endif %}</td>
   <td class="{{ 'overdue' if card.gap < 0 }}">{{ card.gap }}</td>
   {% for s in card.source_list %}
   <td class="bif">
@@ -96,6 +100,9 @@
 {% endif %}
 
 <p class="sub" style="margin-top:14px">
+  Where a score reads “of 60”, that person's benchmarks total 60 — the software
+  scores 60 of their 100 points and the other 40 are judged by hand.
+  <br>
   Each cell shows the penalty for that kind of work, then the split behind it:
   work not done, and work not done on time. High-priority tasks count 5×,
   medium 2×, low 1×, which is why the weight closed can be larger than the

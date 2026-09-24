@@ -201,8 +201,38 @@ class Card:
         return round(self.on_time / self.completed * 100, 1) if self.completed else 0.0
 
     @property
+    def scored_by_system(self) -> int:
+        """How many of the 100 points this scorecard's benchmarks cover.
+
+        The benchmarks no longer have to total 100 — the remainder is judged
+        by hand. So a 40/10/10 person can never be scored below 40 by the
+        software, and saying so on the page stops 40 being read as a result
+        rather than as "the software had 60 points to give and gave none".
+        """
+        return sum(self.benchmarks.values()) if self.benchmarks else 100
+
+    @property
+    def scored_by_hand(self) -> int:
+        return max(0, 100 - self.scored_by_system)
+
+    @property
+    def partly_manual(self) -> bool:
+        return self.scored_by_system < 100
+
+    @property
     def band(self) -> str:
-        return "good" if self.score >= 85 else "warn" if self.score >= 60 else "bad"
+        """Good / warn / bad, measured against what the software actually scores.
+
+        A fixed 85 would call every 40/10/10 person "bad" the moment they
+        lost a few points, because their ceiling is 60 to begin with. The
+        thresholds scale with the share the software is responsible for.
+        """
+        top = self.scored_by_system or 100
+        floor = 100 - top
+        span = top / 100.0
+        return ("good" if self.score >= floor + 85 * span
+                else "warn" if self.score >= floor + 60 * span
+                else "bad")
 
 
 DEFAULT_BENCHMARKS = {

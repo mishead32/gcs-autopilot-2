@@ -80,16 +80,22 @@
     <a href="/tasks?scope=mine&status=done">What I completed →</a>
   </div>
   <p class="sect-note">
-    Average out of 100, then the bifurcation behind it — each kind of work
-    can only cost you as much as its own benchmark.
+    Each kind of work can only cost you as much as its own benchmark.
     High priority counts 5×, medium 2×, low 1×.
+    {% if card.partly_manual %}
+    <br><strong>{{ card.scored_by_system }} of the 100 points are scored by the
+    software; the other {{ card.scored_by_hand }} are set by hand</strong> — so
+    the lowest this figure can go on its own is {{ card.scored_by_hand }}.
+    {% endif %}
   </p>
 </div>
 
 <div class="grid g3">
   <div class="kpi {{ 'ok' if card.band=='good' else ('warn' if card.band=='warn' else 'bad') }}">
-    <div class="n" id="scoreBig">{{ card.score }}</div><div class="l">Score (avg out of 100)</div>
-    <div class="m">gap {{ card.gap }}</div></div>
+    <div class="n" id="scoreBig">{{ card.score }}</div>
+    <div class="l">Score{% if card.partly_manual %} — software part{% endif %}</div>
+    <div class="m">gap {{ card.gap }}{% if card.partly_manual %} ·
+      {{ card.scored_by_system }} of 100 scored here{% endif %}</div></div>
   <div class="kpi"><div class="n">{{ card.completion_rate }}%</div>
     <div class="l">Work completed</div>
     <div class="m">{{ card.completed }} of {{ card.planned }} score weight</div></div>
