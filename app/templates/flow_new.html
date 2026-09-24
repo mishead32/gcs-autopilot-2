@@ -1,12 +1,30 @@
 {% extends "base.html" %}
+{% block title %}New FMS flow · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <h1>New FMS flow</h1>
-<p class="sub">Steps run in order. When one is closed, the next is automatically assigned to its doer.</p>
+<p class="sub">Each step says where the flow goes when it closes — so a rejected
+  bill can go back to step 1 while an approved one carries on.</p>
+
+<div class="card" style="max-width:920px;background:var(--chip)">
+  <strong>How routing works</strong>
+  <table style="margin-top:10px">
+    <tr><td style="width:150px"><strong>Goes to</strong></td>
+        <td>The step number to open next. It may be an <em>earlier</em>
+            number — that is a rework loop, and it is allowed.</td></tr>
+    <tr><td><strong>0</strong></td>
+        <td>The flow finishes at this step.</td></tr>
+    <tr><td><strong>Left blank</strong></td>
+        <td>Whatever step comes next in the list.</td></tr>
+    <tr><td><strong>Decision step</strong></td>
+        <td>The person doing it picks one of two outcomes when they submit,
+            and each outcome goes to a step of its own.</td></tr>
+  </table>
+</div>
 
 <form method="post" action="/flows/new" class="card" style="max-width:920px">
   <div class="row">
     <div><label>Flow name</label>
-      <input name="name" required placeholder="e.g. New PT Member Onboarding"></div>
+      <input name="name" required placeholder="e.g. Bill verification"></div>
     <div><label>Branch</label>
       <select name="branch_id"><option value="">All branches</option>
         {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
@@ -14,6 +32,14 @@
   </div>
   <label>Description</label>
   <textarea name="description" style="min-height:56px"></textarea>
+
+  <label style="margin-top:16px">What to ask when this flow is started (comma separated)</label>
+  <input name="start_fields" placeholder="e.g. Bill No, Vendor, Amount">
+  <div class="m" style="margin-top:4px">
+    Every flow needs different things to get going. Whatever you list here is
+    asked on the start form and carried through every step. Leave it blank to
+    ask only for the reference.
+  </div>
 
   <h2 style="margin-top:24px">Steps</h2>
   <div id="steps"></div>
@@ -24,10 +50,12 @@
 </form>
 
 <template id="tpl">
-<div class="card" style="background:#fafbfd">
+<div class="card stepcard" style="background:var(--card)">
+  <div class="step-no">Step <b class="num">1</b></div>
   <div class="row">
-    <div style="flex:2"><label>Step title</label><input name="step_title" placeholder="e.g. Collect payment"></div>
-    <div><label>Default doer</label>
+    <div style="flex:2"><label>Step title</label>
+      <input name="step_title" placeholder="e.g. Verify the bill as per checklist"></div>
+    <div><label>Who does it</label>
       <select name="step_doer"><option value="">Pick at run time</option>
         {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select></div>
@@ -38,23 +66,76 @@
       </select></div>
   </div>
   <label>Instructions</label><textarea name="step_instructions" style="min-height:52px"></textarea>
+
   <div class="row">
     <div><label>Fields the doer must capture (comma separated)</label>
       <input name="step_fields" placeholder="Receipt No, Amount"></div>
-    <div style="max-width:150px"><label>Needs audit</label>
+    <div style="max-width:140px"><label>Needs audit</label>
       <select name="step_audit"><option value="0">No</option><option value="1">Yes</option></select></div>
-    <div style="max-width:150px"><label>Proof required</label>
+    <div style="max-width:140px"><label>Proof required</label>
       <select name="step_proof"><option value="1">Yes</option><option value="0">No</option></select></div>
   </div>
+
+  <div class="routebox">
+    <div class="row">
+      <div style="max-width:190px"><label>This step is a</label>
+        <select name="step_decision" class="decsel">
+          <option value="0">Normal step</option>
+          <option value="1">Decision — two outcomes</option>
+        </select></div>
+      <div class="onlydecision" hidden style="max-width:180px">
+        <label>First outcome is called</label>
+        <input name="step_yes" placeholder="Verified"></div>
+      <div style="max-width:190px"><label class="gotolbl">When done, go to step</label>
+        <input type="number" name="step_next" min="0" placeholder="next in order"></div>
+      <div class="onlydecision" hidden style="max-width:180px">
+        <label>Second outcome is called</label>
+        <input name="step_no" placeholder="Rejected"></div>
+      <div class="onlydecision" hidden style="max-width:170px">
+        <label>…then go to step</label>
+        <input type="number" name="step_fail" min="0" placeholder="e.g. 1"></div>
+    </div>
+    <div class="m">0 finishes the flow here · an earlier number sends it back for rework</div>
+  </div>
+
   <button type="button" class="btn ghost sm" style="margin-top:10px"
-          onclick="this.closest('.card').remove()">Remove step</button>
+          onclick="this.closest('.stepcard').remove(); renumber()">Remove step</button>
 </div>
 </template>
 
 <script>
+function renumber(){
+  document.querySelectorAll('#steps .stepcard').forEach(function(card, i){
+    card.querySelector('.num').textContent = i + 1;
+  });
+}
+
+function wire(card){
+  var sel = card.querySelector('.decsel');
+  // The decision-only boxes are HIDDEN, never disabled. A hidden field is
+  // still submitted, so every step posts exactly one value for every name
+  // and the server's parallel lists stay lined up with the step numbers.
+  // Disabling them would drop entries and silently shift every later step's
+  // routing onto the wrong step.
+  function apply(){
+    var dec = sel.value === '1';
+    card.querySelectorAll('.onlydecision').forEach(function(el){ el.hidden = !dec; });
+    card.querySelector('.gotolbl').textContent =
+      dec ? '…then go to step' : 'When done, go to step';
+    // "next in order" is meaningless once a step has two outcomes.
+    card.querySelector('input[name="step_next"]').placeholder =
+      dec ? '0 = finish' : 'next in order';
+  }
+  sel.addEventListener('change', apply);
+  apply();
+}
+
 function addStep(){
-  document.getElementById('steps')
-    .appendChild(document.getElementById('tpl').content.cloneNode(true));
+  var frag = document.getElementById('tpl').content.cloneNode(true);
+  var card = frag.querySelector('.stepcard');
+  document.getElementById('steps').appendChild(frag);
+  wire(card);
+  renumber();
 }
 addStep(); addStep();
 </script>

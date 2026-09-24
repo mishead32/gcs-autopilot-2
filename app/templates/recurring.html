@@ -46,7 +46,7 @@
       <div><label>Frequency</label><select name="frequency">
         {% for f in frequencies %}<option value="{{ f.value }}">{{ f.value|title }}</option>{% endfor %}</select></div>
       <div><label>Day (weekly 0=Mon / monthly 1–31)</label><input type="number" name="day_of" min="0" max="31"></div>
-      <div><label>Due time</label><input name="due_time" value="18:00" placeholder="HH:MM"></div>
+      <div><label>Due time</label><input name="due_time" value="23:59" placeholder="HH:MM"></div>
     </div>
     <div class="row">
       <div><label>Priority</label><select name="priority">

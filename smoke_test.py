@@ -1666,5 +1666,217 @@ for _k in ("delegation", "checklist", "fms"):
     check(f"the {_k} card opens the doer's own list", _href in _dash,
           "card still points at a report")
 
+print("\n== deadlines default to the end of the day ==")
+_nf = admin.get("/tasks/new").text
+check("delegation defaults to 11:59 pm", "T23:59" in _nf,
+      re.search(r'value="[^"]*T\d\d:\d\d"', _nf).group(0) if re.search(r'value="[^"]*T\d\d:\d\d"', _nf) else "?")
+check("a checklist rule does too", 'value="23:59"' in admin.get("/recurring").text)
+check("and a help request", "T23:59" in doer.get("/help/new").text)
+
+print("\n== only the right may move a planned date ==")
+from app.db import SessionLocal as _SLP
+from app.models import Task as _TP, User as _UP, Right as _RP
+from sqlalchemy import select as _sp
+from datetime import timedelta as _tdp
+
+# The task is assigned TO the editor, so they can genuinely see it — a 404
+# would have made the "field is locked" check pass for the wrong reason.
+with _SLP() as _d:
+    _ed = _d.scalar(_sp(_UP).where(_UP.email == "meena@gcs.local"))
+    _was, _ed_id = _ed.rights, _ed.id
+    _ed.set_rights([_RP.EDIT_TASK, _RP.AUDIT_TASK]); _d.commit()
+
+_pid = int(re.search(r"/tasks/(\d+)", admin.post("/tasks/new", data={
+    "title": f"date lock {RUN}", "doer_id": _ed_id, "priority": "medium",
+    "due_at": "2026-10-01T23:59"}, follow_redirects=False).headers["location"]).group(1))
+editor = login("meena@gcs.local")
+_pg = editor.get(f"/tasks/{_pid}").text
+check("the date field is locked for them", "disabled" in _pg and "Locked" in _pg)
+check("they really can see the task", editor.get(f"/tasks/{_pid}").status_code == 200)
+editor.post(f"/tasks/{_pid}/edit", data={"title": f"date lock {RUN}", "details": "",
+    "doer_id": _ed_id, "priority": "medium", "due_at": "2027-12-31T10:00"})
+with _SLP() as _d:
+    check("and the deadline did not move",
+          _d.get(_TP, _pid).due_at.year == 2026, str(_d.get(_TP, _pid).due_at))
+    check("even though the edit itself went through",
+          _d.get(_TP, _pid).title == f"date lock {RUN}")
+
+# The admin holds every right, so the date moves for them.
+admin.post(f"/tasks/{_pid}/edit", data={"title": f"date lock {RUN}", "details": "",
+    "doer_id": _ed_id, "priority": "medium", "due_at": "2027-12-31T10:00"})
+with _SLP() as _d:
+    check("an admin can move it", _d.get(_TP, _pid).due_at.year == 2027)
+    _u = _d.get(_UP, _ed_id); _u.rights = _was; _d.commit()
+
+check("the right is offered on the user form",
+      'value="change_due_date"' in admin.get("/admin/users").text)
+
+print("\n== FMS: each step says where the flow goes next ==")
+from app.models import Flow as _FL, FlowStep as _FS, FlowInstance as _FI, TaskStatus as _TSF
+
+# The user's own example: verify -> submit -> decide -> (rejected: back to 1)
+_made = admin.post("/flows/new", data={
+    "name": f"Bill verification {RUN}", "branch_id": "", "description": "",
+    "start_fields": "Bill No, Vendor",
+    "step_title": ["Verify the bill as per checklist", "Submit to the manager",
+                   "Verified or rejected?", "Send to CMD for approval"],
+    "step_doer": ["6", "6", "6", "6"],
+    "step_tat": ["24", "24", "24", "24"],
+    "step_priority": ["medium", "medium", "high", "medium"],
+    "step_instructions": ["", "", "", ""],
+    "step_fields": ["", "", "", ""],
+    "step_audit": ["0", "0", "0", "0"],
+    "step_proof": ["0", "0", "0", "0"],
+    "step_decision": ["0", "0", "1", "0"],
+    "step_yes": ["", "", "Verified", ""],
+    "step_no": ["", "", "Rejected", ""],
+    "step_next": ["2", "3", "4", "0"],
+    "step_fail": ["", "", "1", ""],
+})
+check("the flow is created", _made.status_code == 200, _made.status_code)
+with _SLP() as _d:
+    _flow = _d.scalar(_sp(_FL).where(_FL.name == f"Bill verification {RUN}"))
+    _fid = _flow.id
+    _steps = {s.position: s for s in _flow.steps}
+    check("step 3 is a decision", _steps[3].is_decision)
+    check("with the two outcomes named",
+          _steps[3].yes_label == "Verified" and _steps[3].no_label == "Rejected")
+    check("verified routes to step 4", _steps[3].next_step_pos == 4)
+    check("rejected routes back to step 1", _steps[3].fail_step_pos == 1)
+    check("step 4 ends the flow", _steps[4].next_step_pos == 0)
+    check("the flow carries its own start fields",
+          _flow.start_field_list == ["Bill No", "Vendor"])
+
+check("a route to a step that does not exist is refused",
+      admin.post("/flows/new", data={
+          "name": f"bad route {RUN}", "branch_id": "", "description": "",
+          "step_title": ["only step"], "step_doer": ["6"], "step_tat": ["24"],
+          "step_priority": ["medium"], "step_instructions": [""], "step_fields": [""],
+          "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+          "step_yes": [""], "step_no": [""], "step_next": ["9"], "step_fail": [""],
+      }).status_code == 400)
+check("a decision step with only one outcome is refused",
+      admin.post("/flows/new", data={
+          "name": f"half decision {RUN}", "branch_id": "", "description": "",
+          "step_title": ["decide"], "step_doer": ["6"], "step_tat": ["24"],
+          "step_priority": ["medium"], "step_instructions": [""], "step_fields": [""],
+          "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["1"],
+          "step_yes": ["Yes"], "step_no": ["No"], "step_next": ["0"], "step_fail": [""],
+      }).status_code == 400)
+
+print("\n== and a rejected bill really does go back to step 1 ==")
+_dpage = admin.get(f"/flows/{_fid}").text
+check("the start form asks for the flow's own fields",
+      'name="sf_Bill No"' in _dpage and 'name="sf_Vendor"' in _dpage)
+check("the step list shows where each one routes",
+      "Rejected →" in _dpage and "step 1" in _dpage)
+check("starting without a required field is refused",
+      admin.post(f"/flows/{_fid}/start",
+                 data={"reference": f"INV-{RUN}"}).status_code == 400)
+
+_started = admin.post(f"/flows/{_fid}/start", data={
+    "reference": f"INV-{RUN}", "sf_Bill No": "BILL-77", "sf_Vendor": "Acme"})
+check("the flow starts", _started.status_code == 200, _started.status_code)
+with _SLP() as _d:
+    _inst = _d.scalar(_sp(_FI).where(_FI.reference == f"INV-{RUN}"))
+    _iid = _inst.id
+    check("the start values are stored on the run", "BILL-77" in (_inst.context or ""))
+
+def _open_step(iid):
+    with _SLP() as _d:
+        rows = [t for t in _d.scalars(_sp(_TP).where(_TP.flow_instance_id == iid)).all()
+                if t.status not in (_TSF.COMPLETED, _TSF.CANCELLED)]
+        return (rows[0].id, rows[0].flow_step.position) if rows else (None, None)
+
+amit = login("amit@gcs.local")
+_t, _pos = _open_step(_iid)
+check("step 1 is open", _pos == 1, str(_pos))
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_iid)
+check("step 1 routes to step 2", _pos == 2, str(_pos))
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_iid)
+check("step 2 routes to step 3", _pos == 3, str(_pos))
+
+_dt = amit.get(f"/tasks/{_t}").text
+check("the decision step shows two buttons",
+      'value="pass"' in _dt and 'value="fail"' in _dt)
+check("named as configured", "Verified" in _dt and "Rejected" in _dt)
+_nodec = TestClient(app, follow_redirects=False)
+_nodec.post("/login", data={"email": "amit@gcs.local", "password": "gcs1234"})
+check("submitting without choosing is refused",
+      _nodec.post(f"/tasks/{_t}/submit", data={}).status_code == 400)
+
+amit.post(f"/tasks/{_t}/submit", data={"decision": "fail"})
+_t, _pos = _open_step(_iid)
+check("REJECTED sends it back to step 1", _pos == 1, str(_pos))
+
+# Round again, this time approving.
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_iid)
+amit.post(f"/tasks/{_t}/submit", data={})
+_t, _pos = _open_step(_iid)
+check("back at the decision", _pos == 3, str(_pos))
+amit.post(f"/tasks/{_t}/submit", data={"decision": "pass"})
+_t, _pos = _open_step(_iid)
+check("VERIFIED carries on to step 4", _pos == 4, str(_pos))
+amit.post(f"/tasks/{_t}/submit", data={})
+with _SLP() as _d:
+    check("and step 4 finishes the run",
+          _d.get(_FI, _iid).completed_at is not None)
+check("nothing is left open", _open_step(_iid)[0] is None)
+
+print("\n== flows built before routing existed still run in order ==")
+with _SLP() as _d:
+    _old = _d.scalar(_sp(_FL).where(_FL.name.notlike(f"%{RUN}%")))
+    if _old:
+        check("an older flow has no routes set",
+              all(s.next_step_pos is None for s in _old.steps))
+        _oid = _old.id
+_ostart = admin.post(f"/flows/{_oid}/start", data={"reference": f"LEGACY-{RUN}"})
+check("it still starts", _ostart.status_code == 200)
+with _SLP() as _d:
+    _oi = _d.scalar(_sp(_FI).where(_FI.reference == f"LEGACY-{RUN}"))
+    _oiid = _oi.id
+_t2, _p2 = _open_step(_oiid)
+with _SLP() as _d:
+    _doer2 = _d.get(_TP, _t2).doer.email
+_who = login(_doer2)
+attach(_who, _t2); _who.post(f"/tasks/{_t2}/submit", data={})
+_t3, _p3 = _open_step(_oiid)
+check("and walks to the next step in order", _p3 == (_p2 or 0) + 1,
+      f"{_p2} -> {_p3}")
+
+print("\n== the menu is in the order you asked for ==")
+_nav = admin.get("/").text
+_order = [x for x in ["Operations", "Reports", "Insight", "Setup"] if x in _nav]
+check("Operations, Reports, Insight, Setup",
+      _order == ["Operations", "Reports", "Insight", "Setup"], str(_order))
+_pos_of = {k: _nav.index(f">{k}<") for k in _order}
+check("and they appear in that order on the page",
+      list(_pos_of) == sorted(_pos_of, key=_pos_of.get), str(_pos_of))
+check("Dashboard is above all of them",
+      _nav.index("Dashboard") < min(_pos_of.values()))
+
+print("\n== something confirms what just happened ==")
+# The confirmation is one-shot and lives in the signed session, not the URL.
+_c = TestClient(app, follow_redirects=True)
+_r = _c.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+check("signing in says so", "Signed in" in _r.text and "toast" in _r.text)
+check("and it does not come back on a refresh", "Signed in" not in _c.get("/").text)
+
+_r2 = _c.post("/tasks/new", data={"title": f"toast {RUN}", "doer_id": 6,
+                                  "priority": "medium", "due_at": "2026-11-01T23:59"})
+check("assigning a task says so", "Task assigned" in _r2.text)
+_tid2 = int(re.search(r"/tasks/(\d+)", str(_r2.url)).group(1))
+
+_a = login("amit@gcs.local")
+attach(_a, _tid2)
+check("submitting says so", "Marked complete" in _a.post(
+    f"/tasks/{_tid2}/submit", data={}).text)
+
+check("the toast is switched off for reduced motion",
+      "prefers-reduced-motion" in _c.get("/static/app.css").text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

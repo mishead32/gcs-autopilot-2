@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import flash
 from ..db import get_db
 from ..models import User
 from ..security import verify_password
@@ -28,6 +29,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...),
             request, "login.html", {"error": "Invalid email or password."}, status_code=401
         )
     request.session["uid"] = user.id
+    flash.set(request, "welcome", f"Welcome back, {user.name.split()[0]}")
     return RedirectResponse("/", status_code=303)
 
 

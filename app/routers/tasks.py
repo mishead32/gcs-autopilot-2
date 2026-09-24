@@ -8,6 +8,7 @@ from sqlalchemy import select, or_, update, case, func, delete as sa_delete
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
+from .. import flash
 from .. import clock
 from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
@@ -180,7 +181,10 @@ def new_task_form(request: Request,
     return templates.TemplateResponse(request, "task_new.html", {
         "user": user, "doers": doers, "branches": branches,
         "priorities": list(Priority),
-        "default_due": (clock.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
+        # End of tomorrow by default. Most delegated work is "by end of day",
+        # and making people type a time every single time invites 12:00.
+        "default_due": (clock.now() + timedelta(days=1))
+                       .strftime("%Y-%m-%dT23:59"),
     })
 
 
@@ -255,6 +259,7 @@ async def create_task(
 
     notify.queue_task_assigned(db, task)
     db.commit()
+    flash.set(request, "assigned", f"{doer.name} — due {due_dt:%d %b, %I:%M %p}")
     return RedirectResponse(f"/tasks/{task.id}", status_code=303)
 
 
@@ -286,6 +291,10 @@ def task_detail(task_id: int, request: Request,
         "can_audit": user.has(Right.AUDIT_TASK) and task.status == TaskStatus.SUBMITTED,
         "can_edit": user.has(Right.EDIT_TASK),
         "can_delete": user.has(Right.DELETE_TASK),
+        "can_move_due": user.has(Right.CHANGE_DUE_DATE),
+        # A decision step shows the doer two buttons rather than one.
+        "decision_step": task.flow_step
+                         if (task.flow_step and task.flow_step.is_decision) else None,
         "can_reopen": user.has(Right.REOPEN_TASK)
                       and task.status == TaskStatus.COMPLETED,
         "can_set_audit": user.has(Right.AUDIT_TASK),
@@ -301,7 +310,7 @@ def task_detail(task_id: int, request: Request,
 @router.post("/tasks/{task_id}/edit")
 def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
               doer_id: int = Form(...), priority: str = Form("medium"),
-              due_at: str = Form(...),
+              due_at: str = Form(""),
               user: User = Depends(require_right(Right.EDIT_TASK)),
               db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -318,8 +327,14 @@ def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
     if task.doer_id != new_doer.id:
         changes.append(f"doer → {new_doer.name}")
         task.branch_id = new_doer.branch_id or task.branch_id
-    new_due = datetime.fromisoformat(due_at)
-    if task.due_at != new_due:
+    # Moving a deadline decides whether the work counts as late, which is
+    # half of the doer's score for that source. So the form's value is only
+    # honoured for someone holding the right; for everybody else the field is
+    # disabled in the page AND ignored here, because a disabled field is a
+    # courtesy, not a control.
+    may_move = user.has(Right.CHANGE_DUE_DATE)
+    new_due = datetime.fromisoformat(due_at) if (due_at and may_move) else task.due_at
+    if may_move and task.due_at != new_due:
         changes.append(f"due → {new_due.strftime('%d %b %Y, %I:%M %p')}")
     if task.priority != Priority(priority):
         changes.append(f"priority → {priority}")
@@ -362,7 +377,7 @@ def delete_task(task_id: int, user: User = Depends(require_right(Right.DELETE_TA
 
 # ------------------------------------------------------------- reopen ------
 @router.post("/tasks/{task_id}/reopen")
-def reopen_task(task_id: int, reason: str = Form(""),
+def reopen_task(task_id: int, request: Request, reason: str = Form(""),
                 user: User = Depends(require_right(Right.REOPEN_TASK)),
                 db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -384,6 +399,7 @@ def reopen_task(task_id: int, reason: str = Form(""),
     db.add(TaskComment(task_id=task.id, author_id=user.id,
                        body="Reopened by auditor." + (f" Reason: {reason.strip()}"
                                                       if reason.strip() else "")))
+    flash.set(request, "reopened", task.title)
     notify.queue(db, task.doer, "task_rejected", task,
                  title=task.title, remark=reason.strip() or "Reopened for rework")
     db.commit()
@@ -392,7 +408,8 @@ def reopen_task(task_id: int, reason: str = Form(""),
 
 # -------------------------------------------------------- false marking ----
 @router.post("/tasks/{task_id}/false-mark")
-def false_mark(task_id: int, reason: str = Form(""), confirm: str = Form(""),
+def false_mark(task_id: int, request: Request, reason: str = Form(""),
+               confirm: str = Form(""),
                user: User = Depends(require_right(Right.FALSE_MARK)),
                db: Session = Depends(get_db)):
     """Auditor asserts the doer closed this without actually doing it: −10."""
@@ -429,6 +446,7 @@ def false_mark(task_id: int, reason: str = Form(""), confirm: str = Form(""),
                  remark="Flagged as false marking (−10). "
                         + (reason.strip() or "Please redo and resubmit."))
     db.commit()
+    flash.set(request, "flagged", f"{task.doer.name} — −10 to their score")
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
 
@@ -469,6 +487,20 @@ async def submit_task(task_id: int, request: Request,
     form = await request.form()
     task.completion_note = (form.get("completion_note") or "").strip() or None
 
+    # A decision step ends in one of two outcomes and the doer picks which.
+    # Anything else is recorded as a pass, so an ordinary step routes the
+    # only way it can.
+    step = task.flow_step
+    if step is not None and step.is_decision:
+        choice = (form.get("decision") or "").strip().lower()
+        if choice not in ("pass", "fail"):
+            raise HTTPException(
+                400, f"Choose an outcome: {step.yes_label} or {step.no_label}.")
+        task.decision = choice
+        label = step.yes_label if choice == "pass" else step.no_label
+        db.add(TaskComment(task_id=task.id, author_id=user.id,
+                           body=f"Decision: {label}."))
+
     captured = {k[6:]: v for k, v in form.items() if k.startswith("field_") and v}
     if captured:
         task.captured_data = json.dumps(captured)
@@ -485,6 +517,8 @@ async def submit_task(task_id: int, request: Request,
         db.commit()
         if task.flow_instance_id:
             flow_svc.advance_flow(db, task)
+    flash.set(request, "submitted" if task.requires_audit else "completed",
+              task.title)
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
 
@@ -499,7 +533,8 @@ def close_help_ticket(db: Session, task: Task) -> None:
 
 # --------------------------------------------------------- audit status ----
 @router.post("/tasks/{task_id}/audit-state")
-def set_audit_state(task_id: int, state: str = Form(...), remark: str = Form(""),
+def set_audit_state(task_id: int, request: Request, state: str = Form(...),
+                    remark: str = Form(""),
                     user: User = Depends(require_right(Right.AUDIT_TASK)),
                     db: Session = Depends(get_db)):
     """Set Audit pending / completed / not required on any task, with a remark.
@@ -538,12 +573,13 @@ def set_audit_state(task_id: int, state: str = Form(...), remark: str = Form("")
             body=f"Audit: {AUDIT_LABELS[was]} → {AUDIT_LABELS[new_state]}."
                  + (f" Remark: {remark.strip()}" if remark.strip() else "")))
     db.commit()
+    flash.set(request, "audited", AUDIT_LABELS[new_state])
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
 
 @router.post("/tasks/{task_id}/audit")
-def audit_task(task_id: int, decision: str = Form(...), score: float = Form(8.0),
-               remark: str = Form(""),
+def audit_task(task_id: int, request: Request, decision: str = Form(...),
+               score: float = Form(8.0), remark: str = Form(""),
                user: User = Depends(require_right(Right.AUDIT_TASK)),
                db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -563,6 +599,7 @@ def audit_task(task_id: int, decision: str = Form(...), score: float = Form(8.0)
         task.closed_at = task.audited_at
         close_help_ticket(db, task)
         db.commit()
+        flash.set(request, "audited", f"Approved — {task.title}")
         if task.flow_instance_id:
             flow_svc.advance_flow(db, task)
     else:
@@ -572,6 +609,7 @@ def audit_task(task_id: int, decision: str = Form(...), score: float = Form(8.0)
         notify.queue(db, task.doer, "task_rejected", task,
                      title=task.title, remark=task.audit_remark or "—")
         db.commit()
+        flash.set(request, "reopened", f"Sent back to {task.doer.name}")
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
 

@@ -25,6 +25,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import flash
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
@@ -188,7 +189,8 @@ def followups(request: Request, desk: str = "", day: str = "",
 
 
 @router.post("/followups/{task_id}/tick")
-def tick(task_id: int, day: str = Form(""), desk: str = Form("ea"),
+def tick(task_id: int, request: Request, day: str = Form(""),
+         desk: str = Form("ea"),
          remark: str = Form(""),
          user: User = Depends(current_user), db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -211,9 +213,11 @@ def tick(task_id: int, day: str = Form(""), desk: str = Form("ea"),
         # Ticking again is how you untick — the same button both ways, so
         # a mis-click is one click to undo rather than a support question.
         db.delete(existing)
+        flash.set(request, "unfollowed", task.title)
     else:
         db.add(Followup(org_id=user.org_id, task_id=task.id, day=on,
                         by_id=user.id, remark=remark.strip() or None))
+        flash.set(request, "followed", task.title)
     db.commit()
     return RedirectResponse(f"/followups?desk={desk}&day={on.isoformat()}",
                             status_code=303)

@@ -247,7 +247,7 @@ async def create_rule(
     request: Request,
     title: str = Form(...), details: str = Form(""), doer_id: int = Form(...),
     branch_id: str = Form(""), frequency: str = Form("daily"), day_of: str = Form(""),
-    due_time: str = Form("18:00"), priority: str = Form("medium"),
+    due_time: str = Form("23:59"), priority: str = Form("medium"),
     requires_audit: str = Form(""),
     user: User = Depends(manager_up), db: Session = Depends(get_db),
 ):

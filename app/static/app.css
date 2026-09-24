@@ -533,3 +533,84 @@ td.rowacts .m{display:block;white-space:normal;max-width:150px;margin-top:2px}
   border-radius:20px;background:var(--chip);color:var(--muted);
   font-size:11.5px;font-variant-numeric:tabular-nums}
 .tabs.worktype a.active b{background:rgba(255,255,255,.22);color:#fff}
+
+/* FMS step builder */
+.stepcard{position:relative;padding-top:26px}
+.stepcard .step-no{position:absolute;top:10px;left:16px;font-size:11px;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.stepcard .step-no b{color:var(--brand);font-size:13px}
+.routebox{margin-top:14px;padding:12px 14px;border-radius:9px;
+  background:var(--chip);border:1px solid var(--line)}
+.routebox .m{margin-top:6px}
+.route-chip{display:inline-block;padding:2px 9px;border-radius:20px;
+  background:#e0f2fe;color:#075985;font-size:11.5px;font-weight:600}
+.route-chip.no{background:#fee2e2;color:#991b1b}
+.route-chip.end{background:#dcfce7;color:#166534}
+
+/* A decision step ends in one of two outcomes — both have to look clickable
+   and clearly different, because picking the wrong one reroutes the flow. */
+.decide{margin-top:14px;padding:12px 14px;border-radius:9px;
+  background:var(--chip);border:1px solid var(--line)}
+.decide-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.decide-row .btn{flex:1 1 170px;font-weight:700}
+.btn.yes{background:var(--ok)}
+.btn.yes:hover{background:#15794f}
+
+/* ---- movement ------------------------------------------------------- */
+/* Small, purposeful, and all of it switched off for anyone who has asked
+   their system not to animate. Nothing here is load-bearing: every screen
+   reads correctly with the motion removed. */
+
+@keyframes riseIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(.97)}
+                   to{opacity:1;transform:none}}
+@keyframes drawTick{to{stroke-dashoffset:0}}
+@keyframes popIn{0%{transform:scale(.6)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+
+main{animation:riseIn .32s cubic-bezier(.22,.8,.3,1) both}
+.login-wrap{animation:riseIn .42s cubic-bezier(.22,.8,.3,1) both}
+.login-wrap .card{transition:box-shadow .2s}
+
+/* The one-shot confirmation after assigning, submitting, auditing, ticking */
+.toast{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));
+  left:50%;transform:translateX(-50%);z-index:60;
+  display:flex;align-items:center;gap:11px;
+  background:var(--card);border:1px solid var(--line);border-left:4px solid var(--ok);
+  border-radius:10px;padding:11px 18px 11px 14px;cursor:pointer;
+  box-shadow:0 14px 34px rgba(15,32,44,.18),0 3px 8px rgba(15,32,44,.1);
+  animation:toastIn .3s cubic-bezier(.22,.8,.3,1) both;max-width:min(92vw,460px)}
+.toast.out{opacity:0;transform:translateX(-50%) translateY(-10px);
+  transition:opacity .45s, transform .45s}
+.toast.warn{border-left-color:var(--warn)}
+.toast.bad{border-left-color:var(--bad)}
+.toast .txt{font-size:14px;line-height:1.35}
+.toast .txt .d{display:block;color:var(--muted);font-size:12.5px}
+.toast .tick{flex-shrink:0;width:20px;height:20px;border-radius:50%;
+  background:var(--ok);position:relative;animation:popIn .34s .06s both}
+.toast.warn .tick{background:var(--warn)}
+.toast.bad .tick{background:var(--bad)}
+.toast .tick:after{content:"";position:absolute;left:7px;top:4px;
+  width:4px;height:9px;border:solid #fff;border-width:0 2px 2px 0;
+  transform:rotate(43deg)}
+.toast.bad .tick:after{left:6px;top:5px;width:8px;height:0;
+  border-width:0 0 2px 0;transform:rotate(0)}
+
+/* Ticking a follow-up should feel like ticking something */
+.tickbox{transition:transform .12s, background .15s, border-color .15s}
+.tickbox:active{transform:scale(.9)}
+.tickbox.on{animation:popIn .3s both}
+
+/* Rows and cards settle in rather than snapping */
+.kpi,.rep-card,.tile,.scard{animation:riseIn .34s cubic-bezier(.22,.8,.3,1) both}
+.tile{animation-delay:calc(var(--i,0) * 45ms)}
+.btn{transition:background .15s, transform .1s, box-shadow .15s}
+.btn:active:not([disabled]){transform:translateY(1px)}
+.decide-row .btn{transition:transform .12s, box-shadow .15s}
+.decide-row .btn:hover:not([disabled]){transform:translateY(-2px);
+  box-shadow:0 8px 18px rgba(15,32,44,.16)}
+
+@media (prefers-reduced-motion:reduce){
+  main,.login-wrap,.toast,.toast .tick,.kpi,.rep-card,.tile,.scard,.tickbox.on{
+    animation:none!important}
+  .btn,.tickbox,.decide-row .btn{transition:none!important}
+}

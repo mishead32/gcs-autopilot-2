@@ -48,3 +48,6 @@ templates.env.globals["now"] = datetime.utcnow
 
 from .models import PRIORITY_WEIGHT as _PW          # noqa: E402
 templates.env.globals["PRIORITY_WEIGHT"] = _PW
+
+from . import flash as _flash                       # noqa: E402
+templates.env.globals["pop_flash"] = _flash.pop

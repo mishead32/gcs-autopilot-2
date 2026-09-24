@@ -18,6 +18,20 @@
         </div>
         {% if s.instructions %}<div class="m">{{ s.instructions }}</div>{% endif %}
         {% if s.capture_fields %}<div class="m">Captures: {{ s.capture_fields }}</div>{% endif %}
+        <div class="m" style="margin-top:4px">
+          {% if s.is_decision %}
+            <span class="route-chip">{{ s.yes_label }} →
+              {% if s.next_step_pos == 0 %}finish{% elif s.next_step_pos %}step {{ s.next_step_pos }}{% else %}next{% endif %}</span>
+            <span class="route-chip no">{{ s.no_label }} →
+              {% if s.fail_step_pos == 0 %}finish{% elif s.fail_step_pos %}step {{ s.fail_step_pos }}{% else %}next{% endif %}</span>
+          {% elif s.next_step_pos == 0 %}
+            <span class="route-chip end">ends the flow</span>
+          {% elif s.next_step_pos %}
+            <span class="route-chip">→ step {{ s.next_step_pos }}</span>
+          {% else %}
+            <span class="route-chip">→ next step</span>
+          {% endif %}
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -30,6 +44,15 @@
       <form method="post" action="/flows/{{ flow.id }}/start" style="margin-top:12px">
         <label>Reference</label>
         <input name="reference" required placeholder="Member name / lead id / invoice no.">
+        {% for f in flow.start_field_list %}
+        <label>{{ f }}</label>
+        <input name="sf_{{ f }}" required placeholder="{{ f }}">
+        {% endfor %}
+        {% if flow.start_field_list %}
+        <div class="m" style="margin-top:4px">
+          These are carried through every step of this run.
+        </div>
+        {% endif %}
         <label>First step doer (override)</label>
         <select name="first_doer"><option value="">Use default</option>
           {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}

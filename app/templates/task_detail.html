@@ -84,11 +84,27 @@
         {% endfor %}
         <label>Completion note</label>
         <textarea name="completion_note" placeholder="What did you do? Any issues?"></textarea>
+        {% set blocked = task.requires_attachment and not task.attachments %}
+        {% if decision_step %}
+        <div class="decide">
+          <div class="m">This step has two outcomes. Pick the one that happened —
+            each sends the flow a different way.</div>
+          <div class="decide-row">
+            <button class="btn yes" name="decision" value="pass" {{ 'disabled' if blocked }}
+              title="{{ 'Attach proof first' if blocked else '' }}">
+              ✓ {{ decision_step.yes_label }}</button>
+            <button class="btn danger" name="decision" value="fail" {{ 'disabled' if blocked }}
+              title="{{ 'Attach proof first' if blocked else '' }}">
+              ✕ {{ decision_step.no_label }}</button>
+          </div>
+        </div>
+        {% else %}
         <div style="margin-top:12px">
-          <button class="btn" {{ 'disabled' if task.requires_attachment and not task.attachments }}
-            title="{{ 'Attach proof first' if task.requires_attachment and not task.attachments else '' }}">
+          <button class="btn" {{ 'disabled' if blocked }}
+            title="{{ 'Attach proof first' if blocked else '' }}">
             {{ 'Submit for audit' if task.requires_audit else 'Mark complete' }}</button>
         </div>
+        {% endif %}
       </form>
 
       <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
@@ -218,8 +234,19 @@
             <option value="{{ pr.value }}" {{ 'selected' if pr == task.priority }}>{{ pr.value|title }} — {{ PRIORITY_WEIGHT[pr] }}×</option>
             {% endfor %}</select></div>
         </div>
-        <label>Deadline</label>
-        <input type="datetime-local" name="due_at" value="{{ task.due_at.strftime('%Y-%m-%dT%H:%M') }}" required>
+        <label>Planned date &amp; time</label>
+        {% if can_move_due %}
+        <input type="datetime-local" name="due_at"
+               value="{{ task.due_at.strftime('%Y-%m-%dT%H:%M') }}" required>
+        {% else %}
+        <input type="datetime-local" value="{{ task.due_at.strftime('%Y-%m-%dT%H:%M') }}"
+               disabled title="Only someone with the 'Change a task's planned date' right can move this">
+        <div class="m" style="margin-top:4px">
+          Locked. Moving a deadline decides whether the work counts as late,
+          which is half of this person's score — so it needs the
+          “Change a task's planned date” right. Ask an admin.
+        </div>
+        {% endif %}
         <div style="margin-top:12px"><button class="btn">Save changes</button></div>
       </form>
       {% endif %}

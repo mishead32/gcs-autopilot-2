@@ -35,12 +35,24 @@ ADDITIONS = {
         ("audit_state", "VARCHAR(20) DEFAULT 'NOT_REQUIRED'"),
         ("audited_at", "DATETIME"),
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+        ("decision", "VARCHAR(10)"),
     ],
     "recurring_rules": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
     ],
+    "flows": [
+        ("start_fields", "TEXT"),
+    ],
     "flow_steps": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+        # Left NULL on purpose for flows built before routing existed — the
+        # engine reads NULL as "whatever comes next in order", so every
+        # existing flow keeps running exactly as it did.
+        ("next_step_pos", "INTEGER"),
+        ("fail_step_pos", "INTEGER"),
+        ("is_decision", "BOOLEAN DEFAULT 0"),
+        ("pass_label", "VARCHAR(60)"),
+        ("fail_label", "VARCHAR(60)"),
     ],
 }
 

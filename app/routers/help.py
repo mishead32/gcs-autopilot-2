@@ -62,7 +62,7 @@ def help_form(request: Request, user: User = Depends(current_user),
     ).all()
     return templates.TemplateResponse(request, "help_new.html", {
         "user": user, "colleagues": colleagues, "priorities": list(Priority),
-        "default_due": (clock.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
+        "default_due": (clock.now() + timedelta(days=1)).strftime("%Y-%m-%dT23:59"),
     })
 
 

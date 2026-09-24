@@ -120,6 +120,11 @@ class Right(str, enum.Enum):
     # right here that widens what someone can SEE rather than what they can
     # do, which is why it is not handed out with any role by default.
     VIEW_ALL_REPORTS = "view_all_reports"
+    # Moving a deadline changes whether the work was late, which is half of
+    # every EM score. Kept as its own right so it can be held by the few
+    # people answerable for the numbers rather than by anyone who may edit
+    # a task's wording.
+    CHANGE_DUE_DATE = "change_due_date"
 
 
 RIGHT_LABELS = {
@@ -135,6 +140,7 @@ RIGHT_LABELS = {
     Right.FOLLOWUP_CHECKLIST_FMS: "Follow up Checklist & FMS (PC)",
     Right.FOLLOWUP_DELEGATION: "Follow up Delegation (EA)",
     Right.VIEW_ALL_REPORTS: "See everyone's reports",
+    Right.CHANGE_DUE_DATE: "Change a task's planned date",
 }
 
 # What each role gets by default when a user is created.
@@ -340,11 +346,19 @@ class Flow(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+    # Comma separated labels asked on the start form, on top of the reference.
+    # Every flow needs different things to get going — a bill number here, a
+    # member name there — so the flow itself carries its own question list.
+    start_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     steps: Mapped[list["FlowStep"]] = relationship(
         back_populates="flow", order_by="FlowStep.position", cascade="all, delete-orphan"
     )
     branch: Mapped[Branch | None] = relationship()
+
+    @property
+    def start_field_list(self) -> list[str]:
+        return [f.strip() for f in (self.start_fields or "").split(",") if f.strip()]
 
 
 class FlowStep(Base):
@@ -363,8 +377,40 @@ class FlowStep(Base):
     # comma separated field labels the doer must fill in on completion
     capture_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Where the flow goes once this step is closed. Stored as a POSITION
+    # within the flow rather than a step id, because a whole flow is built in
+    # one form submission and the ids do not exist yet while it is being
+    # filled in.
+    #
+    #   a number  -> jump to that step (which may be earlier: a rework loop)
+    #   0         -> the flow is finished here
+    #   NULL      -> the old behaviour, "whatever step comes next in order",
+    #                so flows built before routing existed keep working
+    next_step_pos: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # A decision step ends in one of two outcomes, chosen by the person doing
+    # it. Each outcome routes somewhere of its own — that is what lets
+    # "rejected" go back to step 1 while "verified" carries on.
+    is_decision: Mapped[bool] = mapped_column(Boolean, default=False)
+    pass_label: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    fail_label: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    fail_step_pos: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     flow: Mapped[Flow] = relationship(back_populates="steps")
     default_doer: Mapped[User | None] = relationship()
+
+    @property
+    def yes_label(self) -> str:
+        return (self.pass_label or "").strip() or "Approved"
+
+    @property
+    def no_label(self) -> str:
+        return (self.fail_label or "").strip() or "Rejected"
+
+    def route(self, outcome: str = "pass") -> int | None:
+        """Which position to go to next. 0 means the flow ends here."""
+        return self.fail_step_pos if (self.is_decision and outcome == "fail") \
+            else self.next_step_pos
 
 
 class FlowInstance(Base):
@@ -383,6 +429,12 @@ class FlowInstance(Base):
 
     flow: Mapped[Flow] = relationship()
     started_by: Mapped[User] = relationship()
+    # Every task this run has spawned. Read-only: tasks are created by the
+    # engine, never by appending here. Progress counts these rather than
+    # positions, because a flow that loops back has no "position reached".
+    tasks: Mapped[list["Task"]] = relationship(
+        primaryjoin="FlowInstance.id == foreign(Task.flow_instance_id)",
+        viewonly=True, order_by="Task.created_at")
 
 
 # --------------------------------------------------------------------------
@@ -430,6 +482,9 @@ class Task(Base):
     audited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     completion_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # On a decision step: which of the two outcomes the doer chose.
+    # "pass" / "fail", or NULL on an ordinary step.
+    decision: Mapped[str | None] = mapped_column(String(10), nullable=True)
     captured_data: Mapped[str] = mapped_column(Text, default="{}")
 
     # false marking: auditor says the doer closed this without really doing it
@@ -564,7 +619,7 @@ class RecurringRule(Base):
     frequency: Mapped[Recurrence] = mapped_column(Enum(Recurrence), default=Recurrence.DAILY)
     # weekly -> 0=Mon..6=Sun ; monthly -> day of month
     day_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    due_time: Mapped[str] = mapped_column(String(5), default="18:00")   # HH:MM local
+    due_time: Mapped[str] = mapped_column(String(5), default="23:59")   # HH:MM local
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

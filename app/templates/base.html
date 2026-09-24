@@ -16,17 +16,36 @@
   </div>
 
   <nav>
+    {# 1 · Dashboard — and the two things every single person uses daily #}
     <a class="{{ 'active' if p == '/' }}" href="/" title="Dashboard">
       <span class="ic">▤</span><span class="lb">Dashboard</span></a>
     <a class="{{ 'active' if p == '/tasks' }}" href="/tasks?scope=mine&status=open" title="My Tasks">
       <span class="ic">✓</span><span class="lb">My Tasks</span></a>
     <a class="{{ 'active' if p.startswith('/help') }}" href="/help" title="Help Desk">
       <span class="ic">☏</span><span class="lb">Help Desk</span></a>
-    {% if user.can_follow_up or user.can_manage %}
-    <a class="{{ 'active' if p.startswith('/followups') }}" href="/followups" title="Follow-ups">
-      <span class="ic">☎</span><span class="lb">Follow-ups</span></a>
+
+    {# 2 · Operations — running the work #}
+    {% if user.can_manage or user.can_follow_up %}
+      <div class="side-sec"><span class="lb">Operations</span></div>
+      {% if user.can_follow_up or user.can_manage %}
+      <a class="{{ 'active' if p.startswith('/followups') }}" href="/followups" title="Follow-ups">
+        <span class="ic">☎</span><span class="lb">Follow-ups</span></a>
+      {% endif %}
+      {% if user.can_manage %}
+      <a href="/tasks?scope=assigned&status=open" title="Work you delegated to other people">
+        <span class="ic">➜</span><span class="lb">Delegated by me</span></a>
+      <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
+        <span class="ic">⇉</span><span class="lb">FMS</span></a>
+      <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
+        <span class="ic">☑</span><span class="lb">Checklist</span></a>
+      <a href="/tasks?scope=all&status=audit_pending" title="Audit pending">
+        <span class="ic">⚖</span><span class="lb">Audit pending</span></a>
+      <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
+        <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
+      {% endif %}
     {% endif %}
 
+    {# 3 · Reports — the numbers, filtered #}
     <div class="side-sec"><span class="lb">Reports</span></div>
     <a class="{{ 'active' if p == '/reports' }}" href="/reports" title="All reports">
       <span class="ic">▤</span><span class="lb">All reports</span></a>
@@ -47,19 +66,8 @@
       <span class="ic">◉</span><span class="lb">EM score report</span></a>
     {% endif %}
 
+    {# 4 · Insight — the live board and the outgoing trail #}
     {% if user.can_manage %}
-      <div class="side-sec"><span class="lb">Operations</span></div>
-      <a href="/tasks?scope=assigned&status=open" title="Work you delegated to other people">
-        <span class="ic">➜</span><span class="lb">Delegated by me</span></a>
-      <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
-        <span class="ic">⇉</span><span class="lb">FMS</span></a>
-      <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
-        <span class="ic">☑</span><span class="lb">Checklist</span></a>
-      <a href="/tasks?scope=all&status=audit_pending" title="Audit pending">
-        <span class="ic">⚖</span><span class="lb">Audit pending</span></a>
-      <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
-        <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
-
       <div class="side-sec"><span class="lb">Insight</span></div>
       <a class="{{ 'active' if p == '/stats' }}" href="/stats" title="Performance">
         <span class="ic">◉</span><span class="lb">Performance</span></a>
@@ -71,6 +79,7 @@
       {% endif %}
     {% endif %}
 
+    {# 5 · Setup — the things you configure once #}
     {% if user.has_manage_user %}
       <div class="side-sec"><span class="lb">Setup</span></div>
       <a class="{{ 'active' if p.startswith('/admin/users') }}" href="/admin/users" title="Users">
@@ -98,6 +107,16 @@
   <span class="crumb">{{ user.branch.name if user.branch else 'All branches' }}</span>
 </header>
 <div id="scrim"></div>
+{% endif %}
+
+{# A confirmation for whatever just happened, shown once. #}
+{% set msg = pop_flash(request) %}
+{% if msg %}
+<div class="toast {{ msg.tone }}" role="status">
+  <span class="tick" aria-hidden="true"></span>
+  <span class="txt"><strong>{{ msg.text }}</strong>{% if msg.detail %}
+    <span class="d">{{ msg.detail }}</span>{% endif %}</span>
+</div>
 {% endif %}
 
 <main>
@@ -129,6 +148,17 @@
 })();
 </script>
 {% endif %}
+<script>
+// The toast takes itself away. Removed from the page rather than just faded,
+// so it can never sit invisibly over a button.
+(function(){
+  var t = document.querySelector('.toast');
+  if (!t) return;
+  setTimeout(function(){ t.classList.add('out'); }, 3200);
+  setTimeout(function(){ t.remove(); }, 3800);
+  t.addEventListener('click', function(){ t.remove(); });
+})();
+</script>
 <script src="/static/benchmark.js"></script>
 <script src="/static/upload.js"></script>
 </body>
