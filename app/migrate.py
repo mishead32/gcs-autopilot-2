@@ -42,6 +42,7 @@ ADDITIONS = {
     ],
     "flows": [
         ("start_fields", "TEXT"),
+        ("start_form", "TEXT"),
     ],
     "flow_steps": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),

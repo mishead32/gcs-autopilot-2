@@ -1,0 +1,73 @@
+{# The start-form builder: the questions asked when somebody kicks off a run
+   of this flow. Used by both the create and the edit page so there is one
+   definition of what a question is. #}
+{% macro start_form_builder(field_types, existing=none) %}
+<h2 style="margin-top:24px">Start form</h2>
+<p class="m" style="margin:-6px 0 12px">
+  The questions asked when this flow is started. Every flow needs different
+  things to get going — a bill number here, a member name there — and whatever
+  you add is carried through every step of the run. Leave it empty to ask only
+  for the reference.
+</p>
+
+<div id="sfields"></div>
+<button type="button" class="btn ghost sm" onclick="addField()">+ Add a question</button>
+
+<template id="sftpl">
+<div class="card sfrow" style="background:var(--chip)">
+  <div class="row">
+    <div style="flex:2"><label>Question</label>
+      <input name="sf_label" placeholder="e.g. Bill No"></div>
+    <div style="max-width:190px"><label>Answer type</label>
+      <select name="sf_type" class="sftype">
+        {% for k, lbl in field_types.items() %}
+        <option value="{{ k }}">{{ lbl }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="max-width:140px"><label>Must be filled</label>
+      <select name="sf_required">
+        <option value="1">Yes</option>
+        <option value="0">Optional</option>
+      </select></div>
+  </div>
+  <div class="sfopts" hidden>
+    <label>Choices — separate them with commas</label>
+    <input name="sf_options" placeholder="e.g. Electricity, Water, Rent, Internet">
+  </div>
+  <button type="button" class="btn ghost sm" style="margin-top:10px"
+          onclick="this.closest('.sfrow').remove()">Remove question</button>
+</div>
+</template>
+
+<script>
+function wireField(row){
+  // The choices box only makes sense for a list question. It is hidden, not
+  // disabled, so every row still posts one value for every name and the
+  // server's parallel lists stay lined up with the questions.
+  var t = row.querySelector('.sftype'), o = row.querySelector('.sfopts');
+  function apply(){ o.hidden = t.value !== 'select'; }
+  t.addEventListener('change', apply);
+  apply();
+}
+
+function addField(values){
+  var frag = document.getElementById('sftpl').content.cloneNode(true);
+  var row = frag.querySelector('.sfrow');
+  if (values) {
+    row.querySelector('input[name=sf_label]').value = values.label || '';
+    row.querySelector('select[name=sf_type]').value = values.type || 'text';
+    row.querySelector('select[name=sf_required]').value = values.required ? '1' : '0';
+    row.querySelector('input[name=sf_options]').value = (values.options || []).join(', ');
+  }
+  document.getElementById('sfields').appendChild(frag);
+  wireField(row);
+  return row;
+}
+
+(function(){
+  var existing = {{ (existing or [])|tojson }};
+  existing.forEach(addField);
+  if (!existing.length) addField();
+})();
+</script>
+{% endmacro %}

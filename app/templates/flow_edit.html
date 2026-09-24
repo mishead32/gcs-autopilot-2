@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "_startform.html" import start_form_builder %}
+{% block title %}Edit {{ flow.name }} · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
+<h1>Edit flow</h1>
+<p class="sub">Name, branch, description and the questions asked when a run starts.</p>
+
+<form method="post" action="/flows/{{ flow.id }}/edit" class="card" style="max-width:920px">
+  <div class="row">
+    <div><label>Flow name</label>
+      <input name="name" value="{{ flow.name }}" required></div>
+    <div><label>Branch</label>
+      <select name="branch_id"><option value="">All branches</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}" {{ 'selected' if b.id == flow.branch_id }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+  </div>
+  <label>Description</label>
+  <textarea name="description" style="min-height:56px">{{ flow.description or '' }}</textarea>
+
+  {{ start_form_builder(field_types, flow.start_form_fields) }}
+
+  <div class="note-box">
+    <strong>Steps are not edited here.</strong>
+    A run already in progress points at its steps by number, so renumbering
+    them underneath live work would reroute tasks already on somebody's plate.
+    To change the steps, build a new version of the flow.
+  </div>
+
+  <div style="margin-top:20px">
+    <button class="btn">Save flow</button>
+    <a class="btn ghost" href="/flows/{{ flow.id }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

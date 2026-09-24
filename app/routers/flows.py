@@ -4,13 +4,45 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
+import json
+
 from ..db import get_db
 from ..deps import current_user, manager_up, require_right
-from ..models import Flow, FlowStep, FlowInstance, Task, User, Branch, Priority, Right
+from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Priority,
+                      Right, FIELD_TYPES)
 from ..services import flows as flow_svc
 from ..templating import templates
 
 router = APIRouter()
+
+
+def _read_start_form(form) -> str | None:
+    """Turn the builder's parallel arrays into the stored JSON.
+
+    Rows with no label are skipped, so an empty row somebody added and never
+    filled in does not become a blank question on the start page.
+    """
+    labels = form.getlist("sf_label")
+    types = form.getlist("sf_type")
+    opts = form.getlist("sf_options")
+    reqs = form.getlist("sf_required")
+    rows = []
+    for i, label in enumerate(labels):
+        label = (label or "").strip()
+        if not label:
+            continue
+        kind = types[i] if i < len(types) and types[i] in FIELD_TYPES else "text"
+        choices = []
+        if kind == "select":
+            raw = opts[i] if i < len(opts) else ""
+            choices = [o.strip() for o in raw.split(",") if o.strip()]
+            if not choices:
+                raise HTTPException(
+                    400, f"'{label}' is a list question, so it needs some "
+                         "choices — type them separated by commas.")
+        rows.append({"label": label, "type": kind, "options": choices,
+                     "required": (reqs[i] != "0") if i < len(reqs) else True})
+    return json.dumps(rows) if rows else None
 
 
 @router.get("/flows", response_class=HTMLResponse)
@@ -41,6 +73,7 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
         "user": user, "branches": branches, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.SPAN_UNITS, "span_choices": clock.SPAN_CHOICES,
+        "field_types": FIELD_TYPES,
     })
 
 
@@ -53,7 +86,7 @@ async def create_flow(request: Request, user: User = Depends(require_right(Right
         branch_id=int(form["branch_id"]) if form.get("branch_id") else None,
         name=form["name"].strip(),
         description=(form.get("description") or "").strip() or None,
-        start_fields=(form.get("start_fields") or "").strip() or None,
+        start_form=_read_start_form(form),
     )
     db.add(flow)
     db.flush()
@@ -169,6 +202,50 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
     })
 
 
+@router.get("/flows/{flow_id}/edit", response_class=HTMLResponse)
+def edit_flow_form(flow_id: int, request: Request,
+                   user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                   db: Session = Depends(get_db)):
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.org_id != user.org_id:
+        raise HTTPException(404, "Flow not found")
+    branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)).all()
+    return templates.TemplateResponse(request, "flow_edit.html", {
+        "user": user, "flow": flow, "branches": branches,
+        "field_types": FIELD_TYPES,
+    })
+
+
+@router.post("/flows/{flow_id}/edit")
+async def edit_flow(flow_id: int, request: Request,
+                    user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                    db: Session = Depends(get_db)):
+    """Change a flow's name, branch, description and start form.
+
+    Steps are deliberately not editable here. A run in progress points at
+    its steps by position, so re-numbering them underneath a live run would
+    reroute work already on somebody's plate — that needs its own careful
+    screen rather than being bolted onto this one.
+    """
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.org_id != user.org_id:
+        raise HTTPException(404, "Flow not found")
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Give the flow a name.")
+    flow.name = name
+    flow.description = (form.get("description") or "").strip() or None
+    flow.branch_id = int(form["branch_id"]) if form.get("branch_id") else None
+    flow.start_form = _read_start_form(form)
+    # The old comma line is superseded once a real form exists, so it cannot
+    # come back and add duplicate questions later.
+    if flow.start_form:
+        flow.start_fields = None
+    db.commit()
+    return RedirectResponse(f"/flows/{flow.id}", status_code=303)
+
+
 @router.post("/flows/{flow_id}/start")
 async def start_flow(flow_id: int, request: Request,
                      user: User = Depends(require_right(Right.CREATE_TASK)),
@@ -190,11 +267,27 @@ async def start_flow(flow_id: int, request: Request,
     # member name — goes straight into the run's context, where every later
     # step can read it.
     context = {}
-    for label in flow.start_field_list:
-        value = (form.get(f"sf_{label}") or "").strip()
+    for field in flow.start_form_fields:
+        value = (form.get(field["key"]) or "").strip()
         if not value:
-            raise HTTPException(400, f"'{label}' is needed to start this flow.")
-        context[label] = value
+            if field["required"]:
+                raise HTTPException(
+                    400, f"'{field['label']}' is needed to start this flow.")
+            continue
+        if field["type"] == "number":
+            try:
+                float(value)
+            except ValueError:
+                raise HTTPException(
+                    400, f"'{field['label']}' should be a number — got '{value}'.")
+        if field["type"] == "yesno" and value not in ("Yes", "No"):
+            raise HTTPException(
+                400, f"'{field['label']}' should be Yes or No — got '{value}'.")
+        if field["type"] == "select" and value not in field["options"]:
+            raise HTTPException(
+                400, f"'{value}' is not one of the choices for "
+                     f"'{field['label']}'.")
+        context[field["label"]] = value
 
     inst = flow_svc.start_flow(db, flow, reference, user, overrides, context)
     return RedirectResponse(f"/flows/instance/{inst.id}", status_code=303)

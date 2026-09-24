@@ -614,3 +614,7 @@ main{animation:riseIn .32s cubic-bezier(.22,.8,.3,1) both}
     animation:none!important}
   .btn,.tickbox,.decide-row .btn{transition:none!important}
 }
+
+.note-box{margin-top:18px;border-radius:9px;padding:11px 14px;font-size:13px;
+  background:#fff8e1;border:1px solid #f0d999;color:#7a5b00}
+.sfrow{padding:14px 16px}

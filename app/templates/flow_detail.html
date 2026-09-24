@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <p class="sub"><a href="/flows">&larr; FMS</a></p>
-<h1>{{ flow.name }}</h1>
+<div class="page-head">
+  <div><h1>{{ flow.name }}</h1></div>
+  {% if user.has_manage_flow %}
+  <a class="btn ghost" href="/flows/{{ flow.id }}/edit">Edit flow &amp; start form</a>
+  {% endif %}
+</div>
 <p class="sub">{{ flow.description or '' }} {% if flow.branch %}· {{ flow.branch.name }}{% endif %}</p>
 
 <div class="grid g2">
@@ -45,11 +50,31 @@
       <form method="post" action="/flows/{{ flow.id }}/start" style="margin-top:12px">
         <label>Reference</label>
         <input name="reference" required placeholder="Member name / lead id / invoice no.">
-        {% for f in flow.start_field_list %}
-        <label>{{ f }}</label>
-        <input name="sf_{{ f }}" required placeholder="{{ f }}">
+        {% for f in flow.start_form_fields %}
+        <label>{{ f.label }}{% if not f.required %}
+          <span class="m">(optional)</span>{% endif %}</label>
+        {% if f.type == 'textarea' %}
+          <textarea name="{{ f.key }}" {{ 'required' if f.required }}
+                    style="min-height:60px"></textarea>
+        {% elif f.type == 'number' %}
+          <input type="number" step="any" name="{{ f.key }}" {{ 'required' if f.required }}>
+        {% elif f.type == 'date' %}
+          <input type="date" name="{{ f.key }}" {{ 'required' if f.required }}>
+        {% elif f.type == 'select' %}
+          <select name="{{ f.key }}" {{ 'required' if f.required }}>
+            <option value="">— choose —</option>
+            {% for o in f.options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+          </select>
+        {% elif f.type == 'yesno' %}
+          <select name="{{ f.key }}" {{ 'required' if f.required }}>
+            <option value="">— choose —</option>
+            <option value="Yes">Yes</option><option value="No">No</option>
+          </select>
+        {% else %}
+          <input name="{{ f.key }}" {{ 'required' if f.required }} placeholder="{{ f.label }}">
+        {% endif %}
         {% endfor %}
-        {% if flow.start_field_list %}
+        {% if flow.start_form_fields %}
         <div class="m" style="margin-top:4px">
           These are carried through every step of this run.
         </div>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_startform.html" import start_form_builder %}
 {% block title %}New FMS flow · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <h1>New FMS flow</h1>
@@ -33,13 +34,7 @@
   <label>Description</label>
   <textarea name="description" style="min-height:56px"></textarea>
 
-  <label style="margin-top:16px">What to ask when this flow is started (comma separated)</label>
-  <input name="start_fields" placeholder="e.g. Bill No, Vendor, Amount">
-  <div class="m" style="margin-top:4px">
-    Every flow needs different things to get going. Whatever you list here is
-    asked on the start form and carried through every step. Leave it blank to
-    ask only for the reference.
-  </div>
+  {{ start_form_builder(field_types) }}
 
   <h2 style="margin-top:24px">Steps</h2>
   <div id="steps"></div>

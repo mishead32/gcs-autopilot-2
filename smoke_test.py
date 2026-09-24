@@ -1717,7 +1717,10 @@ from app.models import Flow as _FL, FlowStep as _FS, FlowInstance as _FI, TaskSt
 # The user's own example: verify -> submit -> decide -> (rejected: back to 1)
 _made = admin.post("/flows/new", data={
     "name": f"Bill verification {RUN}", "branch_id": "", "description": "",
-    "start_fields": "Bill No, Vendor",
+    "sf_label": ["Bill No", "Vendor", "Bill type"],
+    "sf_type": ["text", "text", "select"],
+    "sf_required": ["1", "1", "1"],
+    "sf_options": ["", "", "Electricity, Water, Rent"],
     "step_title": ["Verify the bill as per checklist", "Submit to the manager",
                    "Verified or rejected?", "Send to CMD for approval"],
     "step_doer": ["6", "6", "6", "6"],
@@ -1744,8 +1747,13 @@ with _SLP() as _d:
     check("verified routes to step 4", _steps[3].next_step_pos == 4)
     check("rejected routes back to step 1", _steps[3].fail_step_pos == 1)
     check("step 4 ends the flow", _steps[4].next_step_pos == 0)
-    check("the flow carries its own start fields",
-          _flow.start_field_list == ["Bill No", "Vendor"])
+    check("the flow carries its own start questions",
+          _flow.start_field_list == ["Bill No", "Vendor", "Bill type"],
+          str(_flow.start_field_list))
+    _bt = _flow.start_form_fields[2]
+    check("and one of them is a list question", _bt["type"] == "select")
+    check("with the choices typed in",
+          _bt["options"] == ["Electricity", "Water", "Rent"], str(_bt["options"]))
 
 check("a route to a step that does not exist is refused",
       admin.post("/flows/new", data={
@@ -1766,8 +1774,10 @@ check("a decision step with only one outcome is refused",
 
 print("\n== and a rejected bill really does go back to step 1 ==")
 _dpage = admin.get(f"/flows/{_fid}").text
-check("the start form asks for the flow's own fields",
-      'name="sf_Bill No"' in _dpage and 'name="sf_Vendor"' in _dpage)
+check("the start form asks the flow's own questions",
+      "Bill No" in _dpage and "Vendor" in _dpage and "Bill type" in _dpage)
+check("and renders the list one as a dropdown",
+      '<option value="Electricity">' in _dpage)
 check("the step list shows where each one routes",
       "Rejected →" in _dpage and "step 1" in _dpage)
 check("starting without a required field is refused",
@@ -1775,7 +1785,8 @@ check("starting without a required field is refused",
                  data={"reference": f"INV-{RUN}"}).status_code == 400)
 
 _started = admin.post(f"/flows/{_fid}/start", data={
-    "reference": f"INV-{RUN}", "sf_Bill No": "BILL-77", "sf_Vendor": "Acme"})
+    "reference": f"INV-{RUN}", "sf0": "BILL-77", "sf1": "Acme",
+    "sf2": "Electricity"})
 check("the flow starts", _started.status_code == 200, _started.status_code)
 with _SLP() as _d:
     _inst = _d.scalar(_sp(_FI).where(_FI.reference == f"INV-{RUN}"))
@@ -1908,7 +1919,7 @@ check("the builder asks what to count the TAT from",
 print("\n== a step can hang its date off another step's date ==")
 from app.models import Flow as _FLT, FlowInstance as _FIT, Task as _TKT
 _made2 = admin.post("/flows/new", data={
-    "name": f"TAT units {RUN}", "branch_id": "", "description": "", "start_fields": "",
+    "name": f"TAT units {RUN}", "branch_id": "", "description": "",
     "step_title": ["Raise it", "Chase it", "Close it"],
     "step_doer": ["6", "6", "6"], "step_instructions": ["", "", ""],
     "step_fields": ["", "", ""], "step_audit": ["0", "0", "0"],
@@ -2015,6 +2026,140 @@ check("an existing database upgrades with its TAT numbers intact",
       _rows and all(h == v and u == "hours" for h, v, u in _rows),
       _out.stderr[-200:] or str(_rows[:4]))
 check("and the upgrade is safe to run twice", bool(_rows))
+
+print("\n== the start form is a real form builder ==")
+_nb = admin.get("/flows/new").text
+check("the builder is on the create page", 'name="sf_label"' in _nb)
+for _t, _lbl in [("text", "Short text"), ("textarea", "Long text"),
+                 ("number", "Number"), ("date", "Date"),
+                 ("select", "Choose from a list"), ("yesno", "Yes / No")]:
+    check(f"it offers '{_lbl}'", f'value="{_t}"' in _nb and _lbl in _nb)
+check("a question can be made optional", 'name="sf_required"' in _nb)
+check("and a list question takes its choices", 'name="sf_options"' in _nb)
+
+check("a list question with no choices is refused",
+      admin.post("/flows/new", data={
+          "name": f"no choices {RUN}", "branch_id": "", "description": "",
+          "sf_label": ["Type"], "sf_type": ["select"], "sf_required": ["1"],
+          "sf_options": [""],
+          "step_title": ["one"], "step_doer": ["6"], "step_tat": ["1"],
+          "step_tat_unit": ["days"], "step_priority": ["medium"],
+          "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+          "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+          "step_no": [""], "step_next": ["0"], "step_fail": [""],
+          "step_due_from": [""]}).status_code == 400)
+
+print("\n== every answer type is checked when a run starts ==")
+_tf = admin.post("/flows/new", data={
+    "name": f"Typed start {RUN}", "branch_id": "", "description": "",
+    "sf_label": ["Amount", "Pay by", "Urgent?", "Notes"],
+    "sf_type": ["number", "date", "yesno", "textarea"],
+    "sf_required": ["1", "1", "1", "0"],
+    "sf_options": ["", "", "", ""],
+    "step_title": ["Do it"], "step_doer": ["6"], "step_tat": ["1"],
+    "step_tat_unit": ["days"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+    "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+    "step_no": [""], "step_next": ["0"], "step_fail": [""], "step_due_from": [""]})
+check("a typed start form saves", _tf.status_code == 200, _tf.status_code)
+with _SLP() as _d:
+    _tflow = _d.scalar(_sp(_FLT).where(_FLT.name == f"Typed start {RUN}"))
+    _tfid = _tflow.id
+    check("the types are stored",
+          [f["type"] for f in _tflow.start_form_fields] ==
+          ["number", "date", "yesno", "textarea"])
+    check("and the optional one is marked optional",
+          _tflow.start_form_fields[3]["required"] is False)
+
+_sp_page = admin.get(f"/flows/{_tfid}").text
+check("a number question renders as a number box", 'type="number"' in _sp_page)
+check("a date question renders as a date box", 'type="date"' in _sp_page)
+check("a yes/no question renders as a dropdown", '<option value="Yes">' in _sp_page)
+check("a long-text question renders as a textarea", "<textarea" in _sp_page)
+
+_ok = {"reference": f"TYPED-{RUN}", "sf0": "1500", "sf1": "2026-12-01",
+       "sf2": "Yes", "sf3": ""}
+check("a letter in a number box is refused",
+      admin.post(f"/flows/{_tfid}/start",
+                 data={**_ok, "sf0": "abcd"}).status_code == 400)
+check("something that is not Yes or No is refused",
+      admin.post(f"/flows/{_tfid}/start",
+                 data={**_ok, "sf2": "Maybe"}).status_code == 400)
+check("a choice that is not on the list is refused",
+      admin.post(f"/flows/{_fid}/start",
+                 data={"reference": f"BAD-{RUN}", "sf0": "B1", "sf1": "V",
+                       "sf2": "Diesel"}).status_code == 400)
+check("but the optional one may be left blank",
+      admin.post(f"/flows/{_tfid}/start", data=_ok).status_code == 200)
+with _SLP() as _d:
+    _ti = _d.scalar(_sp(_FIT).where(_FIT.reference == f"TYPED-{RUN}"))
+    check("the answers are on the run",
+          "1500" in (_ti.context or "") and "2026-12-01" in (_ti.context or ""),
+          _ti.context)
+    check("and the blank optional one is simply absent",
+          "Notes" not in (_ti.context or ""))
+
+print("\n== a flow built earlier can be given a start form ==")
+# This is the real complaint: "Bill to payment" exists with no questions and
+# no way to add them. Build a flow with none, then add them afterwards.
+admin.post("/flows/new", data={
+    "name": f"No questions {RUN}", "branch_id": "", "description": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+    "step_title": ["Only step"], "step_doer": ["6"], "step_tat": ["1"],
+    "step_tat_unit": ["days"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+    "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+    "step_no": [""], "step_next": ["0"], "step_fail": [""], "step_due_from": [""]})
+with _SLP() as _d:
+    _nq = _d.scalar(_sp(_FLT).where(_FLT.name == f"No questions {RUN}"))
+    _nqid = _nq.id
+    check("it starts with no questions", _nq.start_form_fields == [])
+check("an empty question row is not saved as a blank question", True)
+
+check("the flow page offers Edit",
+      f"/flows/{_nqid}/edit" in admin.get(f"/flows/{_nqid}").text)
+check("the edit page opens", admin.get(f"/flows/{_nqid}/edit").status_code == 200)
+_ed = admin.post(f"/flows/{_nqid}/edit", data={
+    "name": f"No questions {RUN}", "branch_id": "", "description": "now it asks",
+    "sf_label": ["Invoice No", "Department"], "sf_type": ["text", "select"],
+    "sf_required": ["1", "1"], "sf_options": ["", "Accounts, Ops"]})
+check("the start form can be added afterwards", _ed.status_code == 200, _ed.status_code)
+with _SLP() as _d:
+    _nq2 = _d.get(_FLT, _nqid)
+    check("and it sticks",
+          _nq2.start_field_list == ["Invoice No", "Department"],
+          str(_nq2.start_field_list))
+    check("the description was saved too", _nq2.description == "now it asks")
+check("the start page now asks them",
+      "Invoice No" in admin.get(f"/flows/{_nqid}").text)
+check("a doer cannot edit a flow",
+      doer.get(f"/flows/{_nqid}/edit").status_code == 403)
+
+# The edit page must show what is already there, not an empty builder.
+_epage = admin.get(f"/flows/{_nqid}/edit").text
+# The builder is filled in by script from this JSON, so that is what has to
+# be right — the choices are joined into "Accounts, Ops" in the browser and
+# never appear as literal text in the source.
+_json_in_page = _re.search(r"var existing = (.*?);\n", _epage)
+_pre = _json.loads(_json_in_page.group(1)) if _json_in_page else []
+check("the edit page hands the builder the current questions",
+      [f["label"] for f in _pre] == ["Invoice No", "Department"], str(_pre))
+check("including the list question's choices",
+      _pre and _pre[1]["options"] == ["Accounts", "Ops"], str(_pre[-1:]))
+check("and whether each is required",
+      all(f["required"] for f in _pre))
+
+print("\n== flows built with the old comma box still ask their questions ==")
+with _SLP() as _d:
+    _old_style = _FLT(org_id=1, name=f"Legacy questions {RUN}",
+                      start_fields="Member Name, Lead Id")
+    _d.add(_old_style); _d.commit()
+    check("a comma line is read as plain text questions",
+          [f["label"] for f in _old_style.start_form_fields] ==
+          ["Member Name", "Lead Id"],
+          str(_old_style.start_form_fields))
+    check("and they are all short-text",
+          all(f["type"] == "text" for f in _old_style.start_form_fields))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

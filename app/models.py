@@ -336,6 +336,19 @@ class User(Base):
 # --------------------------------------------------------------------------
 # Flow Management System
 # --------------------------------------------------------------------------
+# What a start-form question can be. Deliberately short: every one of these
+# is obvious to fill in on a phone, and a form nobody can fill in quickly is
+# a form people work around.
+FIELD_TYPES = {
+    "text": "Short text",
+    "textarea": "Long text",
+    "number": "Number",
+    "date": "Date",
+    "select": "Choose from a list",
+    "yesno": "Yes / No",
+}
+
+
 class Flow(Base):
     """A reusable workflow template, e.g. 'New PT Member Onboarding'."""
     __tablename__ = "flows"
@@ -350,6 +363,11 @@ class Flow(Base):
     # Every flow needs different things to get going — a bill number here, a
     # member name there — so the flow itself carries its own question list.
     start_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The real start form: a JSON list of fields, each with a label, a type
+    # and (for a dropdown) its choices. start_fields above was the first cut
+    # — a comma-separated line of labels — and is still read for flows built
+    # with it, so nothing made earlier loses its questions.
+    start_form: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     steps: Mapped[list["FlowStep"]] = relationship(
         back_populates="flow", order_by="FlowStep.position", cascade="all, delete-orphan"
@@ -358,7 +376,39 @@ class Flow(Base):
 
     @property
     def start_field_list(self) -> list[str]:
-        return [f.strip() for f in (self.start_fields or "").split(",") if f.strip()]
+        """Just the labels — what the older code and the tests still use."""
+        return [f["label"] for f in self.start_form_fields]
+
+    @property
+    def start_form_fields(self) -> list[dict]:
+        """The start form, as a list of {label, type, options, required}.
+
+        A flow built before the form builder existed stored a comma-separated
+        line instead; that is read as a list of plain text boxes, so those
+        flows keep asking exactly what they always asked.
+        """
+        import json as _json
+        if self.start_form:
+            try:
+                rows = _json.loads(self.start_form)
+            except (ValueError, TypeError):
+                rows = []
+            out = []
+            for i, r in enumerate(rows if isinstance(rows, list) else []):
+                if not isinstance(r, dict) or not (r.get("label") or "").strip():
+                    continue
+                out.append({
+                    "key": f"sf{i}",
+                    "label": r["label"].strip(),
+                    "type": r.get("type") if r.get("type") in FIELD_TYPES else "text",
+                    "options": [o for o in (r.get("options") or []) if str(o).strip()],
+                    "required": bool(r.get("required", True)),
+                })
+            return out
+        return [{"key": f"sf{i}", "label": f.strip(), "type": "text",
+                 "options": [], "required": True}
+                for i, f in enumerate((self.start_fields or "").split(","))
+                if f.strip()]
 
 
 class FlowStep(Base):
