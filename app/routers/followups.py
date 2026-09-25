@@ -30,7 +30,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Followup,
-    PRIORITY_ORDER,
+    PRIORITY_ORDER, PARKED_STATES,
 )
 from ..services import xlsx
 from ..templating import templates
@@ -107,7 +107,7 @@ def _open_tasks(db: Session, user: User, sources, day: date,
         Task.source.in_(sources),
         Task.due_at <= end,
         or_(Task.closed_at.is_(None), Task.closed_at > end),
-        Task.status != TaskStatus.CANCELLED,
+        Task.status.not_in(PARKED_STATES),
     )
     rows = list(db.scalars(_visible(user, q, desk_right)).all())
     rows.sort(key=lambda t: (PRIORITY_ORDER.get(t.priority, 9), t.due_at))

@@ -65,7 +65,17 @@ class TaskStatus(str, enum.Enum):
     COMPLETED = "completed"
     REJECTED = "rejected"       # auditor sent it back
     REOPENED = "reopened"       # auditor pulled a closed task back open
+    ON_HOLD = "on_hold"         # its FMS run is paused — nobody's problem yet
     CANCELLED = "cancelled"
+
+
+# Work that is not on anybody's plate right now. A cancelled task was
+# un-planned; a held one is frozen while its FMS run is paused. Neither may
+# count as "not done" in a score, sit on the follow-up desk, or turn red as
+# overdue — in each case it would punish somebody for a decision that was
+# taken above them. Everywhere one of those questions is asked, this is the
+# set to ask it about.
+PARKED_STATES = (TaskStatus.CANCELLED, TaskStatus.ON_HOLD)
 
 
 class AuditState(str, enum.Enum):
@@ -546,8 +556,49 @@ class FlowInstance(Base):
     # JSON blob of field values carried across steps (MIDAP "Split FMS" carryover)
     context: Mapped[str] = mapped_column(Text, default="{}")
 
+    # --- paused, and stopped -----------------------------------------------
+    # A run gets held when the thing it is about goes quiet: the vendor has
+    # not sent the bill, the member is travelling, the school is on holiday.
+    # Nobody should be marked late for a wait somebody else decided on, so a
+    # held run's open steps step out of the doer's list and out of the score
+    # until it is resumed.
+    #
+    # Stopping is different and final: the run is abandoned, its open steps
+    # are cancelled, and it never moves again.
+    held_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    held_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    hold_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    held_days: Mapped[int] = mapped_column(Integer, default=0)   # total, across holds
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     flow: Mapped[Flow] = relationship()
-    started_by: Mapped[User] = relationship()
+    started_by: Mapped[User] = relationship(foreign_keys=[started_by_id])
+    held_by: Mapped[User | None] = relationship(foreign_keys=[held_by_id])
+    cancelled_by: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_id])
+
+    @property
+    def on_hold(self) -> bool:
+        return self.held_at is not None and self.completed_at is None \
+            and self.cancelled_at is None
+
+    @property
+    def state(self) -> str:
+        """One word for what this run is doing, used everywhere it is shown."""
+        if self.cancelled_at:
+            return "stopped"
+        if self.completed_at:
+            return "completed"
+        if self.held_at:
+            return "on hold"
+        return "running"
+
+    @property
+    def is_live(self) -> bool:
+        """Still moving — not finished, not stopped, not paused."""
+        return (self.completed_at is None and self.cancelled_at is None
+                and self.held_at is None)
     # Every task this run has spawned. Read-only: tasks are created by the
     # engine, never by appending here. Progress counts these rather than
     # positions, because a flow that loops back has no "position reached".
@@ -604,6 +655,10 @@ class Task(Base):
     # On a decision step: which of the two outcomes the doer chose.
     # "pass" / "fail", or NULL on an ordinary step.
     decision: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # What this task was before its FMS run was put on hold, so resuming
+    # puts it back exactly where it was rather than guessing "in progress"
+    # and quietly erasing that an auditor had sent it back.
+    held_from: Mapped[str | None] = mapped_column(String(20), nullable=True)
     captured_data: Mapped[str] = mapped_column(Text, default="{}")
 
     # false marking: auditor says the doer closed this without really doing it
@@ -634,7 +689,7 @@ class Task(Base):
 
     @property
     def is_overdue(self) -> bool:
-        if self.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
+        if self.status in (TaskStatus.COMPLETED,) + PARKED_STATES:
             return False
         return clock.now() > self.due_at
 

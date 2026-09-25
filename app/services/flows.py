@@ -121,6 +121,11 @@ def advance_flow(db: Session, task: Task) -> Task | None:
     inst = task.flow_instance
     if inst is None or inst.completed_at:
         return None
+    # A run that is paused or stopped does not open its next step. Without
+    # this, approving an audit on a held run would quietly start it moving
+    # again behind the back of whoever paused it.
+    if inst.held_at is not None or inst.cancelled_at is not None:
+        return None
 
     # carry the doer's captured field values forward into the flow context
     try:
@@ -184,3 +189,125 @@ def flow_progress(inst: FlowInstance) -> tuple[int, int]:
         return total, total
     done = sum(1 for t in inst.tasks if t.status == TaskStatus.COMPLETED)
     return min(done, total), total
+
+
+# ---------------------------------------------------------- hold & stop ---
+# Which task states a hold applies to: everything that has not been closed.
+# A step still with the auditor counts — the run is frozen, and that includes
+# whoever was about to check it.
+_LIVE_TASK_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
+                     TaskStatus.SUBMITTED, TaskStatus.REJECTED,
+                     TaskStatus.REOPENED)
+
+
+def _open_tasks(db: Session, inst: FlowInstance) -> list[Task]:
+    return list(db.scalars(select(Task).where(
+        Task.flow_instance_id == inst.id,
+        Task.status.in_(_LIVE_TASK_STATES))).all())
+
+
+def hold_run(db: Session, inst: FlowInstance, by: User, reason: str = "") -> int:
+    """Pause a run. Its open steps step out of everyone's way.
+
+    Each task remembers the state it was in, so resuming puts it back exactly
+    there rather than assuming "in progress" — which would erase the fact
+    that an auditor had sent it back to be redone.
+    """
+    if inst.completed_at or inst.cancelled_at or inst.held_at:
+        return 0
+    inst.held_at = clock.now()
+    inst.held_by_id = by.id
+    inst.hold_reason = (reason or "").strip() or None
+
+    tasks = _open_tasks(db, inst)
+    for t in tasks:
+        t.held_from = t.status.value
+        t.status = TaskStatus.ON_HOLD
+        db.add(TaskComment(
+            task_id=t.id, author_id=by.id,
+            body="Put on hold — this FMS run is paused."
+                 + (f" Reason: {inst.hold_reason}" if inst.hold_reason else "")))
+    return len(tasks)
+
+
+def resume_run(db: Session, inst: FlowInstance, by: User,
+               shift_deadlines: bool = True) -> tuple[int, int]:
+    """Start a held run moving again.
+
+    Returns (tasks resumed, whole days the hold lasted).
+
+    The deadlines move forward by however long the hold lasted. This is the
+    part that matters: without it, a run held for three days comes back with
+    every step already overdue, and the doer loses score for three days when
+    the work was frozen by somebody else's decision. The hold is measured to
+    the minute and applied to the minute, so a half-day pause shifts things
+    by half a day rather than being rounded away.
+    """
+    if not inst.held_at or inst.completed_at or inst.cancelled_at:
+        return 0, 0
+    paused_for = clock.now() - inst.held_at
+    days = max(0, round(paused_for.total_seconds() / 86400))
+
+    tasks = list(db.scalars(select(Task).where(
+        Task.flow_instance_id == inst.id,
+        Task.status == TaskStatus.ON_HOLD)).all())
+    for t in tasks:
+        try:
+            t.status = TaskStatus(t.held_from) if t.held_from \
+                else TaskStatus.IN_PROGRESS
+        except ValueError:
+            t.status = TaskStatus.IN_PROGRESS
+        t.held_from = None
+        if shift_deadlines:
+            t.due_at = t.due_at + paused_for
+        db.add(TaskComment(
+            task_id=t.id, author_id=by.id,
+            body=f"Resumed after {_span_words(paused_for)} on hold."
+                 + (f" Planned date moved to {t.due_at:%d %b %Y, %I:%M %p}."
+                    if shift_deadlines else
+                    " The planned date was left where it was.")))
+
+    inst.held_days = (inst.held_days or 0) + days
+    inst.held_at = None
+    inst.held_by_id = None
+    inst.hold_reason = None
+    return len(tasks), days
+
+
+def stop_run(db: Session, inst: FlowInstance, by: User, reason: str = "") -> int:
+    """Abandon a run for good. Its open steps are cancelled.
+
+    Deliberately not a delete. The run happened, people did work on it, and
+    the record of why it was abandoned is usually the point.
+    """
+    if inst.cancelled_at or inst.completed_at:
+        return 0
+    inst.cancelled_at = clock.now()
+    inst.cancelled_by_id = by.id
+    inst.cancel_reason = (reason or "").strip() or None
+    inst.held_at = None
+    inst.held_by_id = None
+
+    tasks = list(db.scalars(select(Task).where(
+        Task.flow_instance_id == inst.id,
+        Task.status.in_(_LIVE_TASK_STATES + (TaskStatus.ON_HOLD,)))).all())
+    for t in tasks:
+        t.status = TaskStatus.CANCELLED
+        t.held_from = None
+        db.add(TaskComment(
+            task_id=t.id, author_id=by.id,
+            body="Cancelled — this FMS run was stopped."
+                 + (f" Reason: {inst.cancel_reason}" if inst.cancel_reason else "")))
+    return len(tasks)
+
+
+def _span_words(delta) -> str:
+    """"2 days", "4 hours", "35 minutes" — whichever reads best."""
+    mins = int(delta.total_seconds() // 60)
+    if mins < 60:
+        return f"{max(mins, 1)} minute" + ("" if mins == 1 else "s")
+    if mins < 1440:
+        h = mins // 60
+        return f"{h} hour" + ("" if h == 1 else "s")
+    d = mins // 1440
+    return f"{d} day" + ("" if d == 1 else "s")

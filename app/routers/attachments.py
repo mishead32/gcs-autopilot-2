@@ -37,6 +37,9 @@ def _task_for_upload(db: Session, user: User, task_id: int) -> Task:
         raise HTTPException(403, "You can't attach files to this task")
     if task.status == TaskStatus.CANCELLED:
         raise HTTPException(400, "This task is closed")
+    if task.status == TaskStatus.ON_HOLD:
+        raise HTTPException(400, "This step's FMS run is on hold — resume it "
+                                 "before adding files.")
     return task
 
 

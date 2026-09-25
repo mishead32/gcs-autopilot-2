@@ -29,15 +29,35 @@
 <h2>Running now ({{ running|length }})</h2>
 {% if running %}
 <div class="table-wrap"><table>
-  <tr><th>Reference</th><th>Flow</th><th>Progress</th><th>Started</th></tr>
+  <tr><th>Reference</th><th>Flow</th><th>Progress</th><th>State</th>
+      <th>Started</th><th></th></tr>
   {% for i in running %}
   {% set p = progress[i.id] %}
-  <tr>
+  <tr class="{{ 'held' if i.on_hold }}">
     <td><a href="/flows/instance/{{ i.id }}"><strong>{{ i.reference }}</strong></a></td>
     <td>{{ i.flow.name }}</td>
     <td><div class="inline"><div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div>
       <span style="font-size:12px">{{ p[0] }}/{{ p[1] }}</span></div></td>
+    <td><span class="chip run_{{ i.state|replace(' ','_') }}">{{ i.state }}</span>
+      {% if i.on_hold and i.hold_reason %}
+      <div class="m">{{ i.hold_reason }}</div>{% endif %}</td>
     <td>{{ i.started_at|dt('%d %b, %I:%M %p') }}</td>
+    <td class="rowacts">
+      {% if user.has_manage_flow %}
+        {% if i.on_hold %}
+        <form method="post" action="/flows/instance/{{ i.id }}/resume" style="display:inline">
+          <button class="btn sm" title="Put its steps back and move the planned dates on">Resume</button>
+        </form>
+        {% else %}
+        <form method="post" action="/flows/instance/{{ i.id }}/hold" style="display:inline">
+          <button class="btn sm ghost" title="Pause this run — its steps leave everyone's list and the score">Hold</button>
+        </form>
+        {% endif %}
+        <a class="btn sm ghost" href="/flows/instance/{{ i.id }}">Open</a>
+      {% else %}
+      <a class="btn sm ghost" href="/flows/instance/{{ i.id }}">Open</a>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table></div>

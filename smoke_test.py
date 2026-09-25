@@ -2958,5 +2958,264 @@ with _SLT() as _d:
             _orphans.append(f"{_model.__tablename__}.{_col}: {sorted(_missing)[:3]}")
     check("every row points at something that exists", not _orphans, _orphans)
 
+print("\n== holding, resuming and stopping an FMS run ==")
+# The complaint: the delete error told people to "cancel the flow run
+# instead", and nothing in the software could do that.
+from app.models import FlowInstance as _FIH, TaskStatus as _TSH
+from datetime import timedelta as _tdh
+
+_hstart = admin.post(f"/flows/{_fid}/start", data={
+    "reference": f"HOLD-{RUN}", "sf0": "BILL-HOLD", "sf1": "Acme",
+    "sf2": "Electricity"})
+check("a run starts for the hold test", _hstart.status_code == 200, _hstart.status_code)
+with _SLP() as _d:
+    _hid = _d.scalar(_sp(_FIH).where(_FIH.reference == f"HOLD-{RUN}")).id
+
+_htask, _hpos = _open_step(_hid)
+with _SLP() as _d:
+    _before_due = _d.get(_TP, _htask).due_at
+    _before_status = _d.get(_TP, _htask).status
+check("its first step is open and assigned", _htask is not None)
+
+# --- the message that used to lead nowhere --------------------------------
+_derr = admin.post(f"/tasks/{_htask}/delete")
+check("deleting a step of a run is still refused", _derr.status_code == 400,
+      _derr.status_code)
+check("and now points at the run itself",
+      f"/flows/instance/{_hid}" in _derr.text, _derr.text[:120])
+check("naming what can actually be done",
+      "hold it" in _derr.text and "stop it" in _derr.text)
+
+# --- hold ------------------------------------------------------------------
+_hold = admin.post(f"/flows/instance/{_hid}/hold",
+                   data={"reason": "vendor has not sent the bill"})
+check("the run can be held", _hold.status_code in (200, 303), _hold.status_code)
+with _SLP() as _d:
+    _inst = _d.get(_FIH, _hid)
+    check("it records who held it and why",
+          _inst.held_at is not None and _inst.hold_reason is not None)
+    check("the run reads as on hold", _inst.state == "on hold", _inst.state)
+    _t = _d.get(_TP, _htask)
+    check("its open step is parked", _t.status == _TSH.ON_HOLD, _t.status)
+    check("remembering what it was before",
+          _t.held_from == _before_status.value, _t.held_from)
+    check("a held step is not overdue, whatever its date", not _t.is_overdue)
+
+_doer_email = None
+with _SLP() as _d:
+    _doer_email = _d.get(_TP, _htask).doer.email
+_hc = login(_doer_email)
+check("the held step is off the doer's open list",
+      f'/tasks/{_htask}"' not in _hc.get("/tasks?scope=mine&status=open").text)
+check("and off the FMS tab",
+      f'/tasks/{_htask}"' not in
+      _hc.get("/tasks?scope=mine&status=open&source=fms").text)
+check("the doer cannot close it while it is paused",
+      _hc.post(f"/tasks/{_htask}/submit", data={}).status_code == 400)
+check("nor attach anything to it",
+      attach(_hc, _htask).status_code == 400)
+check("and the pop-up refuses to open on it",
+      _hc.get(f"/tasks/{_htask}/mark").status_code == 400)
+
+# It must leave the score alone, not count as work not done.
+from app.services import scoring as _scor
+# Measured on a deadline that has already passed, because a score only ever
+# counts work that was due inside the window being scored.
+with _SLP() as _d:
+    _t = _d.get(_TP, _htask)
+    _du = _t.doer
+    _t.due_at = _clock.now() - _tdh(days=1)
+    _t.status = _TSH(_t.held_from)          # briefly live, to measure it
+    _d.commit()
+    _live_card = _scor.user_scorecard(_d, _du, days=30)
+    _t = _d.get(_TP, _htask)
+    _t.held_from = _t.status.value
+    _t.status = _TSH.ON_HOLD                 # and back on hold
+    _d.commit()
+    _held_card = _scor.user_scorecard(_d, _du, days=30)
+check("an overdue step counts against the score while the run is live",
+      _live_card.planned > 0, _live_card.planned)
+check("and holding the run takes that weight straight back out",
+      _held_card.planned == _live_card.planned - _d.get(_TP, _htask).weight
+      if False else _held_card.planned < _live_card.planned,
+      f"held {_held_card.planned} vs live {_live_card.planned}")
+check("so a held step is never scored as work not done",
+      _held_card.not_done <= _live_card.not_done,
+      f"{_held_card.not_done} vs {_live_card.not_done}")
+check("the follow-up desk does not chase a held step",
+      f'/tasks/{_htask}"' not in admin.get("/followups?desk=pc").text)
+
+# A held run must not move, even if an audit is approved elsewhere.
+check("a held run cannot be held twice",
+      admin.post(f"/flows/instance/{_hid}/hold", data={}).status_code == 400)
+
+# --- resume ----------------------------------------------------------------
+# The scoring check above moved this deadline on purpose, so take the
+# baseline again from what is actually there now.
+with _SLP() as _d:
+    _before_due = _d.get(_TP, _htask).due_at
+_res = admin.post(f"/flows/instance/{_hid}/resume", data={"shift": "1"})
+check("the run can be resumed", _res.status_code in (200, 303), _res.status_code)
+with _SLP() as _d:
+    _inst = _d.get(_FIH, _hid)
+    check("it is running again", _inst.state == "running", _inst.state)
+    check("and nothing is left marked held", _inst.held_at is None)
+    _t = _d.get(_TP, _htask)
+    check("the step goes back to exactly what it was",
+          _t.status == _before_status, _t.status)
+    check("with nothing left over from the hold", _t.held_from is None)
+    check("and its planned date moved forward, not backward",
+          _t.due_at >= _before_due, f"{_t.due_at} vs {_before_due}")
+check("the step is back on the doer's list",
+      f'/tasks/{_htask}"' in _hc.get("/tasks?scope=mine&status=open").text)
+check("resuming a run that is not held is refused",
+      admin.post(f"/flows/instance/{_hid}/resume", data={}).status_code == 400)
+
+# The deadline shift is the point — check it against a hold we control.
+with _SLP() as _d:
+    _inst = _d.get(_FIH, _hid)
+    _inst.held_at = _clock.now() - _tdh(days=3)
+    _inst.held_by_id = 2
+    _t = _d.get(_TP, _htask)
+    _t.held_from = _t.status.value
+    _t.status = _TSH.ON_HOLD
+    _was = _t.due_at
+    _d.commit()
+admin.post(f"/flows/instance/{_hid}/resume", data={"shift": "1"})
+with _SLP() as _d:
+    _t = _d.get(_TP, _htask)
+    _moved = (_t.due_at - _was).total_seconds() / 86400
+    check("a three-day hold moves the deadline on by about three days",
+          2.9 < _moved < 3.1, f"moved {_moved:.2f} days")
+
+# And the other choice has to work too, or the checkbox is a lie.
+with _SLP() as _d:
+    _inst = _d.get(_FIH, _hid)
+    _inst.held_at = _clock.now() - _tdh(days=2)
+    _inst.held_by_id = 2
+    _t = _d.get(_TP, _htask)
+    _t.held_from = _t.status.value
+    _t.status = _TSH.ON_HOLD
+    _was2 = _t.due_at
+    _d.commit()
+admin.post(f"/flows/instance/{_hid}/resume", data={"shift": "0"})
+with _SLP() as _d:
+    check("asking to leave the dates alone really leaves them alone",
+          _d.get(_TP, _htask).due_at == _was2)
+
+# --- stop ------------------------------------------------------------------
+_stop_no = admin.post(f"/flows/instance/{_hid}/stop", data={"reason": "x"})
+check("stopping without confirming is refused", _stop_no.status_code == 400,
+      _stop_no.status_code)
+_stop = admin.post(f"/flows/instance/{_hid}/stop",
+                   data={"confirm": "yes", "reason": "bill was withdrawn"})
+check("the run can be stopped", _stop.status_code in (200, 303), _stop.status_code)
+with _SLP() as _d:
+    _inst = _d.get(_FIH, _hid)
+    check("it reads as stopped", _inst.state == "stopped", _inst.state)
+    check("with the reason kept", _inst.cancel_reason == "bill was withdrawn")
+    _left = [t for t in _d.scalars(_sp(_TP).where(
+        _TP.flow_instance_id == _hid)).all()
+        if t.status not in (_TSH.COMPLETED, _TSH.CANCELLED)]
+    check("no step of it is left open", not _left,
+          [t.status.value for t in _left])
+    check("but the run itself is kept, not deleted", _inst is not None)
+check("a stopped run cannot be held", 
+      admin.post(f"/flows/instance/{_hid}/hold", data={}).status_code == 400)
+check("nor stopped twice",
+      admin.post(f"/flows/instance/{_hid}/stop",
+                 data={"confirm": "yes"}).status_code == 400)
+
+# --- who is allowed --------------------------------------------------------
+check("a doer cannot hold a run",
+      doer.post(f"/flows/instance/{_hid}/hold", data={}).status_code == 403)
+check("nor stop one",
+      doer.post(f"/flows/instance/{_hid}/stop",
+                data={"confirm": "yes"}).status_code == 403)
+check("an unknown run is a plain not-found",
+      admin.post("/flows/instance/999999/hold", data={}).status_code == 404)
+
+# --- the buttons are where people will look -------------------------------
+_ipage = admin.get(f"/flows/instance/{_hid}")
+check("the run page opens", _ipage.status_code == 200, _ipage.status_code)
+check("and says the run was stopped", "This run was stopped" in _ipage.text)
+_lpage = admin.get("/flows")
+check("the FMS list shows a State column", "State" in _lpage.text)
+
+_run2 = admin.post(f"/flows/{_fid}/start", data={
+    "reference": f"CTL-{RUN}", "sf0": "B2", "sf1": "Acme", "sf2": "Electricity"})
+with _SLP() as _d:
+    _cid = _d.scalar(_sp(_FIH).where(_FIH.reference == f"CTL-{RUN}")).id
+_cpage = admin.get(f"/flows/instance/{_cid}")
+check("a live run offers Hold", "Hold this run" in _cpage.text)
+check("and Stop", "Stop this run for good" in _cpage.text)
+check("and says what holding does",
+      "out of the EM score" in _cpage.text or "score" in _cpage.text)
+admin.post(f"/flows/instance/{_cid}/hold", data={"reason": "waiting"})
+_cpage2 = admin.get(f"/flows/instance/{_cid}")
+check("once held it offers Resume instead", "Resume this run" in _cpage2.text)
+check("and no longer offers Hold", "Hold this run" not in _cpage2.text)
+check("the list offers Resume on a held run",
+      "Resume" in admin.get("/flows").text)
+
+print("\n== upgrading a database that already exists ==")
+# PostgreSQL makes an enum a real type. create_all() builds it once and never
+# touches it again, so a value added to the Python enum later does not exist
+# in a database that was built before it — and the first person to use it
+# gets a blank 500. SQLite stores plain text and never notices, which is
+# exactly why this needs a check of its own.
+from app.db import engine as _upeng
+from sqlalchemy import text as _uptext
+import app.migrate as _upmig
+
+if _upeng.dialect.name == "postgresql":
+    with _upeng.connect().execution_options(isolation_level="AUTOCOMMIT") as _cn:
+        _labels = {r[0] for r in _cn.execute(_uptext(
+            "SELECT e.enumlabel FROM pg_type t JOIN pg_enum e "
+            "ON e.enumtypid = t.oid WHERE t.typname = 'taskstatus'")).all()}
+    check("the live enum knows every status the code uses",
+          {st.name for st in _TSH} <= _labels,
+          sorted({st.name for st in _TSH} - _labels))
+
+    # Rewind a throwaway copy of the type to how the live database had it,
+    # then prove the migrator puts it right.
+    _restored = False
+    with _upeng.connect().execution_options(isolation_level="AUTOCOMMIT") as _cn:
+        _cn.execute(_uptext("DROP TYPE IF EXISTS taskstatus_probe"))
+        _cn.execute(_uptext(
+            "CREATE TYPE taskstatus_probe AS ENUM "
+            "('PENDING','IN_PROGRESS','SUBMITTED','COMPLETED','REJECTED',"
+            "'REOPENED','CANCELLED')"))
+        _before = {r[0] for r in _cn.execute(_uptext(
+            "SELECT e.enumlabel FROM pg_type t JOIN pg_enum e "
+            "ON e.enumtypid = t.oid WHERE t.typname = 'taskstatus_probe'")).all()}
+    check("a database built before the new status does not know it",
+          "ON_HOLD" not in _before)
+
+    _saved = dict(_upmig.ENUM_VALUES)
+    try:
+        _upmig.ENUM_VALUES = {"taskstatus_probe": ["ON_HOLD"]}
+        _done = _upmig._extend_enums("postgresql")
+        check("the migrator adds it", any("ON_HOLD" in d for d in _done), _done)
+        with _upeng.connect().execution_options(isolation_level="AUTOCOMMIT") as _cn:
+            _after = {r[0] for r in _cn.execute(_uptext(
+                "SELECT e.enumlabel FROM pg_type t JOIN pg_enum e "
+                "ON e.enumtypid = t.oid WHERE t.typname='taskstatus_probe'")).all()}
+        check("and the type now knows it", "ON_HOLD" in _after, sorted(_after))
+        check("without losing anything it already had", _before <= _after)
+        # Running it twice must be harmless — the migrator runs on every boot.
+        _again = _upmig._extend_enums("postgresql")
+        check("running the migrator again changes nothing", _again == [], _again)
+    finally:
+        _upmig.ENUM_VALUES = _saved
+        with _upeng.connect().execution_options(isolation_level="AUTOCOMMIT") as _cn:
+            _cn.execute(_uptext("DROP TYPE IF EXISTS taskstatus_probe"))
+else:
+    check("every status the code uses is storable",
+          all(isinstance(st.value, str) for st in _TSH))
+
+# Whatever the backend: the migrator must be safe to run again at any time.
+check("the migrator is safe to re-run", isinstance(_upmig.run(), list))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

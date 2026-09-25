@@ -36,9 +36,19 @@ ADDITIONS = {
         ("audited_at", "DATETIME"),
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
         ("decision", "VARCHAR(10)"),
+        ("held_from", "VARCHAR(20)"),
     ],
     "recurring_rules": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+    ],
+    "flow_instances": [
+        ("held_at", "DATETIME"),
+        ("held_by_id", "INTEGER"),
+        ("hold_reason", "TEXT"),
+        ("held_days", "INTEGER DEFAULT 0"),
+        ("cancelled_at", "DATETIME"),
+        ("cancelled_by_id", "INTEGER"),
+        ("cancel_reason", "TEXT"),
     ],
     "flows": [
         ("start_fields", "TEXT"),
@@ -86,6 +96,54 @@ def _ddl_for(ddl: str, dialect: str) -> str:
 
 PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
 
+# Values added to an enum AFTER the live database was first built.
+#
+# PostgreSQL makes these real types. create_all() builds the type correctly on
+# a brand-new database and then never touches it again, so a value added to
+# the Python enum later simply does not exist in a database that already has
+# the type — and the first person to use it gets
+#   invalid input value for enum taskstatus: "ON_HOLD"
+# which reaches them as a blank 500 page.
+#
+# SQLite stores the text and does not care, which is exactly why this is easy
+# to miss in development. Same trap as the priority rename above.
+#
+# type name -> labels that must exist. Labels are the enum MEMBER names,
+# which is what SQLAlchemy stores by default (ON_HOLD, not on_hold).
+ENUM_VALUES = {
+    "taskstatus": ["ON_HOLD"],
+}
+
+
+def _extend_enums(dialect: str) -> list[str]:
+    """Teach an existing PostgreSQL enum about values added since it was made.
+
+    Runs on its own AUTOCOMMIT connection: ALTER TYPE ... ADD VALUE cannot be
+    used later in the same transaction that added it, and on older servers
+    cannot run inside a transaction at all.
+    """
+    if dialect != "postgresql":
+        return []
+    done = []
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        for type_name, labels in ENUM_VALUES.items():
+            exists = conn.execute(text(
+                "SELECT 1 FROM pg_type WHERE typname = :t"), {"t": type_name}
+            ).scalar()
+            if not exists:
+                continue                      # create_all will build it whole
+            have = {r[0] for r in conn.execute(text(
+                "SELECT e.enumlabel FROM pg_type t "
+                "JOIN pg_enum e ON e.enumtypid = t.oid WHERE t.typname = :t"),
+                {"t": type_name}).all()}
+            for label in labels:
+                if label in have:
+                    continue
+                conn.execute(text(
+                    f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{label}'"))
+                done.append(f"{type_name} += {label}")
+    return done
+
 
 def _detype_priority(conn, insp, dialect: str, existing_tables: set) -> list[str]:
     """Convert a native PostgreSQL enum priority column to plain text.
@@ -117,8 +175,13 @@ def _detype_priority(conn, insp, dialect: str, existing_tables: set) -> list[str
 
 
 def run() -> list[str]:
+    dialect_name = engine.dialect.name
+    # Before create_all: a table being created now would reference the type,
+    # and a type that already exists has to learn the new value first.
+    pre = _extend_enums(dialect_name)
+
     Base.metadata.create_all(engine)
-    applied = []
+    applied = list(pre)
     insp = inspect(engine)
     dialect = engine.dialect.name
     existing_tables = set(insp.get_table_names())

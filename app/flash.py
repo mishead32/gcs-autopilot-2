@@ -24,6 +24,9 @@ KINDS = {
     "unfollowed": ("warn", "Follow-up removed"),
     "saved":     ("ok", "Saved"),
     "welcome":   ("ok", "Signed in"),
+    "held":      ("warn", "FMS run put on hold"),
+    "resumed":   ("ok", "FMS run resumed"),
+    "stopped":   ("bad", "FMS run stopped"),
 }
 
 

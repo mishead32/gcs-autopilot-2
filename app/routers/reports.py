@@ -35,7 +35,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Branch, Followup,
-    AuditState, AUDIT_LABELS, Priority, PRIORITY_ORDER,
+    AuditState, AUDIT_LABELS, Priority, PRIORITY_ORDER, PARKED_STATES,
 )
 from ..services import scoring, xlsx
 from ..templating import templates
@@ -395,7 +395,7 @@ def _followup_rows(db: Session, user: User, f: Filters) -> dict:
     span_end = datetime.combine(end, datetime.max.time())
     q = _apply_common(_scoped(user, select(Task)).where(
         Task.due_at <= span_end,
-        Task.status != TaskStatus.CANCELLED), f)
+        Task.status.not_in(PARKED_STATES)), f)
     tasks = list(db.scalars(q).all())
     by_id = {t.id: t for t in tasks}
 

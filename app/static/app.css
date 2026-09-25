@@ -668,3 +668,24 @@ td.markcell .m{white-space:nowrap}
 .btn.excel:hover{border-color:#1d7044;color:#1d7044;background:#f0fdf4}
 .page-head>div:last-child{display:flex;gap:8px;align-items:center;
   flex-wrap:wrap;justify-content:flex-end}
+
+/* ------------------------------------------- FMS run state ------------- */
+.chip.run_running{background:#dbeafe;color:#1e40af}
+.chip.run_on_hold{background:#fef3c7;color:#92400e}
+.chip.run_completed{background:#dcfce7;color:#166534}
+.chip.run_stopped{background:#fee2e2;color:#991b1b}
+tr.held td{background:#fffdf5}
+
+.hold-box{border:1px solid #f0d999;background:#fff8e1;color:#7a5b00;
+  border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.hold-box strong{color:#7a5b00}
+
+.runctl .ctlrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  margin-top:12px}
+.runctl .ctlrow input[name=reason]{flex:1 1 260px;margin:0}
+.runctl .ctlrow button{flex:0 0 auto}
+.btn.warn{background:#b45309}
+.btn.warn:hover{background:#92400e}
+.inline-check{display:flex;align-items:center;gap:7px;font-size:13px;
+  margin:0;flex:1 1 300px}
+.inline-check input{margin:0;width:auto}

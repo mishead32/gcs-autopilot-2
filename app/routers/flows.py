@@ -3,7 +3,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import clock
+from .. import clock, flash
 import json
 
 from ..db import get_db
@@ -325,6 +325,71 @@ async def start_flow(flow_id: int, request: Request,
     return RedirectResponse(f"/flows/instance/{inst.id}", status_code=303)
 
 
+# ------------------------------------------------- pause, resume, stop ----
+# The error you get trying to delete a step said "cancel the flow run
+# instead" — and there was nothing anywhere that could do it. These are that
+# missing thing, plus the pause people actually want more often: a bill nobody
+# has sent yet is not an abandoned run, it is a wait.
+def _run_for_control(db: Session, user: User, instance_id: int) -> FlowInstance:
+    inst = db.get(FlowInstance, instance_id)
+    if not inst or inst.org_id != user.org_id:
+        raise HTTPException(404, "That FMS run was not found.")
+    return inst
+
+
+@router.post("/flows/instance/{instance_id}/hold")
+def hold_instance(instance_id: int, request: Request, reason: str = Form(""),
+                  user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                  db: Session = Depends(get_db)):
+    inst = _run_for_control(db, user, instance_id)
+    if inst.completed_at:
+        raise HTTPException(400, "This run has already finished.")
+    if inst.cancelled_at:
+        raise HTTPException(400, "This run was stopped — it cannot be paused.")
+    if inst.held_at:
+        raise HTTPException(400, "This run is already on hold.")
+    n = flow_svc.hold_run(db, inst, user, reason)
+    db.commit()
+    flash.set(request, "held", f"{inst.reference} — {n} step(s) paused")
+    return RedirectResponse(f"/flows/instance/{instance_id}", status_code=303)
+
+
+@router.post("/flows/instance/{instance_id}/resume")
+def resume_instance(instance_id: int, request: Request, shift: str = Form("1"),
+                    user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                    db: Session = Depends(get_db)):
+    inst = _run_for_control(db, user, instance_id)
+    if not inst.held_at:
+        raise HTTPException(400, "This run is not on hold.")
+    n, days = flow_svc.resume_run(db, inst, user, shift_deadlines=(shift != "0"))
+    db.commit()
+    detail = f"{inst.reference} — {n} step(s) back on"
+    if shift != "0" and days:
+        detail += f", planned dates moved on {days} day(s)"
+    flash.set(request, "resumed", detail)
+    return RedirectResponse(f"/flows/instance/{instance_id}", status_code=303)
+
+
+@router.post("/flows/instance/{instance_id}/stop")
+def stop_instance(instance_id: int, request: Request, reason: str = Form(""),
+                  confirm: str = Form(""),
+                  user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                  db: Session = Depends(get_db)):
+    inst = _run_for_control(db, user, instance_id)
+    if inst.completed_at:
+        raise HTTPException(400, "This run has already finished.")
+    if inst.cancelled_at:
+        raise HTTPException(400, "This run was already stopped.")
+    # Stopping cannot be undone, so it takes a deliberate confirmation rather
+    # than one mis-aimed click on a page full of buttons.
+    if confirm != "yes":
+        raise HTTPException(400, "Stopping a run has to be confirmed.")
+    n = flow_svc.stop_run(db, inst, user, reason)
+    db.commit()
+    flash.set(request, "stopped", f"{inst.reference} — {n} open step(s) cancelled")
+    return RedirectResponse(f"/flows/instance/{instance_id}", status_code=303)
+
+
 @router.get("/flows/instance/{instance_id}", response_class=HTMLResponse)
 def instance_detail(instance_id: int, request: Request, user: User = Depends(current_user),
                     db: Session = Depends(get_db)):
@@ -334,7 +399,13 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
     tasks = db.scalars(
         select(Task).where(Task.flow_instance_id == inst.id).order_by(Task.created_at)
     ).all()
+    try:
+        started_with = json.loads(inst.context or "{}")
+    except json.JSONDecodeError:
+        started_with = {}
     return templates.TemplateResponse(request, "flow_instance.html", {
         "user": user, "inst": inst, "tasks": tasks,
         "progress": flow_svc.flow_progress(inst),
+        "can_control": user.has(Right.MANAGE_FLOW),
+        "started_with": started_with,
     })

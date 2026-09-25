@@ -55,7 +55,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..models import Task, TaskStatus, TaskSource, User, Branch, Role
+from ..models import (Task, TaskStatus, TaskSource, User, Branch, Role,
+                      PARKED_STATES)
 
 FALSE_MARK_PENALTY = 10.0
 CLOSED = (TaskStatus.COMPLETED,)
@@ -264,7 +265,7 @@ def _build(planned: list[Task], closed_in_window: list[Task],
     c.on_time = _w([t for t in done if t.was_on_time])
     c.late = c.completed - c.on_time
     c.still_open = sum(1 for t in planned if t.status not in
-                       (TaskStatus.COMPLETED, TaskStatus.CANCELLED))
+                       (TaskStatus.COMPLETED,) + PARKED_STATES)
     c.overdue_now = sum(1 for t in planned if t.is_overdue)
     c.false_marks = sum(1 for t in set(planned) | set(closed_in_window) if t.false_marked)
 
@@ -328,7 +329,7 @@ def scoreboard(db: Session, org_id: int, start: datetime, end: datetime,
     # stopped mattering. Counting it as 'not done' would punish the person
     # who was right to stop, so it leaves the denominator entirely.
     planned = [t for t in all_tasks
-               if start <= t.due_at <= end and t.status != TaskStatus.CANCELLED]
+               if start <= t.due_at <= end and t.status not in PARKED_STATES]
     closed = [t for t in all_tasks
               if t.closed_at is not None and start <= t.closed_at <= end]
 
@@ -384,7 +385,7 @@ def user_scorecard(db: Session, user: User, days: int = 30,
         start, end = resolve_window(None, None, days)
     tasks = list(db.scalars(select(Task).where(Task.doer_id == user.id)).all())
     planned = [t for t in tasks
-               if start <= t.due_at <= end and t.status != TaskStatus.CANCELLED]
+               if start <= t.due_at <= end and t.status not in PARKED_STATES]
     closed = [t for t in tasks if t.closed_at and start <= t.closed_at <= end]
     return _build(planned, closed, user.benchmarks)
 

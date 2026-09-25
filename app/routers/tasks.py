@@ -474,10 +474,14 @@ def delete_task(task_id: int, user: User = Depends(require_right(Right.DELETE_TA
     if not task or task.org_id != user.org_id:
         raise HTTPException(404, "Task not found")
     if task.flow_instance_id:
+        # Pointing somewhere is the whole job of this message. It used to say
+        # "cancel the flow run instead" when nothing in the software could do
+        # that, which left people staring at a dead end.
         raise HTTPException(
-            400, "This task is a step inside a running FMS flow. "
-                 "Deleting it would break the chain — cancel the flow run instead."
-        )
+            400, "This task is one step inside an FMS run, so deleting it on "
+                 "its own would break the chain. Open the run itself — "
+                 f"/flows/instance/{task.flow_instance_id} — and either hold "
+                 "it, if you are waiting on something, or stop it for good.")
     # Everything that points at this task has to be dealt with first, or the
     # database refuses the delete and the person gets a 500 with no idea why.
     #
@@ -606,6 +610,10 @@ async def submit_task(task_id: int, request: Request,
     task = db.get(Task, task_id)
     if not task or task.doer_id != user.id:
         raise HTTPException(403, "Only the doer can submit this task")
+    if task.status == TaskStatus.ON_HOLD:
+        raise HTTPException(
+            400, "This step's FMS run is on hold, so it cannot be submitted "
+                 "yet. Whoever paused the run has to resume it first.")
     if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
         raise HTTPException(400, "Task is already closed")
 

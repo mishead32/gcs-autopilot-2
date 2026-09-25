@@ -1,13 +1,43 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table with context %}
+{% from "_export.html" import excel_btn %}
+{% block title %}{{ inst.reference }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <p class="sub"><a href="/flows/{{ inst.flow_id }}">&larr; {{ inst.flow.name }}</a></p>
-<h1>{{ inst.reference }}</h1>
-<p class="sub">
-  Started {{ inst.started_at|dt }} by {{ inst.started_by.name }}
-  <span class="chip {{ 'completed' if inst.completed_at else 'in_progress' }}">
-    {{ 'completed' if inst.completed_at else 'running' }}</span>
-</p>
+
+<div class="page-head">
+  <div>
+    <h1>{{ inst.reference }}</h1>
+    <p class="sub">
+      Started {{ inst.started_at|dt }} by {{ inst.started_by.name }}
+      <span class="chip run_{{ inst.state|replace(' ','_') }}">{{ inst.state }}</span>
+      {% if inst.held_days %}<span class="chip">{{ inst.held_days }} day(s) on hold so far</span>{% endif %}
+    </p>
+  </div>
+  {{ excel_btn('/flows?export=xlsx', 'Excel') }}
+</div>
+
+{% if inst.on_hold %}
+<div class="hold-box">
+  <strong>This run is on hold.</strong>
+  Paused {{ inst.held_at|dt }} by {{ inst.held_by.name if inst.held_by else 'an admin' }}.
+  {% if inst.hold_reason %}<div style="margin-top:6px">{{ inst.hold_reason }}</div>{% endif %}
+  <div class="m" style="margin-top:8px">
+    Its open steps are off everyone's task list and out of the EM score until
+    it is resumed. Nobody is marked late for this wait.
+  </div>
+</div>
+{% elif inst.cancelled_at %}
+<div class="danger-box">
+  <strong>This run was stopped.</strong>
+  {{ inst.cancelled_at|dt }} by {{ inst.cancelled_by.name if inst.cancelled_by else 'an admin' }}.
+  {% if inst.cancel_reason %}<div style="margin-top:6px">{{ inst.cancel_reason }}</div>{% endif %}
+  <div class="m" style="margin-top:8px">
+    Its open steps were cancelled. The record stays here — a stopped run is
+    not deleted, because why it was abandoned is usually the point.
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="inline">
@@ -16,6 +46,95 @@
   </div>
 </div>
 
+{% if can_control and not inst.completed_at and not inst.cancelled_at %}
+<div class="card runctl">
+  <strong>Run control</strong>
+  {% if inst.on_hold %}
+  <p class="sub" style="margin:8px 0 0">
+    Resuming puts every paused step back exactly as it was and moves its
+    planned date forward by however long the hold lasted — so the wait costs
+    nobody their score.
+  </p>
+  <form method="post" action="/flows/instance/{{ inst.id }}/resume" class="ctlrow">
+    <label class="inline-check">
+      <input type="checkbox" name="shift" value="1" checked>
+      Move the planned dates forward by the length of the hold</label>
+    <input type="hidden" name="shift" value="0" disabled>
+    <button class="btn">Resume this run</button>
+  </form>
+  {% else %}
+  <p class="sub" style="margin:8px 0 0">
+    Hold it when the wait is somebody else's — the vendor has not sent the
+    bill, the member is travelling. Stop it when the run is being abandoned.
+  </p>
+  <form method="post" action="/flows/instance/{{ inst.id }}/hold" class="ctlrow">
+    <input name="reason" placeholder="Why is it being held? (optional)">
+    <button class="btn warn">Hold this run</button>
+  </form>
+  {% endif %}
+
+  <form method="post" action="/flows/instance/{{ inst.id }}/stop" id="stopForm"
+        class="ctlrow" style="border-top:1px solid var(--line);padding-top:14px;margin-top:14px">
+    <input type="hidden" name="confirm" value="yes">
+    <input name="reason" id="stopReason" placeholder="Why is it being stopped? (optional)">
+    <button type="button" class="btn danger" id="stopOpen">Stop this run for good</button>
+  </form>
+  <div class="m">Stopping cancels every open step and cannot be undone.</div>
+</div>
+
+<dialog class="confirm" id="stopDialog">
+  <div class="body">
+    <h3>Stop this run for good?</h3>
+    <p>
+      Every open step of <strong>{{ inst.reference }}</strong> will be
+      cancelled, and the run will never move again. The record and its
+      completed steps stay. This cannot be undone — if you only need to pause
+      it while you wait for something, hold it instead.
+    </p>
+  </div>
+  <div class="acts">
+    <button class="btn ghost" id="stopCancel" type="button">Cancel</button>
+    <button class="btn danger" id="stopConfirm" type="button">Stop the run</button>
+  </div>
+</dialog>
+{% elif not can_control %}
+<p class="m">Only someone with the “Build and run FMS flows” right can hold or
+  stop a run.</p>
+{% endif %}
+
 <h2>Step tasks</h2>
 {{ task_table(tasks) }}
+
+{% if inst.context and inst.context != '{}' %}
+<h2>What this run was started with</h2>
+<div class="table-wrap"><table>
+  {% for k, v in started_with.items() %}
+  <tr><th style="width:220px">{{ k }}</th><td>{{ v }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+<script>
+(function(){
+  var o=document.getElementById('stopOpen'), d=document.getElementById('stopDialog'),
+      c=document.getElementById('stopCancel'), k=document.getElementById('stopConfirm'),
+      f=document.getElementById('stopForm');
+  if(!o||!d||!f) return;
+  o.addEventListener('click', function(){
+    if (d.showModal) d.showModal();
+    else if (confirm('Stop this run for good?')) f.submit();
+  });
+  if(c) c.addEventListener('click', function(){ d.close(); });
+  if(k) k.addEventListener('click', function(){ d.close(); f.submit(); });
+
+  // The unchecked box must still post a value, or "leave the dates alone"
+  // would arrive as no answer at all and be read as "move them".
+  var box=document.querySelector('input[name=shift][type=checkbox]'),
+      hidden=document.querySelector('input[name=shift][type=hidden]');
+  if(box&&hidden){
+    function sync(){ hidden.disabled = box.checked; }
+    box.addEventListener('change', sync); sync();
+  }
+})();
+</script>
 {% endblock %}
