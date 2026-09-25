@@ -2840,5 +2840,123 @@ check("and a nonsense export value is ignored",
       admin.get("/tasks?scope=mine&status=open&export=banana")
       .headers["content-type"].startswith("text/html"))
 
+print("\n== deleting things that other rows point at ==")
+# The live 500: a task the follow-up desk had ever ticked refused to delete.
+# SQLite used to ignore foreign keys, so every test here passed while the
+# same click failed on the real site. Foreign keys are enforced now, which is
+# what makes the checks below mean anything.
+from app.models import (Followup as _FU, Attachment as _AT, TaskComment as _TC,
+                        OutboundMessage as _MO)
+from sqlalchemy import func as _func
+from app.db import engine as _eng
+
+if _eng.url.get_backend_name() == "sqlite":
+    with _eng.connect() as _cn:
+        check("SQLite is enforcing foreign keys like the live database does",
+              _cn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1)
+
+def _fresh_task(title):
+    r = mgr.post("/tasks/new", data={
+        "title": title, "details": "", "doer_id": str(_amit.id),
+        "branch_id": "", "priority": "low", "due_at": "2026-12-31T23:59"})
+    return int(_re.findall(r"/tasks/(\d+)/comment", r.text)[-1])
+
+_dt1 = _fresh_task(f"SMOKE delete chased {RUN}")
+with _SLT() as _d:
+    _t = _d.get(_MT, _dt1)
+    _d.add(_FU(org_id=_t.org_id, task_id=_t.id, day=_clock.today(), by_id=1))
+    _d.add(_TC(task_id=_t.id, author_id=1, body="a note"))
+    _d.add(_MO(org_id=_t.org_id, task_id=_t.id, to_phone="+910000000000",
+               template="task_assigned", body="x", status="queued"))
+    _d.commit()
+
+_del = admin.post(f"/tasks/{_dt1}/delete")
+check("a task the follow-up desk chased can be deleted",
+      _del.status_code in (200, 303), _del.status_code)
+with _SLT() as _d:
+    check("the task is gone", _d.get(_MT, _dt1) is None)
+    check("its follow-up ticks went with it",
+          _d.scalar(_msel(_func.count()).select_from(_FU)
+                    .where(_FU.task_id == _dt1)) == 0)
+    check("so did its notes",
+          _d.scalar(_msel(_func.count()).select_from(_TC)
+                    .where(_TC.task_id == _dt1)) == 0)
+    # The message log is a record of what was SENT. It outlives the task.
+    _left = _d.scalars(_msel(_MO).where(_MO.body == "x",
+                                        _MO.to_phone == "+910000000000")).all()
+    check("but the message we sent is kept, just unhooked",
+          _left and all(m.task_id is None for m in _left),
+          f"{len(_left)} rows")
+
+# Attachments too — a task with proof on it must still delete.
+_dt2 = _fresh_task(f"SMOKE delete with proof {RUN}")
+attach(doer, _dt2)
+with _SLT() as _d:
+    check("it has proof attached",
+          _d.scalar(_msel(_func.count()).select_from(_AT)
+                    .where(_AT.task_id == _dt2)) > 0)
+check("a task with attachments deletes cleanly",
+      admin.post(f"/tasks/{_dt2}/delete").status_code in (200, 303))
+with _SLT() as _d:
+    check("and leaves no attachment behind",
+          _d.scalar(_msel(_func.count()).select_from(_AT)
+                    .where(_AT.task_id == _dt2)) == 0)
+
+# Deleting a PERSON has exactly the same trap: a tick names who made it, and
+# that column will not take a null either.
+print("\n== and deleting a person who had chased work ==")
+_mk = admin.post("/admin/users", data={
+    "name": f"Temp Chaser {RUN}", "email": f"chaser.{RUN}@gcs.local",
+    "password": "gcs1234", "role": "doer", "branch_id": "", "department_id": "",
+    "bm_delegation": "60", "bm_checklist": "20", "bm_fms": "20"})
+check("a test user is created", _mk.status_code in (200, 303), _mk.status_code)
+with _SLT() as _d:
+    _tmp = _d.scalar(_msel(_MU).where(_MU.email == f"chaser.{RUN}@gcs.local"))
+    _tid_keep = _d.scalars(_msel(_MT).where(_MT.doer_id != _tmp.id)).first().id
+    _d.add(_FU(org_id=_tmp.org_id, task_id=_tid_keep,
+               day=_clock.today(), by_id=_tmp.id))
+    _d.add(_AT(task_id=_tid_keep, uploaded_by_id=_tmp.id, filename="theirs.png",
+               stored_name=f"k-{RUN}", size=1, content_type="image/png",
+               storage="db", data=b"x"))
+    _d.commit()
+    _tmp_id, _tmp_name = _tmp.id, _tmp.name
+
+_page = admin.get(f"/admin/users/{_tmp_id}/delete")
+check("the confirmation page counts their follow-up ticks",
+      "Follow-up ticks they made" in _page.text)
+check("and the files they uploaded", "Files they uploaded" in _page.text)
+
+_rm = admin.post(f"/admin/users/{_tmp_id}/delete",
+                 data={"mode": "transfer", "transfer_to": str(_amit.id),
+                       "confirm": _tmp_name})
+check("deleting them does not fail", _rm.status_code in (200, 303), _rm.status_code)
+with _SLT() as _d:
+    check("the person is gone", _d.get(_MU, _tmp_id) is None)
+    check("no tick is left pointing at nobody",
+          _d.scalar(_msel(_func.count()).select_from(_FU)
+                    .where(_FU.by_id == _tmp_id)) == 0)
+    check("the tick itself survives, under the person it moved to",
+          _d.scalar(_msel(_func.count()).select_from(_FU)
+                    .where(_FU.task_id == _tid_keep, _FU.by_id == _amit.id)) > 0)
+    check("and somebody else's task was not touched",
+          _d.get(_MT, _tid_keep) is not None)
+
+# Finally: nothing anywhere may be left pointing at a row that is gone.
+print("\n== nothing in the database points at something deleted ==")
+with _SLT() as _d:
+    _orphans = []
+    for _model, _col, _parent in [
+            (_FU, "task_id", _MT), (_FU, "by_id", _MU),
+            (_TC, "task_id", _MT), (_AT, "task_id", _MT),
+            (_AT, "uploaded_by_id", _MU), (_MT, "doer_id", _MU),
+            (_MT, "assigner_id", _MU)]:
+        _ids = {r[0] for r in _d.execute(_msel(getattr(_model, _col))).all()
+                if r[0] is not None}
+        _have = {r[0] for r in _d.execute(_msel(_parent.id)).all()}
+        _missing = _ids - _have
+        if _missing:
+            _orphans.append(f"{_model.__tablename__}.{_col}: {sorted(_missing)[:3]}")
+    check("every row points at something that exists", not _orphans, _orphans)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

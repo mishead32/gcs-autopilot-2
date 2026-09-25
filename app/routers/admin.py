@@ -9,7 +9,7 @@ from ..deps import require_right
 from ..models import (
     User, Role, Branch, Department, Right, RIGHT_LABELS, DEFAULT_RIGHTS,
     Task, TaskComment, Attachment, RecurringRule, Flow, FlowStep, FlowInstance,
-    OutboundMessage, HelpTicket, Holiday,
+    OutboundMessage, HelpTicket, Holiday, Followup,
 )
 from ..security import hash_password
 from ..services import xlsx
@@ -186,6 +186,8 @@ def _links(db: Session, u: User) -> dict:
         "runs": n(FlowInstance, FlowInstance.started_by_id == u.id),
         "help": n(HelpTicket, or_(HelpTicket.raiser_id == u.id,
                                   HelpTicket.helper_id == u.id)),
+        "chased": n(Followup, Followup.by_id == u.id),
+        "files": n(Attachment, Attachment.uploaded_by_id == u.id),
     }
 
 
@@ -264,6 +266,11 @@ def delete_user(user_id: int, mode: str = Form("transfer"),
                    .values(raiser_id=heir.id))
         db.execute(update(HelpTicket).where(HelpTicket.helper_id == target.id)
                    .values(helper_id=heir.id))
+        # Follow-up ticks. The column will not take a null, so a tick left
+        # pointing at a deleted person stops the delete dead — which is how
+        # this went unnoticed until somebody tried it on the live site.
+        db.execute(update(Followup).where(Followup.by_id == target.id)
+                   .values(by_id=heir.id))
 
     elif has_history:   # mode == "purge"
         # their tasks go, and anything hanging off those tasks goes with them
@@ -273,6 +280,9 @@ def delete_user(user_id: int, mode: str = Form("transfer"),
             db.execute(delete(HelpTicket).where(HelpTicket.task_id.in_(tids)))
             db.execute(delete(TaskComment).where(TaskComment.task_id.in_(tids)))
             db.execute(delete(Attachment).where(Attachment.task_id.in_(tids)))
+            # a tick says "this task was chased" — with the task gone it
+            # says nothing, and the database will not let it stay
+            db.execute(delete(Followup).where(Followup.task_id.in_(tids)))
             db.execute(update(OutboundMessage)
                        .where(OutboundMessage.task_id.in_(tids))
                        .values(task_id=None))
@@ -281,6 +291,16 @@ def delete_user(user_id: int, mode: str = Form("transfer"),
             or_(HelpTicket.raiser_id == target.id,
                 HelpTicket.helper_id == target.id)))
         db.execute(delete(TaskComment).where(TaskComment.author_id == target.id))
+        # Ticks this person made on work that is staying. Purge means their
+        # record goes, so the ticks go with it rather than being pinned on
+        # somebody who never made them.
+        db.execute(delete(Followup).where(Followup.by_id == target.id))
+        # Files they uploaded onto other people's tasks are that task's
+        # proof, not this person's property — the file stays and the name on
+        # it becomes whoever is doing the deleting, the same treatment flow
+        # runs already get.
+        db.execute(update(Attachment).where(Attachment.uploaded_by_id == target.id)
+                   .values(uploaded_by_id=user.id))
         db.execute(delete(RecurringRule).where(
             or_(RecurringRule.doer_id == target.id,
                 RecurringRule.assigner_id == target.id)))

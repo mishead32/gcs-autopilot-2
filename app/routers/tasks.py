@@ -14,7 +14,8 @@ from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
-    Branch, Right, OutboundMessage, AuditState, AUDIT_LABELS, HelpTicket, HelpStatus
+    Branch, Right, OutboundMessage, AuditState, AUDIT_LABELS, HelpTicket, HelpStatus,
+    Followup
 )
 from ..services import notify, flows as flow_svc, storage, holidays, xlsx
 from ..templating import templates
@@ -477,13 +478,30 @@ def delete_task(task_id: int, user: User = Depends(require_right(Right.DELETE_TA
             400, "This task is a step inside a running FMS flow. "
                  "Deleting it would break the chain — cancel the flow run instead."
         )
-    # the notification log outlives the task, so unhook it rather than
-    # cascading — Postgres enforces this foreign key even though SQLite doesn't
+    # Everything that points at this task has to be dealt with first, or the
+    # database refuses the delete and the person gets a 500 with no idea why.
+    #
+    # There are five such tables, and each one gets the treatment that suits
+    # what it is. Notes and attachments belong to the task and go with it
+    # (the model cascades those). The three below do not:
+
+    # The notification log is a record of what we SENT. It outlives the thing
+    # it was about, so the link is unhooked rather than the row destroyed.
     db.execute(update(OutboundMessage)
                .where(OutboundMessage.task_id == task.id)
                .values(task_id=None))
-    # a help ticket is only a record of who asked for this task — it goes with it
+
+    # A help ticket is only a record of somebody asking for this task to
+    # exist. With the task gone it refers to nothing, so it goes too.
     db.execute(sa_delete(HelpTicket).where(HelpTicket.task_id == task.id))
+
+    # A follow-up tick says "the EA chased this task on Tuesday". It cannot
+    # outlive the task either — and it is not optional, the column will not
+    # take a null. This was the missing one: any task the follow-up desk had
+    # ever ticked refused to delete, with nothing on screen but "Internal
+    # Server Error".
+    db.execute(sa_delete(Followup).where(Followup.task_id == task.id))
+
     db.delete(task)
     db.commit()
     return RedirectResponse("/tasks?scope=assigned&status=open", status_code=303)

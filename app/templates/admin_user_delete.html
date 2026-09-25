@@ -15,7 +15,7 @@
 </div>
 {% else %}
 
-{% set total = links.doing + links.assigned + links.notes + links.rules + links.steps + links.runs + links.help %}
+{% set total = links.doing + links.assigned + links.notes + links.rules + links.steps + links.runs + links.help + links.chased + links.files %}
 
 <div class="card" style="max-width:720px">
   <strong>What is linked to this person</strong>
@@ -30,6 +30,8 @@
       <tr><td>FMS steps where they are the default doer</td><td><strong>{{ links.steps }}</strong></td></tr>
       <tr><td>FMS runs they started</td><td><strong>{{ links.runs }}</strong></td></tr>
       <tr><td>Help Desk requests</td><td><strong>{{ links.help }}</strong></td></tr>
+      <tr><td>Follow-up ticks they made</td><td><strong>{{ links.chased }}</strong></td></tr>
+      <tr><td>Files they uploaded</td><td><strong>{{ links.files }}</strong></td></tr>
     </table>
   </div>
   <p class="m" style="margin-top:10px">
