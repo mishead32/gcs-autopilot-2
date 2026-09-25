@@ -100,7 +100,49 @@ async def lifespan(app: FastAPI):
                 pass
 
 
+class HeadAsGet:
+    """Answer HEAD anywhere GET is answered.
+
+    A route registered with @app.get only accepts GET, so every page in this
+    app refused HEAD with 405 — including /healthz, which is exactly what an
+    uptime monitor pings. UptimeRobot, Better Stack and most link checkers
+    send HEAD first, so the site looked permanently down while being
+    perfectly healthy.
+
+    HTTP says a HEAD response carries the same status and headers as the GET
+    would, with no body. So the request is served as a GET and the body is
+    dropped on the way out — which keeps Content-Length truthful rather than
+    inventing a zero.
+
+    Written as plain ASGI so it sits outside routing and covers every route,
+    including ones added later, instead of a per-endpoint patch somebody has
+    to remember.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "HEAD":
+            return await self.app(scope, receive, send)
+
+        finished = False
+
+        async def send_without_body(message):
+            nonlocal finished
+            if message["type"] == "http.response.body":
+                if finished:
+                    return          # a streamed response: swallow the rest
+                finished = True
+                message = {"type": "http.response.body", "body": b"",
+                           "more_body": False}
+            await send(message)
+
+        await self.app(dict(scope, method="GET"), receive, send_without_body)
+
+
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
+app.add_middleware(HeadAsGet)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,

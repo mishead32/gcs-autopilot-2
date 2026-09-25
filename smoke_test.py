@@ -2332,5 +2332,39 @@ finally:
 check("/cron/spawn still works alongside it",
       admin.get("/cron/spawn").status_code in (200, 401))
 
+print("\n== an uptime monitor can reach us ==")
+# UptimeRobot, Better Stack and most link checkers send HEAD, not GET. Every
+# route used to refuse it with 405, so the site read as permanently down
+# while being perfectly healthy.
+_hc = TestClient(app, follow_redirects=False)
+for _path in ["/", "/healthz", "/login", "/static/app.css"]:
+    _g = _hc.request("GET", _path)
+    _h = _hc.request("HEAD", _path)
+    check(f"HEAD {_path} is answered, not refused",
+          _h.status_code != 405, f"got {_h.status_code}")
+    check(f"HEAD {_path} gives the same status as GET",
+          _h.status_code == _g.status_code, f"{_h.status_code} vs {_g.status_code}")
+    check(f"HEAD {_path} sends no body", _h.content == b"", _h.content[:40])
+
+# The header must still describe what a GET would return — that is what HEAD
+# is for. A zero here would be a lie.
+_hh = _hc.request("HEAD", "/healthz")
+_hg = _hc.request("GET", "/healthz")
+check("HEAD keeps the real content-length",
+      _hh.headers.get("content-length") == _hg.headers.get("content-length"),
+      f"{_hh.headers.get('content-length')} vs {_hg.headers.get('content-length')}")
+check("and the same content-type",
+      _hh.headers.get("content-type") == _hg.headers.get("content-type"))
+
+# The monitor URL people will actually use.
+check("/healthz answers HEAD with 200",
+      _hc.request("HEAD", "/healthz").status_code == 200)
+check("and GET still returns the real body",
+      '"ok":true' in _hc.request("GET", "/healthz").text)
+
+# POST must NOT be quietly turned into a GET by the same middleware.
+check("POST is untouched",
+      _hc.request("POST", "/healthz").status_code == 405)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
