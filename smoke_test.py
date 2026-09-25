@@ -2648,5 +2648,197 @@ check("saying plainly that it scores only once the audit closes",
 check("a nonsense state falls back to Pending",
       admin.get("/reports/tasks?source=fms&state=banana").status_code == 200)
 
+print("\n== Excel downloads ==")
+import io as _xio
+from openpyxl import load_workbook as _load
+
+_XL = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+def _book(client, url):
+    """Download an export and open it, the way the person will."""
+    r = client.get(url)
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith(_XL):
+        return None, r
+    return _load(_xio.BytesIO(r.content)), r
+
+def _table(ws):
+    """(headers, rows) from a sheet, skipping the title block above it.
+
+    The header is the first row carrying more than one value — the title,
+    the note and the export stamp above it each occupy column A alone.
+    """
+    rows = list(ws.iter_rows(values_only=True))
+    for i, r in enumerate(rows):
+        if sum(1 for c in r if c not in (None, "")) > 1:
+            return list(r), [x for x in rows[i + 1:]]
+    return [], []
+
+_EXPORTS = [
+    "/tasks?scope=mine&status=open&export=xlsx",
+    "/tasks?scope=all&status=all&export=xlsx",
+    "/tasks?scope=all&status=false_mark&export=xlsx",
+    "/reports/tasks?source=delegation&export=xlsx",
+    "/reports/tasks?source=checklist&state=completed&export=xlsx",
+    "/reports/tasks?source=fms&state=audit_pending&export=xlsx",
+    "/reports/followups?export=xlsx",
+    "/reports/audit?export=xlsx",
+    "/reports/score?export=xlsx",
+    "/admin/users?export=xlsx",
+    "/admin/branches?export=xlsx",
+    "/admin/departments?export=xlsx",
+    "/followups?export=xlsx",
+    "/followups?date_from=2026-09-01&date_to=2026-09-25&export=xlsx",
+    "/flows?export=xlsx",
+    "/recurring?export=xlsx",
+    "/outbox?export=xlsx",
+]
+for _u in _EXPORTS:
+    _wb, _r = _book(admin, _u)
+    _name = _u.split("?")[0]
+    check(f"{_name} downloads an Excel file", _wb is not None,
+          f"{_r.status_code} {_r.headers.get('content-type','')[:40]}")
+    if _wb is None:
+        continue
+    check(f"{_name}: the browser is told to save it",
+          "attachment" in _r.headers.get("content-disposition", ""))
+    check(f"{_name}: the file is named and dated",
+          ".xlsx" in _r.headers.get("content-disposition", ""))
+    _ws = _wb.worksheets[0]
+    _hdr, _rows = _table(_ws)
+    check(f"{_name}: it has a header row", bool(_hdr) and all(_hdr[:2]), _hdr[:3])
+    check(f"{_name}: the header is frozen", _ws.freeze_panes is not None)
+    check(f"{_name}: and says when it was exported",
+          any("Exported" in str(c.value or "") for c in _ws["A"][:6]))
+
+# --- the file must hold what the page held, not a different query ----------
+_pg = admin.get("/tasks?scope=all&status=open&source=delegation")
+_ids_page = set(_re.findall(r'/tasks/(\d+)"', _pg.text))
+_wb, _ = _book(admin, "/tasks?scope=all&status=open&source=delegation&export=xlsx")
+_hdr, _rows = _table(_wb.worksheets[0])
+_titles_file = {r[_hdr.index("Task")] for r in _rows}
+with _SLT() as _d:
+    _titles_page = {_d.get(_MT, int(i)).title for i in _ids_page}
+check("the Excel rows are exactly the page's rows",
+      _titles_file == _titles_page,
+      f"file {len(_titles_file)} vs page {len(_titles_page)}")
+check("every column the page shows is a column in the file",
+      all(h in _hdr for h in ["Task", "Doer", "Priority", "Status",
+                              "Planned date", "Audit", "False marking"]), _hdr)
+
+# A date is a real date, not text that looks like one — otherwise it will
+# not sort, filter by month, or group in a pivot table.
+_planned = _wb.worksheets[0].cell(
+    row=int(_wb.worksheets[0].auto_filter.ref.split(":")[0][1:]) + 1,
+    column=_hdr.index("Planned date") + 1)
+from datetime import datetime as _dtclass
+check("a date lands in the cell as a real date",
+      isinstance(_planned.value, _dtclass), type(_planned.value).__name__)
+check("and carries a readable format", "mmm" in _planned.number_format.lower(),
+      _planned.number_format)
+
+# --- a filter on the page is a filter in the file -------------------------
+_narrow = "/tasks?scope=all&status=all&date_from=2026-01-01&date_to=2026-01-02"
+_wbn, _ = _book(admin, _narrow + "&export=xlsx")
+_h2, _r2 = _table(_wbn.worksheets[0])
+_wba, _ = _book(admin, "/tasks?scope=all&status=all&export=xlsx")
+_h3, _r3 = _table(_wba.worksheets[0])
+check("a date range really narrows the export", len(_r2) < len(_r3),
+      f"{len(_r2)} vs {len(_r3)}")
+check("and the file says which filters produced it",
+      any("2026-01-01" in str(c.value or "")
+          for c in _wbn.worksheets[0]["A"][:6]))
+
+# --- nobody exports rows they cannot see ----------------------------------
+_wbd, _ = _book(doer, "/reports/tasks?source=delegation&state=all&export=xlsx")
+_hd, _rd = _table(_wbd.worksheets[0])
+_others = {n for n in (r[_hd.index("Doer")] for r in _rd) if n} - {_amit.name}
+_assigned = set()
+with _SLT() as _d:
+    for _t in _d.scalars(_msel(_MT).where(_MT.assigner_id == _amit.id)).all():
+        _assigned.add(_t.doer.name)
+check("a doer's export holds only their own work",
+      not (_others - _assigned), f"leaked {sorted(_others - _assigned)[:3]}")
+check("a doer cannot export the staff list",
+      doer.get("/admin/users?export=xlsx").status_code == 403)
+check("nor the branches", doer.get("/admin/branches?export=xlsx").status_code == 403)
+check("nor the EM score report",
+      doer.get("/reports/score?export=xlsx").status_code == 403)
+check("and an anonymous visitor gets nothing",
+      TestClient(app, follow_redirects=False)
+      .get("/admin/users?export=xlsx").status_code in (303, 401, 403))
+
+# --- the user list, which is what was asked for by name -------------------
+_wbu, _ = _book(admin, "/admin/users?export=xlsx")
+_hu, _ru = _table(_wbu.worksheets[0])
+with _SLT() as _d:
+    _headcount = len(_d.scalars(_msel(_MU).where(_MU.org_id == 1)).all())
+check("the user list exports every user", len(_ru) == _headcount,
+      f"{len(_ru)} rows vs {_headcount} users")
+for _col in ("Name", "Email", "Role", "Branch", "Department", "Active",
+             "Rights", "Benchmark — Delegation"):
+    check(f"the user list has a {_col} column", _col in _hu, _hu)
+check("rights are spelled out, not stored codes",
+      any("All rights" in str(r[_hu.index("Rights")]) for r in _ru))
+check("and an ordinary doer's rights read plainly",
+      any(str(r[_hu.index("Rights")]) in ("Execute only",)
+          or "," in str(r[_hu.index("Rights")]) for r in _ru))
+check("no password or hash is ever in the file",
+      not any("hash" in str(h).lower() or "password" in str(h).lower()
+              for h in _hu), _hu)
+
+# --- multi-tab books ------------------------------------------------------
+_wbs, _ = _book(admin, "/reports/score?export=xlsx")
+check("the score export has both views",
+      [w.title for w in _wbs.worksheets] == ["Person-wise", "Branch-wise"],
+      [w.title for w in _wbs.worksheets])
+_hs, _rs = _table(_wbs.worksheets[0])
+check("with the bifurcation spread across columns",
+      all(c in _hs for c in ["Score", "Delegation penalty", "Checklist penalty",
+                             "FMS penalty", "False marking penalty"]), _hs)
+_wbr, _ = _book(admin, "/reports/tasks?source=delegation&export=xlsx")
+check("a source report carries its figures on a second tab",
+      "Summary" in [w.title for w in _wbr.worksheets])
+_wbf, _ = _book(admin, "/flows?export=xlsx")
+check("the FMS export lists steps and runs separately",
+      [w.title for w in _wbf.worksheets] == ["Flow steps", "Running now"],
+      [w.title for w in _wbf.worksheets])
+
+# --- an empty result is a readable file, not a broken one -----------------
+_wbe, _ = _book(admin, "/tasks?scope=mine&status=done&date_from=2001-01-01"
+                       "&date_to=2001-01-02&export=xlsx")
+check("an export with no rows still opens", _wbe is not None)
+if _wbe:
+    check("and says so in words",
+          any("Nothing matched" in str(c.value or "")
+              for c in _wbe.worksheets[0]["A"][:8]))
+
+# --- the button is on the pages ------------------------------------------
+for _page in ["/tasks?scope=mine&status=open", "/reports/tasks?source=delegation",
+              "/reports/audit", "/reports/score", "/reports/followups",
+              "/admin/users", "/admin/branches", "/admin/departments",
+              "/followups", "/flows", "/recurring", "/outbox"]:
+    _p = admin.get(_page)
+    check(f"{_page} offers the Excel button",
+          "export=xlsx" in _p.text, _p.status_code)
+
+# Performance and the Dashboard too.
+_wbp, _rp2 = _book(admin, "/stats?export=xlsx")
+check("/stats downloads an Excel file", _wbp is not None, _rp2.status_code)
+if _wbp:
+    check("with both views",
+          [w.title for w in _wbp.worksheets] == ["Person-wise", "Branch-wise"])
+check("a doer cannot export Performance",
+      doer.get("/stats?export=xlsx").status_code == 403)
+check("the dashboard offers one too", "export=xlsx" in admin.get("/").text)
+check("and a doer's dashboard offers it as well", "export=xlsx" in doer.get("/").text)
+
+# An ordinary GET must still be the page, not a download.
+check("without export= the page is still a page",
+      admin.get("/tasks?scope=mine&status=open").headers["content-type"]
+      .startswith("text/html"))
+check("and a nonsense export value is ignored",
+      admin.get("/tasks?scope=mine&status=open&export=banana")
+      .headers["content-type"].startswith("text/html"))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

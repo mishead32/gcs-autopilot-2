@@ -1,7 +1,14 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
-<h1>Users &amp; rights</h1>
-<p class="sub">Role sets what someone sees. Rights set what they can do. Owner and admin always hold every right.</p>
+<div class="page-head">
+  <div>
+    <h1>Users &amp; rights</h1>
+    <p class="sub">Role sets what someone sees. Rights set what they can do. Owner and admin always hold every right.</p>
+  </div>
+  {{ excel_btn('/admin/users?export=xlsx',
+               title='Download the staff list with rights, branch, department and benchmarks') }}
+</div>
 
 <div class="grid g2 wide">
   <div>

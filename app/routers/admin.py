@@ -12,6 +12,7 @@ from ..models import (
     OutboundMessage, HelpTicket, Holiday,
 )
 from ..security import hash_password
+from ..services import xlsx
 from ..templating import templates
 
 router = APIRouter(prefix="/admin")
@@ -54,10 +55,32 @@ def _branch_links(db: Session, b: Branch) -> dict:
 
 
 @router.get("/users", response_class=HTMLResponse)
-def users(request: Request, user: User = Depends(manage), db: Session = Depends(get_db)):
+def users(request: Request, export: str = "", user: User = Depends(manage),
+          db: Session = Depends(get_db)):
     people = db.scalars(
         select(User).where(User.org_id == user.org_id).order_by(User.name)
     ).all()
+
+    # The staff list as a spreadsheet — rights spelled out in words rather
+    # than the stored codes, because the point of downloading it is usually
+    # to have somebody who does not use the software check who can do what.
+    if xlsx.wants(export):
+        return xlsx.one("users", "Users & rights", [
+            ("Name", lambda u: u.name),
+            ("Email", lambda u: u.email),
+            ("WhatsApp", lambda u: u.phone or ""),
+            ("Role", lambda u: u.role.value.title()),
+            ("Branch", lambda u: u.branch.name if u.branch else ""),
+            ("Department", lambda u: u.department.name if u.department else ""),
+            ("Active", lambda u: "Yes" if u.active else "No"),
+            ("Benchmark — Delegation", lambda u: u.bm_delegation),
+            ("Benchmark — Checklist", lambda u: u.bm_checklist),
+            ("Benchmark — FMS", lambda u: u.bm_fms),
+            ("Scored by software", lambda u: u.scored_by_system),
+            ("Judged by hand", lambda u: u.scored_by_hand),
+            ("Rights", _rights_text),
+        ], people,
+            "Owner and admin hold every right, whatever the Rights column lists.")
     branches = db.scalars(
         select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
     ).all()
@@ -309,11 +332,21 @@ def _branch_or_404(db: Session, user: User, branch_id: int) -> Branch:
 
 
 @router.get("/branches", response_class=HTMLResponse)
-def branches_page(request: Request, user: User = Depends(manage),
-                  db: Session = Depends(get_db)):
+def branches_page(request: Request, export: str = "",
+                  user: User = Depends(manage), db: Session = Depends(get_db)):
     branches = db.scalars(
         select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
     ).all()
+    if xlsx.wants(export):
+        use = {b.id: _branch_links(db, b) for b in branches}
+        return xlsx.one("branches", "Branches", [
+            ("Branch", lambda b: b.name),
+            ("People", lambda b: use[b.id]["staff"]),
+            ("Departments", lambda b: use[b.id]["depts"]),
+            ("Tasks", lambda b: use[b.id]["tasks"]),
+            ("Checklist rules", lambda b: use[b.id]["rules"]),
+            ("FMS flows", lambda b: use[b.id]["flows"]),
+        ], branches)
     return templates.TemplateResponse(request, "admin_branches.html", {
         "user": user, "branches": branches,
         "branch_use": {b.id: _branch_links(db, b) for b in branches},
@@ -421,12 +454,19 @@ def _dept_clash(db: Session, user: User, name: str, branch_id, skip_id=None):
 
 
 @router.get("/departments", response_class=HTMLResponse)
-def departments_page(request: Request, user: User = Depends(manage),
-                     db: Session = Depends(get_db)):
+def departments_page(request: Request, export: str = "",
+                     user: User = Depends(manage), db: Session = Depends(get_db)):
     depts = db.scalars(
         select(Department).where(Department.org_id == user.org_id)
         .order_by(Department.name)
     ).all()
+    if xlsx.wants(export):
+        staff = {d.id: _dept_staff(db, d) for d in depts}
+        return xlsx.one("departments", "Departments", [
+            ("Department", lambda d: d.name),
+            ("Branch", lambda d: d.branch.name if d.branch else "All branches"),
+            ("People", lambda d: staff.get(d.id, 0)),
+        ], depts)
     branches = db.scalars(
         select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
     ).all()
@@ -571,3 +611,11 @@ def delete_holiday(holiday_id: int, user: User = Depends(manage),
     db.delete(h)
     db.commit()
     return RedirectResponse(f"/admin/holidays?year={yr}", status_code=303)
+
+
+def _rights_text(u: User) -> str:
+    """The rights this person holds, in the same words the page shows."""
+    if u.role in (Role.OWNER, Role.ADMIN):
+        return "All rights"
+    held = [RIGHT_LABELS[r] for r in Right if r.value in u.right_set]
+    return ", ".join(held) if held else "Execute only"

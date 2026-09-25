@@ -1,0 +1,16 @@
+{# The Excel button.
+
+   It points at the page it sits on with export=xlsx added, so whatever the
+   filters are showing is what lands in the file. Nothing is remembered and
+   nothing is built in the background: the click IS the export.
+#}
+{% macro excel_btn(url, label='Excel', title='') %}
+<a class="btn ghost sm excel" href="{{ url }}" download
+   title="{{ title or 'Download what is on this page as an Excel file' }}">
+  <span class="xi" aria-hidden="true">⤓</span> {{ label }}</a>
+{% endmacro %}
+
+{# For pages with no filters in the query string — a plain list. #}
+{% macro excel_plain(path, label='Excel', title='') %}
+{{ excel_btn(path ~ ('&' if '?' in path else '?') ~ 'export=xlsx', label, title) }}
+{% endmacro %}

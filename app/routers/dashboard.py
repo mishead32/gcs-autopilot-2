@@ -12,7 +12,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, User, Role, RecurringRule, Recurrence,
     Priority, Branch, OutboundMessage, FlowInstance
 )
-from ..services import scoring, recurring
+from ..services import scoring, recurring, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -181,11 +181,20 @@ def _pack(c):
 
 @router.get("/stats", response_class=HTMLResponse)
 def stats(request: Request, date_from: str = "", date_to: str = "",
-          branch: str = "", doer: str = "", days: int = 7,
+          branch: str = "", doer: str = "", days: int = 7, export: str = "",
           user: User = Depends(manager_up), db: Session = Depends(get_db)):
     branches, branch_id, doers, doer_id = _resolve_filters(db, user, branch, doer)
     start, end = scoring.resolve_window(date_from or None, date_to or None, days)
     board = scoring.scoreboard(db, user.org_id, start, end, branch_id, doer_id)
+
+    if xlsx.wants(export):
+        from .reports import _score_columns
+        return xlsx.book("performance", [
+            ("Person-wise", _score_columns(board, "Employee"),
+             board["people"], f"{start:%d %b %Y} to {end:%d %b %Y}"),
+            ("Branch-wise", _score_columns(board, "Branch"),
+             board["branches"], f"{start:%d %b %Y} to {end:%d %b %Y}"),
+        ])
 
     all_doers = scoring.selectable_doers(db, user, None)
     return templates.TemplateResponse(request, "stats.html", {
@@ -226,8 +235,8 @@ def my_score_api(days: int = 30, user: User = Depends(current_user),
 
 # ------------------------------------------------------- recurring rules ---
 @router.get("/recurring", response_class=HTMLResponse)
-def recurring_list(request: Request, user: User = Depends(manager_up),
-                   db: Session = Depends(get_db)):
+def recurring_list(request: Request, export: str = "",
+                   user: User = Depends(manager_up), db: Session = Depends(get_db)):
     rules = db.scalars(
         select(RecurringRule).where(RecurringRule.org_id == user.org_id)
         .order_by(RecurringRule.title)
@@ -236,6 +245,21 @@ def recurring_list(request: Request, user: User = Depends(manager_up),
         select(User).where(User.org_id == user.org_id, User.active.is_(True)).order_by(User.name)
     ).all()
     branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)).all()
+    if xlsx.wants(export):
+        return xlsx.one("checklist-rules", "Checklist rules", [
+            ("Task", lambda r: r.title),
+            ("Details", lambda r: r.details or ""),
+            ("Doer", lambda r: r.doer.name if r.doer else ""),
+            ("Branch", lambda r: r.branch.name if r.branch else "All branches"),
+            ("Repeats", lambda r: r.frequency.value.title()),
+            ("On", lambda r: r.day_of or ""),
+            ("Due time", lambda r: r.due_time or ""),
+            ("Priority", lambda r: r.priority.value.title()),
+            ("Needs audit", lambda r: "Yes" if r.requires_audit else ""),
+            ("Proof required", lambda r: "Yes" if r.requires_attachment else ""),
+            ("Switched on", lambda r: "Yes" if r.active else "No"),
+        ], rules, "The rules that create checklist tasks each day.")
+
     return templates.TemplateResponse(request, "recurring.html", {
         "user": user, "rules": rules, "doers": doers, "branches": branches,
         "frequencies": list(Recurrence), "priorities": list(Priority),
@@ -310,9 +334,20 @@ def sheet_sync(request: Request, user: User = Depends(admin_up),
 
 # ------------------------------------------------------- message outbox ----
 @router.get("/outbox", response_class=HTMLResponse)
-def outbox(request: Request, user: User = Depends(manager_up), db: Session = Depends(get_db)):
-    msgs = db.scalars(
-        select(OutboundMessage).where(OutboundMessage.org_id == user.org_id)
-        .order_by(OutboundMessage.created_at.desc()).limit(100)
-    ).all()
+def outbox(request: Request, export: str = "", user: User = Depends(manager_up),
+           db: Session = Depends(get_db)):
+    q = (select(OutboundMessage).where(OutboundMessage.org_id == user.org_id)
+         .order_by(OutboundMessage.created_at.desc()))
+    if xlsx.wants(export):
+        # The whole trail, not the hundred rows the page shows — the reason
+        # to download it is usually "what did we send this person, ever".
+        return xlsx.one("outbox", "Outbox", [
+            ("Queued", lambda m: m.created_at),
+            ("Number", lambda m: m.to_phone or ""),
+            ("Message type", lambda m: (m.template or "").replace("_", " ").title()),
+            ("Status", lambda m: (m.status or "").title()),
+            ("Sent", lambda m: m.sent_at),
+            ("Message", lambda m: m.body or ""),
+        ], list(db.scalars(q).all()))
+    msgs = db.scalars(q.limit(100)).all()
     return templates.TemplateResponse(request, "outbox.html", {"user": user, "msgs": msgs})

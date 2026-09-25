@@ -1,6 +1,12 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
-<h1>Performance</h1>
+<div class="page-head">
+  <div><h1>Performance</h1></div>
+  {{ excel_btn('/stats?branch=' ~ (branch_id or '') ~ '&doer=' ~ (doer_id or '') ~
+               '&date_from=' ~ date_from ~ '&date_to=' ~ date_to ~ '&export=xlsx',
+               title='Download this scoreboard — person-wise and branch-wise, with the full breakdown') }}
+</div>
 <p class="sub">
   Score starts at 100. Work not done, work done late and false marking each pull it down.
   <span id="livedot" class="live">● live</span>

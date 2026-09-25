@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_filters.html" import filter_bar, date_presets %}
+{% from "_export.html" import excel_btn %}
 {% block title %}EM score report · {{ APP_NAME }}{% endblock %}
 
 {% macro score_row(name, sub, card, link='') %}
@@ -32,7 +33,11 @@
     <h1>EM score — person-wise &amp; branch-wise</h1>
     <p class="sub">Average, and the full bifurcation behind it.</p>
   </div>
-  <a class="btn ghost" href="/reports">← All reports</a>
+  <div>
+    {{ excel_btn(f.url(export='xlsx'),
+                 title='Download both views as an Excel file — person-wise and branch-wise, with the full bifurcation in columns') }}
+    <a class="btn ghost" href="/reports">← All reports</a>
+  </div>
 </div>
 
 <div class="tabs">

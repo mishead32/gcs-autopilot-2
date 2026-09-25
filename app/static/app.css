@@ -660,3 +660,11 @@ dialog.markdlg .mb-load.bad{color:var(--bad)}
 /* The button in the list itself. */
 td.markcell{white-space:nowrap;text-align:right}
 td.markcell .m{white-space:nowrap}
+
+/* ------------------------------------------- Excel download button ----- */
+.btn.excel{white-space:nowrap}
+.btn.excel .xi{font-weight:800;margin-right:2px;display:inline-block;
+  transform:translateY(1px)}
+.btn.excel:hover{border-color:#1d7044;color:#1d7044;background:#f0fdf4}
+.page-head>div:last-child{display:flex;gap:8px;align-items:center;
+  flex-wrap:wrap;justify-content:flex-end}

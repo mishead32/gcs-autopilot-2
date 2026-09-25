@@ -1,7 +1,11 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block title %}Departments · {{ APP_NAME }}{% endblock %}
 {% block content %}
-<h1>Departments</h1>
+<div class="page-head">
+  <div><h1>Departments</h1></div>
+  {{ excel_btn('/admin/departments?export=xlsx') }}
+</div>
 <p class="sub">
   A department sits under one branch — Front Desk at Bodyzone, Housekeeping at
   Spa Kora — or under none when it covers the whole group, like Accounts or HR.

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table with context %}
 {% from "_filters.html" import filter_bar, date_presets, scope_note %}
+{% from "_export.html" import excel_btn %}
 {% block title %}{{ cfg.label }} report · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -8,7 +9,11 @@
     <h1>{{ cfg.label }} — pending &amp; completed</h1>
     <p class="sub">{{ cfg.blurb }}.</p>
   </div>
-  <a class="btn ghost" href="/reports">← All reports</a>
+  <div>
+    {{ excel_btn(f.url(export='xlsx'),
+                 title='Download this report as an Excel file — the same rows and filters, plus a summary tab') }}
+    <a class="btn ghost" href="/reports">← All reports</a>
+  </div>
 </div>
 
 <div class="tabs">

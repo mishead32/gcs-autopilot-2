@@ -1,11 +1,17 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>Follow-ups</h1>
     <p class="sub">Tick every task you chased. One tick per task per day.</p>
   </div>
-  <a class="btn ghost" href="/reports/followups">Management report</a>
+  <div>
+    {{ excel_btn('/followups?desk=' ~ desk ~ '&date_from=' ~ date_from ~
+                 '&date_to=' ~ date_to ~ '&export=xlsx',
+                 title='Download this tick list as an Excel file') }}
+    <a class="btn ghost" href="/reports/followups">Management report</a>
+  </div>
 </div>
 
 <div class="tabs">

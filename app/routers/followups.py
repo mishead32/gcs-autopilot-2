@@ -32,6 +32,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Followup,
     PRIORITY_ORDER,
 )
+from ..services import xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -124,7 +125,7 @@ def _ticks(db: Session, task_ids: list[int], day: date) -> dict[int, Followup]:
 # ------------------------------------------------------------- the desk ----
 @router.get("/followups", response_class=HTMLResponse)
 def followups(request: Request, desk: str = "", day: str = "",
-              date_from: str = "", date_to: str = "",
+              date_from: str = "", date_to: str = "", export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     """The desk itself, plus a from/to range view over it.
 
@@ -171,6 +172,14 @@ def followups(request: Request, desk: str = "", day: str = "",
             "done": sum(r["done"] for r in rows),
             "missed": sum(r["missed"] for r in rows),
         })
+        if xlsx.wants(export):
+            return xlsx.one(f"followups-{desk}", f"{cfg['label']} — day by day", [
+                ("Date", lambda r: r["day"]),
+                ("Open tasks", lambda r: r["due"]),
+                ("Chased", lambda r: r["done"]),
+                ("Missed", lambda r: r["missed"]),
+                ("Chased by", lambda r: r["who"]),
+            ], rows, f"{start:%d %b %Y} to {end:%d %b %Y}")
         return templates.TemplateResponse(request, "followups.html", ctx)
 
     on = start
@@ -185,6 +194,23 @@ def followups(request: Request, desk: str = "", day: str = "",
         "tasks": tasks, "ticks": ticks,
         "due": len(tasks), "done": len(ticks), "missed": len(tasks) - len(ticks),
     })
+    if xlsx.wants(export):
+        # One row per task on the desk that day, with the tick and who made
+        # it — the tick list itself, not a summary of it.
+        return xlsx.one(f"followups-{desk}-{on:%Y-%m-%d}",
+                        f"{cfg['label']} — {on:%d %b %Y}", [
+            ("Task", lambda t: t.title),
+            ("Doer", lambda t: t.doer.name if t.doer else ""),
+            ("Branch", lambda t: t.branch.name if t.branch else ""),
+            ("Work type", lambda t: xlsx.SOURCE_NAMES.get(t.source.value, t.source.value)),
+            ("Priority", lambda t: t.priority.value.title()),
+            ("Planned date", lambda t: t.due_at),
+            ("Status", lambda t: t.status.value.replace("_", " ").title()),
+            ("Chased", lambda t: "Yes" if t.id in ticks else "No"),
+            ("Chased by", lambda t: (ticks[t.id].by.name
+                                     if t.id in ticks and ticks[t.id].by else "")),
+            ("Remark", lambda t: getattr(ticks.get(t.id), "remark", "") or ""),
+        ], tasks, f"{len(ticks)} of {len(tasks)} chased")
     return templates.TemplateResponse(request, "followups.html", ctx)
 
 

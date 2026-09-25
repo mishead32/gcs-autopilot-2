@@ -1,8 +1,13 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
   <div><h1>FMS</h1><p class="sub">Flow Management System — define a workflow once, run it for every member, lead or invoice.</p></div>
-  {% if user.has_manage_flow %}<a class="btn" href="/flows/new">+ New flow</a>{% endif %}
+  <div>
+    {{ excel_btn('/flows?export=xlsx',
+                 title='Download every flow step by step, plus the runs in progress') }}
+    {% if user.has_manage_flow %}<a class="btn" href="/flows/new">+ New flow</a>{% endif %}
+  </div>
 </div>
 
 <h2>Templates</h2>

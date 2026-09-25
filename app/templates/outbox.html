@@ -1,7 +1,14 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
-<h1>Message outbox</h1>
-<p class="sub">Notifications the system generated. Plug a WhatsApp provider adapter in to actually send them.</p>
+<div class="page-head">
+  <div>
+    <h1>Message outbox</h1>
+    <p class="sub">Notifications the system generated. Plug a WhatsApp provider adapter in to actually send them.</p>
+  </div>
+  {{ excel_btn('/outbox?export=xlsx',
+               title='Download the whole trail, not just the latest 100') }}
+</div>
 {% if msgs %}
 <div class="table-wrap"><table>
   <tr><th>To</th><th>Template</th><th>Message</th><th>Status</th><th>Queued</th></tr>

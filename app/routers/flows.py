@@ -10,7 +10,7 @@ from ..db import get_db
 from ..deps import current_user, manager_up, require_right
 from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Priority,
                       Right, FIELD_TYPES)
-from ..services import flows as flow_svc
+from ..services import flows as flow_svc, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -46,8 +46,8 @@ def _read_start_form(form) -> str | None:
 
 
 @router.get("/flows", response_class=HTMLResponse)
-def flow_list(request: Request, user: User = Depends(current_user),
-              db: Session = Depends(get_db)):
+def flow_list(request: Request, export: str = "",
+              user: User = Depends(current_user), db: Session = Depends(get_db)):
     flows = db.scalars(
         select(Flow).where(Flow.org_id == user.org_id).order_by(Flow.name)
     ).all()
@@ -56,6 +56,38 @@ def flow_list(request: Request, user: User = Depends(current_user),
         .where(FlowInstance.org_id == user.org_id, FlowInstance.completed_at.is_(None))
         .order_by(FlowInstance.started_at.desc()).limit(50)
     ).all()
+    if xlsx.wants(export):
+        # Two tabs: how the flows are built, and what is running right now.
+        steps = [(fl, st) for fl in flows for st in fl.steps]
+        return xlsx.book("fms-flows", [
+            ("Flow steps", [
+                ("Flow", lambda r: r[0].name),
+                ("Branch", lambda r: r[0].branch.name if r[0].branch else "All branches"),
+                ("Step", lambda r: r[1].position),
+                ("Step title", lambda r: r[1].title),
+                ("Who does it", lambda r: r[1].default_doer.name if r[1].default_doer else "Picked at run time"),
+                ("TAT", lambda r: r[1].tat_label),
+                ("Priority", lambda r: r[1].priority.value.title()),
+                ("Decision step", lambda r: "Yes" if r[1].is_decision else ""),
+                ("Outcome 1", lambda r: r[1].yes_label if r[1].is_decision else ""),
+                ("Goes to", lambda r: r[1].next_step_pos if r[1].next_step_pos is not None else "next in order"),
+                ("Outcome 2", lambda r: r[1].no_label if r[1].is_decision else ""),
+                ("Then goes to", lambda r: r[1].fail_step_pos if r[1].is_decision else ""),
+                ("Needs audit", lambda r: "Yes" if r[1].requires_audit else ""),
+                ("Proof required", lambda r: "Yes" if r[1].requires_attachment else ""),
+                ("Fields captured", lambda r: r[1].capture_fields or ""),
+            ], steps, "One row per step, in the order the flow runs them."),
+            ("Running now", [
+                ("Flow", lambda i: i.flow.name),
+                ("Reference", lambda i: i.reference),
+                ("Started", lambda i: i.started_at),
+                ("Started by", lambda i: i.started_by.name if i.started_by else ""),
+                ("Steps done", lambda i: flow_svc.flow_progress(i)[0]),
+                ("Steps total", lambda i: flow_svc.flow_progress(i)[1]),
+                ("Currently at step", lambda i: i.current_position),
+            ], running, "Runs that have not finished yet."),
+        ])
+
     return templates.TemplateResponse(request, "flows.html", {
         "user": user, "flows": flows, "running": running,
         "progress": {i.id: flow_svc.flow_progress(i) for i in running},

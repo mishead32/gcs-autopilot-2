@@ -1,6 +1,10 @@
 {% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
-<h1>Branches</h1>
+<div class="page-head">
+  <div><h1>Branches</h1></div>
+  {{ excel_btn('/admin/branches?export=xlsx') }}
+</div>
 <p class="sub">
   Every task, staff member and score is filed under a branch. These are what
   the Performance page filters by.

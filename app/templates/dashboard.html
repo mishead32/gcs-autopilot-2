@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table with context %}
+{% from "_export.html" import excel_btn %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -7,8 +8,11 @@
     <p class="sub">{{ user.branch.name if user.branch else 'All branches' }} ·
       {{ user.role.value|title }}</p>
   </div>
-  <a class="btn ghost" href="/reports">Reports</a>
-</div>
+  <div>
+    {{ excel_btn('/tasks?scope=mine&status=open&export=xlsx', 'Excel',
+                 'Download all your open work as an Excel file') }}
+    <a class="btn ghost" href="/reports">Reports</a>
+  </div>
 
 {# ================================================== 1 · MY WORK ======= #}
 <div class="sect">

@@ -16,7 +16,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Right, OutboundMessage, AuditState, AUDIT_LABELS, HelpTicket, HelpStatus
 )
-from ..services import notify, flows as flow_svc, storage, holidays
+from ..services import notify, flows as flow_svc, storage, holidays, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -109,6 +109,15 @@ SOURCE_TABS = {
 }
 SOURCE_KEY = {v["src"]: k for k, v in SOURCE_TABS.items()}
 
+# What each status tab is called, for the line written at the top of an export
+# so a downloaded file says what it is months later.
+STATUS_LABELS = {
+    "open": "Open", "overdue": "Overdue", "upcoming": "Coming up",
+    "done": "Completed", "audit": "With auditor",
+    "audit_pending": "Audit pending", "audit_done": "Audit completed",
+    "false_mark": "False marking", "all": "All",
+}
+
 
 def _parse_day(raw: str):
     try:
@@ -120,6 +129,7 @@ def _parse_day(raw: str):
 @router.get("/tasks", response_class=HTMLResponse)
 def task_list(request: Request, status: str = "open", scope: str = "mine",
               date_from: str = "", date_to: str = "", source: str = "",
+              export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _visible_tasks_query(user)
     now = clock.now()
@@ -190,6 +200,24 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
     else:
         order = (PRIORITY_RANK, Task.due_at.asc())
         sort_label = "High priority first, then by deadline"
+    # The Excel version of this exact page. Built after every filter above has
+    # been applied, from the same query object, so the file can never show a
+    # different set of rows from the screen it was downloaded off.
+    if xlsx.wants(export):
+        rows = db.scalars(q.order_by(*order)).all()     # no 500-row screen cap
+        tabs = {"mine": "assigned to me", "assigned": "delegated by me",
+                "all": "everyone"}
+        note = (f"{tabs.get(scope, scope)} · "
+                f"{STATUS_LABELS.get(status, status)} · "
+                f"{SOURCE_TABS[source]['label'] if source else 'all work types'}"
+                + (f" · {basis_label.lower()} "
+                   + (f"{date_from} to {date_to}" if date_from and date_to
+                      else f"from {date_from}" if date_from
+                      else f"up to {date_to}")
+                   if (date_from or date_to) else ""))
+        return xlsx.one(f"tasks-{source or 'all'}-{status}", "Tasks",
+                        xlsx.task_columns(), rows, note)
+
     tasks = db.scalars(q.order_by(*order).limit(500)).all()
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,

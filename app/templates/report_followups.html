@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_filters.html" import filter_bar, date_presets %}
+{% from "_export.html" import excel_btn %}
 {% block title %}Follow-up report · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -8,6 +9,8 @@
     <p class="sub">Every open task has to be chased each day. One tick per task per day.</p>
   </div>
   <div>
+    {{ excel_btn(f.url(export='xlsx'),
+                 title='Download this day-by-day table as an Excel file') }}
     <a class="btn ghost" href="/followups">Go and tick</a>
     <a class="btn ghost" href="/reports">← All reports</a>
   </div>

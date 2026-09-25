@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table with context %}
 {% from "_filters.html" import filter_bar, date_presets, scope_note %}
+{% from "_export.html" import excel_btn %}
 {% block title %}Audit report · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -8,7 +9,11 @@
     <h1>Audit — pending &amp; completed</h1>
     <p class="sub">Across FMS, Checklist and Delegation.</p>
   </div>
-  <a class="btn ghost" href="/reports">← All reports</a>
+  <div>
+    {{ excel_btn(f.url(export='xlsx'),
+                 title='Download this report as an Excel file, with a by-work-type tab') }}
+    <a class="btn ghost" href="/reports">← All reports</a>
+  </div>
 </div>
 
 {{ scope_note(user) }}

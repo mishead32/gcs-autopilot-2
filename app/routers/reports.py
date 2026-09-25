@@ -37,7 +37,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Branch, Followup,
     AuditState, AUDIT_LABELS, Priority, PRIORITY_ORDER,
 )
-from ..services import scoring
+from ..services import scoring, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -295,6 +295,7 @@ def index(request: Request, user: User = Depends(current_user)):
 def task_report(request: Request, source: str = "delegation",
                 date_from: str = "", date_to: str = "", branch: str = "",
                 doer: str = "", priority: str = "", state: str = "pending",
+                export: str = "",
                 user: User = Depends(current_user), db: Session = Depends(get_db)):
     if source not in SOURCES:
         raise HTTPException(404, "Unknown report. Pick one from the Reports page.")
@@ -341,6 +342,29 @@ def task_report(request: Request, source: str = "delegation",
             "all": _sorted(pending) + _sorted(completed, by_close=True)}[f.state]
 
     total = len(pending) + len(completed)
+
+    # The Excel version of whichever tab is open, filtered exactly as the
+    # page is. A second tab carries the figures above it, so the file can be
+    # sent on without the numbers having to be retyped into the covering mail.
+    if xlsx.wants(export):
+        summary = [
+            ("Pending", len(pending), f"{_weight(pending)} score weight"),
+            ("Overdue", len(overdue), "of the pending tasks"),
+            ("Completed", len(completed), f"{_weight(completed)} score weight"),
+            ("Completion rate", f"{round(len(completed) / total * 100, 1) if total else 0.0}%",
+             f"{round(len(on_time) / len(completed) * 100, 1) if completed else 0.0}% on time"),
+            ("Audit pending", len(audit_pending),
+             f"{len(with_auditor)} of them finished and waiting"),
+            ("Audit completed", len(audit_done), "checked and signed off"),
+            ("False marking", len(false_marks), "-10 each on the doer's score"),
+        ]
+        return xlsx.book(f"{source}-report-{f.state}", [
+            (f"{cfg['label']} — {f.state.replace('_', ' ')}",
+             xlsx.task_columns(), rows, f.summary),
+            ("Summary", [("Figure", lambda r: r[0]), ("Value", lambda r: r[1]),
+                         ("Note", lambda r: r[2])], summary, f.summary),
+        ])
+
     return templates.TemplateResponse(request, "report_tasks.html", {
         "user": user, "f": f, "cfg": cfg, "source": source, "rows": rows,
         "counts": {"pending": len(pending), "completed": len(completed),
@@ -421,6 +445,7 @@ def _followup_rows(db: Session, user: User, f: Filters) -> dict:
 @router.get("/reports/followups", response_class=HTMLResponse)
 def followup_report(request: Request, date_from: str = "", date_to: str = "",
                     branch: str = "", doer: str = "", priority: str = "",
+                    export: str = "",
                     user: User = Depends(current_user), db: Session = Depends(get_db)):
     # This one is about how well OTHER people chased the work, so it is for
     # management and for the two people who do the chasing — not for every
@@ -435,6 +460,25 @@ def followup_report(request: Request, date_from: str = "", date_to: str = "",
     f = build_filters(db, user, "/reports/followups", date_from, date_to,
                       branch, doer, priority, default_days=7)
     data = _followup_rows(db, user, f)
+
+    if xlsx.wants(export):
+        # One row per day, the two desks side by side — the same shape as the
+        # table on screen, because that is the shape people already read.
+        cols = [("Date", lambda r: r["day"])]
+        for key, cfg in DESKS.items():
+            cols += [
+                (f"{cfg['short']} due", lambda r, k=key: r["desks"][k]["due"]),
+                (f"{cfg['short']} chased", lambda r, k=key: r["desks"][k]["done"]),
+                (f"{cfg['short']} missed", lambda r, k=key: r["desks"][k]["missed"]),
+            ]
+        cols += [
+            ("Total due", lambda r: sum(d["due"] for d in r["desks"].values())),
+            ("Total chased", lambda r: sum(d["done"] for d in r["desks"].values())),
+            ("Total missed", lambda r: sum(d["missed"] for d in r["desks"].values())),
+            ("Chased by", lambda r: r["who"]),
+        ]
+        return xlsx.one("followup-report", "Follow-ups", cols, data["days"],
+                        f.summary)
 
     staff = db.scalars(select(User).where(User.org_id == user.org_id,
                                           User.active.is_(True))).all()
@@ -455,7 +499,7 @@ def followup_report(request: Request, date_from: str = "", date_to: str = "",
 @router.get("/reports/audit", response_class=HTMLResponse)
 def audit_report(request: Request, date_from: str = "", date_to: str = "",
                  branch: str = "", doer: str = "", priority: str = "",
-                 state: str = "pending",
+                 state: str = "pending", export: str = "",
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     f = build_filters(db, user, "/reports/audit", date_from, date_to, branch,
                       doer, priority, state)
@@ -484,6 +528,21 @@ def audit_report(request: Request, date_from: str = "", date_to: str = "",
     else:
         rows = _sorted([t for t in tasks if t.audit_state.value == f.state])
 
+    if xlsx.wants(export):
+        breakdown = [(SOURCES[k]["label"], grid[k]) for k in SOURCES]
+        breakdown.append(("All three", grand))
+        return xlsx.book(f"audit-report-{f.state}", [
+            (f"Audit — {AUDIT_LABELS.get(AuditState(f.state), 'All') if f.state != 'all' else 'All'}",
+             xlsx.task_columns(), rows, f.summary),
+            ("By work type", [
+                ("Work type", lambda r: r[0]),
+                ("Audit pending", lambda r: r[1]["pending"]),
+                ("Audit completed", lambda r: r[1]["completed"]),
+                ("Not required", lambda r: r[1]["not_required"]),
+                ("Total", lambda r: r[1]["total"]),
+            ], breakdown, f.summary),
+        ])
+
     return templates.TemplateResponse(request, "report_audit.html", {
         "user": user, "f": f, "rows": rows, "grid": grid, "grand": grand,
         "sources": SOURCES, "labels": AUDIT_LABELS,
@@ -494,6 +553,7 @@ def audit_report(request: Request, date_from: str = "", date_to: str = "",
 @router.get("/reports/score", response_class=HTMLResponse)
 def score_report(request: Request, date_from: str = "", date_to: str = "",
                  branch: str = "", doer: str = "", view: str = "person",
+                 export: str = "",
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     # This one shows other people's scores, so it is the strictest of the six.
     if not user.can_see_all_reports:
@@ -519,6 +579,13 @@ def score_report(request: Request, date_from: str = "", date_to: str = "",
     scores = [r["card"].score for r in people]
     avg = round(sum(scores) / len(scores), 1) if scores else 0.0
 
+    if xlsx.wants(export):
+        return xlsx.book("em-score-report", [
+            ("Person-wise", _score_columns(board, "Employee"), people, f.summary),
+            ("Branch-wise", _score_columns(board, "Branch"),
+             board["branches"], f.summary),
+        ])
+
     return templates.TemplateResponse(request, "report_score.html", {
         "user": user, "f": f, "board": board, "people": people,
         "units": board["branches"], "view": view if view == "branch" else "person",
@@ -526,3 +593,44 @@ def score_report(request: Request, date_from: str = "", date_to: str = "",
         "best": people[0] if people else None,
         "worst": people[-1] if people else None,
     })
+
+
+def _score_columns(board, who: str):
+    """A score row, with the whole bifurcation spread across columns.
+
+    The screen shows the split stacked inside one cell per work type because
+    the table has to fit; a spreadsheet has no such limit, so each part of
+    the arithmetic gets a column of its own and the total can be checked.
+    """
+    def name(r):
+        u = r.get("user") or r.get("branch")
+        return u.name if u else "Unassigned"
+
+    cols = [
+        (who, name),
+        ("Branch", lambda r: (r["user"].branch.name
+                              if r.get("user") and r["user"].branch else "")),
+        ("Score", lambda r: r["card"].score),
+        ("Scored by software", lambda r: r["card"].scored_by_system),
+        ("Judged by hand", lambda r: r["card"].scored_by_hand),
+        ("Gap", lambda r: r["card"].gap),
+        ("False marking penalty", lambda r: r["card"].false_penalty),
+        ("Work completed %", lambda r: r["card"].completion_rate),
+        ("On time %", lambda r: r["card"].on_time_rate),
+    ]
+    for i, s in enumerate(board["overall"].source_list):
+        cols += [
+            (f"{s.label} benchmark",
+             lambda r, i=i: r["card"].source_list[i].benchmark),
+            (f"{s.label} penalty",
+             lambda r, i=i: r["card"].source_list[i].subtotal),
+            (f"{s.label} not done",
+             lambda r, i=i: r["card"].source_list[i].not_done_penalty),
+            (f"{s.label} late",
+             lambda r, i=i: r["card"].source_list[i].late_penalty),
+            (f"{s.label} weight planned",
+             lambda r, i=i: r["card"].source_list[i].planned),
+            (f"{s.label} weight closed",
+             lambda r, i=i: r["card"].source_list[i].completed),
+        ]
+    return cols
