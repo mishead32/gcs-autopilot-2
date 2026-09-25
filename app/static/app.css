@@ -357,25 +357,25 @@ label.pick em{display:block;font-style:normal;color:var(--muted);font-size:12.5p
   font-weight:600}
 
 /* ------------------------------------------- attachment uploader ------- */
-#uploader .drop{border:2px dashed var(--line);border-radius:10px;
+.uploader .drop{border:2px dashed var(--line);border-radius:10px;
   padding:20px 16px;text-align:center;cursor:pointer;background:#fafbfd;
   transition:border-color .15s,background .15s}
-#uploader .drop:hover,#uploader .drop.over{border-color:var(--brand);
+.uploader .drop:hover,.uploader .drop.over{border-color:var(--brand);
   background:#f2f8fd}
-#uploader .drop strong{display:block;font-size:13.5px;color:var(--brand)}
-#uploader .drop span{display:block;font-size:12px;color:var(--muted);margin-top:3px}
+.uploader .drop strong{display:block;font-size:13.5px;color:var(--brand)}
+.uploader .drop span{display:block;font-size:12px;color:var(--muted);margin-top:3px}
 
-#uploader .two-up{display:grid;gap:10px;grid-template-columns:1fr 1fr}
-@media (max-width:640px){#uploader .two-up{grid-template-columns:1fr}}
-#uploader .paste-zone{border:2px dashed var(--line);border-radius:10px;
+.uploader .two-up{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+@media (max-width:640px){.uploader .two-up{grid-template-columns:1fr}}
+.uploader .paste-zone{border:2px dashed var(--line);border-radius:10px;
   padding:20px 16px;text-align:center;cursor:text;background:#fafbfd;outline:0;
   transition:border-color .15s,background .15s}
-#uploader .paste-zone:hover,#uploader .paste-zone:focus{border-color:var(--brand);
+.uploader .paste-zone:hover,.uploader .paste-zone:focus{border-color:var(--brand);
   background:#f2f8fd}
-#uploader .paste-zone.hit{border-color:var(--ok);background:#f0fdf4}
-#uploader .paste-zone strong{display:block;font-size:13.5px;color:var(--brand)}
-#uploader .paste-zone span{display:block;font-size:12px;color:var(--muted);margin-top:3px}
-#uploader .paste-zone kbd{display:inline-block;padding:1px 5px;border-radius:4px;
+.uploader .paste-zone.hit{border-color:var(--ok);background:#f0fdf4}
+.uploader .paste-zone strong{display:block;font-size:13.5px;color:var(--brand)}
+.uploader .paste-zone span{display:block;font-size:12px;color:var(--muted);margin-top:3px}
+.uploader .paste-zone kbd{display:inline-block;padding:1px 5px;border-radius:4px;
   border:1px solid var(--line);border-bottom-width:2px;background:#fff;
   font:600 11px ui-monospace,Menlo,Consolas,monospace;color:var(--ink)}
 
@@ -618,3 +618,45 @@ main{animation:riseIn .32s cubic-bezier(.22,.8,.3,1) both}
 .note-box{margin-top:18px;border-radius:9px;padding:11px 14px;font-size:13px;
   background:#fff8e1;border:1px solid #f0d999;color:#7a5b00}
 .sfrow{padding:14px 16px}
+
+/* ------------------------------------------- mark-complete pop-up ------ */
+/* Closing a task from the list it appears on. Wide enough to hold a note,
+   a couple of captured fields and the two upload zones side by side, and it
+   scrolls inside itself so the buttons never walk off the bottom of a phone. */
+dialog.markdlg{border:0;border-radius:14px;padding:0;width:min(620px,94vw);
+  max-height:88vh;overflow:visible;box-shadow:0 28px 70px rgba(15,32,44,.38)}
+dialog.markdlg::backdrop{background:rgba(15,32,44,.55)}
+dialog.markdlg .mb-close{position:absolute;top:8px;right:10px;z-index:2;
+  border:0;background:transparent;font-size:24px;line-height:1;cursor:pointer;
+  color:var(--muted);padding:2px 8px;border-radius:8px}
+dialog.markdlg .mb-close:hover{background:var(--chip);color:var(--ink)}
+dialog.markdlg .mb-body{max-height:88vh;overflow:auto;border-radius:14px}
+dialog.markdlg .mb-load{padding:40px 24px;text-align:center;color:var(--muted);
+  font-size:13px}
+dialog.markdlg .mb-load.bad{color:var(--bad)}
+
+.markform .markhead{padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+.markform .markhead h3{margin:0 0 8px;font-size:16.5px;padding-right:26px}
+.markform .markhead .sub{margin:0;font-size:12.5px}
+.markform .markhead .dets{margin:8px 0 0;white-space:pre-wrap}
+.markform .markbody{padding:16px 24px 20px}
+.markform label{margin-top:14px}
+.markform .markbody>label:first-child{margin-top:0}
+.markform textarea{min-height:70px}
+.markform .att-mini{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.markform .att-mini a{font-size:12px;background:var(--chip);border-radius:6px;
+  padding:3px 8px}
+/* The actions sit still while the form above them scrolls, so "Mark complete"
+   is always on screen — that is the whole point of the box. */
+.markform .markacts{position:sticky;bottom:0;display:flex;gap:8px;flex-wrap:wrap;
+  align-items:center;justify-content:flex-end;padding:13px 24px;
+  background:#fafbfd;border-top:1px solid var(--line);
+  border-radius:0 0 14px 14px}
+.markform .markacts .decnote{flex:1 1 100%;text-align:left;margin:0 0 2px}
+.markform .markacts>a{margin-right:auto}
+.markform .btn.yes{background:var(--ok)}
+.markform .markup{margin-top:16px}
+
+/* The button in the list itself. */
+td.markcell{white-space:nowrap;text-align:right}
+td.markcell .m{white-space:nowrap}

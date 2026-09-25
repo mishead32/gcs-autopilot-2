@@ -1,0 +1,97 @@
+{# The mark-complete box, shown inside a pop-up on any task list.
+
+   Loaded on its own by GET /tasks/{id}/mark, so it deliberately does NOT
+   extend base.html — it is a piece of a page, not a page.
+
+   It is the same submit that the task page posts, to the same route, with
+   the same rules. The only difference is `return_to`: the popup sends the
+   person back to the list they were reading instead of to the task page,
+   because they opened it precisely so they would not have to go there.
+#}
+<form method="post" action="/tasks/{{ task.id }}/submit" class="markform"
+      id="markForm" data-task="{{ task.id }}"
+      data-mode="{{ UPLOAD_MODE() }}" data-max="{{ MAX_UPLOAD_MB }}"
+      data-proof="{{ 1 if task.requires_attachment else 0 }}"
+      data-has="{{ task.attachments|length }}">
+  <input type="hidden" name="return_to" value="" class="returnto">
+
+  <div class="markhead">
+    <h3>{{ task.title }}</h3>
+    <p class="sub">
+      <span class="chip {{ task.priority.value }}">{{ task.priority.value }} {{ task.weight_label }}</span>
+      <span class="chip">{{ task.source.value }}</span>
+      <span class="{{ 'overdue' if task.is_overdue }}">Planned {{ task.due_at|dt('%d %b, %I:%M %p') }}
+        · {{ task.due_at|due }}</span>
+    </p>
+    {% if task.details %}<p class="m dets">{{ task.details }}</p>{% endif %}
+  </div>
+
+  <div class="markbody">
+    {% if task.requires_attachment %}
+      {% if task.attachments %}
+    <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
+      {% else %}
+    <div class="proof need needbox">
+      <strong>Proof is required for this task.</strong>
+      Choose a file below, or take a screenshot and press Ctrl+V — then the
+      button turns on.
+    </div>
+      {% endif %}
+    {% endif %}
+
+    {% for f in capture_fields %}
+    <label>{{ f }}</label>
+    <input name="field_{{ f }}" value="{{ captured.get(f, '') }}">
+    {% endfor %}
+
+    <label>Note</label>
+    <textarea name="completion_note" rows="3"
+              placeholder="What did you do? Any issues?"></textarea>
+
+    {% if UPLOADS_ON() %}
+    <div class="uploader markup">
+      <label>Attach a file or paste a screenshot</label>
+      <div class="two-up">
+        <div class="drop">
+          <strong>Tap to choose a file</strong>
+          <span>photo, PDF, Excel or Word — up to {{ MAX_UPLOAD_MB }} MB each</span>
+        </div>
+        <div class="paste-zone" tabindex="0">
+          <strong>Or paste a screenshot</strong>
+          <span>Take the screenshot, then press <kbd>Ctrl</kbd>+<kbd>V</kbd></span>
+        </div>
+      </div>
+      <input type="file" multiple accept="{{ UPLOAD_ACCEPT }}" hidden>
+      <div class="up-list"></div>
+    </div>
+    {% else %}
+    <div class="m" style="margin-top:12px">
+      File attachments are switched off on this server, so only your note is saved.
+    </div>
+    {% endif %}
+
+    {% if task.attachments %}
+    <label>Already attached</label>
+    <div class="att-mini">
+      {% for a in task.attachments %}
+      <a href="/attachments/{{ a.id }}" target="_blank" rel="noopener">{{ a.filename }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% set blocked = task.requires_attachment and not task.attachments %}
+  <div class="markacts">
+    <a class="btn ghost sm" href="/tasks/{{ task.id }}">Open the full task instead</a>
+    {% if decision_step %}
+    <span class="m decnote">Pick what happened — each answer sends the flow a different way.</span>
+    <button class="btn yes" name="decision" value="pass" {{ 'disabled' if blocked }}>
+      ✓ {{ decision_step.yes_label }}</button>
+    <button class="btn danger" name="decision" value="fail" {{ 'disabled' if blocked }}>
+      ✕ {{ decision_step.no_label }}</button>
+    {% else %}
+    <button class="btn" {{ 'disabled' if blocked }}>
+      {{ 'Submit for audit' if task.requires_audit else 'Mark complete' }}</button>
+    {% endif %}
+  </div>
+</form>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_task_table.html" import task_table %}
+{% from "_task_table.html" import task_table with context %}
 {% from "_filters.html" import filter_bar, date_presets, scope_note %}
 {% block title %}{{ cfg.label }} report · {{ APP_NAME }}{% endblock %}
 {% block content %}

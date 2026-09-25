@@ -159,7 +159,16 @@
   t.addEventListener('click', function(){ t.remove(); });
 })();
 </script>
+{% if user %}
+{# The mark-complete pop-up. One empty shell for the whole page; the form for
+   whichever task was clicked is fetched into it. #}
+<dialog class="markdlg" id="markDialog" aria-label="Mark this task complete">
+  <button class="mb-close" type="button" aria-label="Close">×</button>
+  <div class="mb-body"></div>
+</dialog>
+{% endif %}
 <script src="/static/benchmark.js"></script>
 <script src="/static/upload.js"></script>
+<script src="/static/markbox.js"></script>
 </body>
 </html>

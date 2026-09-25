@@ -6,7 +6,7 @@
     <th>Task</th>
     {% if show_doer %}<th>Doer</th>{% endif %}
     <th>Priority</th><th>Status</th><th>Audit</th><th>Planned</th>
-    <th>Completed</th><th>Source</th>
+    <th>Completed</th><th>Source</th><th></th>
   </tr>
   {% for t in tasks %}
   <tr>
@@ -25,6 +25,19 @@
           class="{{ '' if t.was_on_time else 'overdue' }}">{{ 'on time' if t.was_on_time else 'late' }}</span>{% endif %}
         {% else %}<span class="m">—</span>{% endif %}</td>
     <td><span class="chip">{{ t.source.value }}</span></td>
+    {# Close it from here. Only the person doing it, only while it is still
+       open — and the same button for Delegation, Checklist and FMS, because
+       from the doer's side they are all just work they owe. #}
+    <td class="markcell">
+      {% if user and t.doer_id == user.id
+            and t.status.value in ['pending','in_progress','rejected','reopened'] %}
+      <button type="button" class="btn sm markbtn" data-mark="{{ t.id }}"
+              title="Write a note, attach proof and close this without leaving the list">
+        Mark complete</button>
+      {% elif t.status.value == 'submitted' %}
+      <span class="m">with auditor</span>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>

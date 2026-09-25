@@ -2366,5 +2366,189 @@ check("and GET still returns the real body",
 check("POST is untouched",
       _hc.request("POST", "/healthz").status_code == 405)
 
+print("\n== closing a task from the list it appears on ==")
+# The doer's own three kinds of work, still open.
+from app.models import (Task as _MT, TaskSource as _MS, User as _MU,
+                        TaskStatus as _MST, Attachment as _MA)
+from sqlalchemy import select as _msel
+
+_OPEN = (_MST.PENDING, _MST.IN_PROGRESS, _MST.REJECTED, _MST.REOPENED)
+_mine = {}
+with _SLT() as _d:
+    _amit = _d.scalar(_msel(_MU).where(_MU.email == "amit@gcs.local"))
+    for _k, _src in [("delegation", _MS.DELEGATION), ("checklist", _MS.RECURRING),
+                     ("fms", _MS.FLOW)]:
+        _t = _d.scalars(_msel(_MT).where(
+            _MT.doer_id == _amit.id, _MT.source == _src,
+            _MT.status.in_(_OPEN)).limit(1)).first()
+        if _t:
+            _mine[_k] = _t.id
+
+check("the doer has open work of at least two kinds to test with",
+      len(_mine) >= 2, sorted(_mine))
+
+# 1 — the button is on the list, for every kind of work.
+_list = doer.get("/tasks?scope=mine&status=open").text
+check("the list offers a Mark complete button", "Mark complete" in _list)
+for _k, _i in _mine.items():
+    check(f"{_k}: its row has the button", f'data-mark="{_i}"' in _list,
+          f"task {_i}")
+
+# The same button on the dashboard, which is where most people start.
+_dash = doer.get("/").text
+check("the dashboard rows have it too", 'data-mark="' in _dash)
+
+# 2 — and never on somebody else's work. The admin sees every task; none of
+# them may be closeable from their list, because they are not doing them.
+_allpg = admin.get("/tasks?scope=all&status=open").text
+for _k, _i in _mine.items():
+    check(f"{_k}: an onlooker gets no button for it",
+          f'data-mark="{_i}"' not in _allpg, f"task {_i} closeable by admin")
+
+# 3 — the box itself.
+_one = _mine.get("delegation") or list(_mine.values())[0]
+_box = doer.get(f"/tasks/{_one}/mark")
+check("the doer can open the box", _box.status_code == 200, _box.status_code)
+check("it is a fragment, not a whole page", "<html" not in _box.text.lower())
+check("it posts to the ordinary submit route",
+      f'action="/tasks/{_one}/submit"' in _box.text)
+check("it carries a return_to field", 'class="returnto"' in _box.text)
+check("it offers the full task page as the other way in",
+      f'href="/tasks/{_one}"' in _box.text)
+check("it has a note box", 'name="completion_note"' in _box.text)
+
+check("somebody else cannot open it",
+      mgr.get(f"/tasks/{_one}/mark").status_code == 403,
+      mgr.get(f"/tasks/{_one}/mark").status_code)
+_stranger = login("ravi@gcs.local")     # a doer in another branch entirely
+check("and a stranger gets a plain not-found",
+      _stranger.get(f"/tasks/{_one}/mark").status_code == 404,
+      _stranger.get(f"/tasks/{_one}/mark").status_code)
+
+# 4 — submitting from the box lands back on the list, not the task page.
+_mk = mgr.post("/tasks/new", data={
+    "title": f"SMOKE popup return {RUN}", "details": "",
+    "doer_id": str(_amit.id), "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_pid = int(_re.findall(r"/tasks/(\d+)/comment", _mk.text)[-1])
+attach(doer, _pid)
+_back = "/tasks?scope=mine&status=open&source=delegation"
+_nav = TestClient(app, follow_redirects=False)
+_nav.cookies.update(doer.cookies)
+_r = _nav.post(f"/tasks/{_pid}/submit",
+               data={"completion_note": "done from the list", "return_to": _back})
+check("submitting from the box goes back to the list",
+      _r.status_code == 303 and _r.headers["location"] == _back,
+      f"{_r.status_code} -> {_r.headers.get('location')}")
+with _SLT() as _d:
+    _t = _d.get(_MT, _pid)
+    check("and the task really is closed",
+          _t.status in (_MST.COMPLETED, _MST.SUBMITTED), _t.status)
+    check("with the note saved", _t.completion_note == "done from the list",
+          _t.completion_note)
+
+# 5 — return_to may only ever be a path on this site. A form field that
+# decides where a browser lands is the classic way to bounce somebody onto
+# another site from a link that looks like ours.
+_mk2 = mgr.post("/tasks/new", data={
+    "title": f"SMOKE popup redirect {RUN}", "details": "",
+    "doer_id": str(_amit.id), "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_rid2 = int(_re.findall(r"/tasks/(\d+)/comment", _mk2.text)[-1])
+attach(doer, _rid2)
+_nav2 = TestClient(app, follow_redirects=False)
+_nav2.cookies.update(doer.cookies)
+_evil = _nav2.post(f"/tasks/{_rid2}/submit",
+                   data={"completion_note": "x", "return_to": "//evil.example.com/"})
+check("an off-site return_to is ignored",
+      _evil.headers.get("location") == f"/tasks/{_rid2}",
+      _evil.headers.get("location"))
+
+for _bad in ("https://evil.example.com/", "/\\evil.example.com", "javascript:alert(1)"):
+    _mk3 = mgr.post("/tasks/new", data={
+        "title": f"SMOKE popup redirect {RUN} {_bad[:6]}", "details": "",
+        "doer_id": str(_amit.id), "branch_id": "", "priority": "low",
+        "due_at": "2026-12-31T23:59"})
+    _b3 = int(_re.findall(r"/tasks/(\d+)/comment", _mk3.text)[-1])
+    attach(doer, _b3)
+    _n3 = TestClient(app, follow_redirects=False)
+    _n3.cookies.update(doer.cookies)
+    _rr = _n3.post(f"/tasks/{_b3}/submit", data={"completion_note": "x", "return_to": _bad})
+    check(f"return_to {_bad[:22]!r} is refused",
+          _rr.headers.get("location") == f"/tasks/{_b3}",
+          _rr.headers.get("location"))
+
+# 6 — the proof rule is the server's, not the button's. Disabling a button
+# is a courtesy; the rule has to hold for anyone who posts anyway.
+_mk4 = mgr.post("/tasks/new", data={
+    "title": f"SMOKE popup proof {RUN}", "details": "",
+    "doer_id": str(_amit.id), "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_pf = int(_re.findall(r"/tasks/(\d+)/comment", _mk4.text)[-1])
+_pbox = doer.get(f"/tasks/{_pf}/mark")
+check("a task needing proof says so in the box",
+      "Proof is required" in _pbox.text)
+check("and its button starts switched off", "disabled" in _pbox.text)
+_noproof = doer.post(f"/tasks/{_pf}/submit",
+                     data={"completion_note": "no proof", "return_to": _back})
+check("submitting it without proof is refused", _noproof.status_code == 400,
+      _noproof.status_code)
+attach(doer, _pf)
+_pbox2 = doer.get(f"/tasks/{_pf}/mark")
+check("once proof is attached the box says you can submit",
+      "you can submit" in _pbox2.text)
+check("and the button is no longer disabled",
+      "disabled" not in _pbox2.text.split('class="markacts"')[1])
+
+# 7 — a closed task has no box to open.
+doer.post(f"/tasks/{_pf}/submit", data={"completion_note": "done"})
+check("a task already closed cannot be reopened from the list",
+      doer.get(f"/tasks/{_pf}/mark").status_code == 400,
+      doer.get(f"/tasks/{_pf}/mark").status_code)
+
+# 8 — an FMS decision step must offer both outcomes in the box, not one
+# "Mark complete" that silently picks a direction. Walked from a fresh run of
+# the bill flow, because the runs earlier in this file all finished.
+_dstart = admin.post(f"/flows/{_fid}/start", data={
+    "reference": f"POPUP-{RUN}", "sf0": "BILL-99", "sf1": "Acme", "sf2": "Electricity"})
+check("a bill run starts for the pop-up test", _dstart.status_code == 200,
+      _dstart.status_code)
+with _SLP() as _d:
+    _piid = _d.scalar(_sp(_FI).where(_FI.reference == f"POPUP-{RUN}")).id
+_amc = login("amit@gcs.local")
+_pt, _ppos = _open_step(_piid)
+while _ppos is not None and _ppos < 3:
+    _amc.post(f"/tasks/{_pt}/submit", data={})
+    _pt, _ppos = _open_step(_piid)
+check("it reaches the decision step", _ppos == 3, str(_ppos))
+_dbox = _amc.get(f"/tasks/{_pt}/mark")
+check("a decision step's box opens", _dbox.status_code == 200, _dbox.status_code)
+check("it offers both outcomes",
+      'value="pass"' in _dbox.text and 'value="fail"' in _dbox.text)
+check("named as configured",
+      "Verified" in _dbox.text and "Rejected" in _dbox.text)
+check("rather than a single Mark complete button",
+      "Mark complete</button>" not in _dbox.text)
+
+# And choosing from the box routes the flow exactly as the task page does.
+_pnav = TestClient(app, follow_redirects=False)
+_pnav.cookies.update(_amc.cookies)
+_pnav.post(f"/tasks/{_pt}/submit", data={"decision": "fail", "return_to": _back})
+_pt2, _ppos2 = _open_step(_piid)
+check("Rejected, chosen in the pop-up, sends the bill back to step 1",
+      _ppos2 == 1, str(_ppos2))
+
+# 9 — the table still holds together: one header cell per column.
+_hdr = _list.split("<table>", 1)[1].split("</tr>", 1)[0].count("<th>")
+_firstrow = _list.split("</tr>", 2)[1]
+check("the new column has a header of its own", _hdr == _firstrow.count("<td"),
+      f"{_hdr} headers vs {_firstrow.count('<td')} cells")
+
+# 10 — the pop-up shell and its script are on the page that needs them.
+check("the list page carries the pop-up shell", 'id="markDialog"' in _list)
+check("and loads its script", "/static/markbox.js" in _list)
+check("the sign-in page does not", 'id="markDialog"' not in
+      TestClient(app).get("/login").text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

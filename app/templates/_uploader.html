@@ -1,6 +1,6 @@
 {% macro uploader(task, user) %}
 {% if UPLOADS_ON() %}
-<div id="uploader" data-task="{{ task.id }}" data-mode="{{ UPLOAD_MODE() }}"
+<div id="uploader" class="uploader" data-task="{{ task.id }}" data-mode="{{ UPLOAD_MODE() }}"
      data-max="{{ MAX_UPLOAD_MB }}">
   <label>Attach proof</label>
   <div class="two-up">

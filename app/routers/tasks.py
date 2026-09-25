@@ -306,6 +306,58 @@ def task_detail(task_id: int, request: Request,
     })
 
 
+# ------------------------------------------------- mark complete inline ----
+# Most people close a task the moment they finish it, standing in front of
+# the list of what they owe. Making them open the task page first, scroll to
+# the bottom, submit, and then find their way back to the list was four
+# actions for one. This serves the same submit form as a fragment, so a
+# pop-up on the list can show it in place.
+#
+# It deliberately does not extend base.html: it is a piece of a page.
+@router.get("/tasks/{task_id}/mark", response_class=HTMLResponse)
+def mark_box(task_id: int, request: Request,
+             user: User = Depends(current_user), db: Session = Depends(get_db)):
+    task = db.get(Task, task_id)
+    if not task or task.org_id != user.org_id or not can_view_task(user, task):
+        raise HTTPException(404, "Task not found")
+    # Only the doer closes their own work, and only while it is still open —
+    # the same two rules the submit route enforces. Checking them here as
+    # well means the button never opens a box that cannot be submitted.
+    if task.doer_id != user.id:
+        raise HTTPException(403, "Only the person doing this task can close it")
+    if task.status not in OPEN_STATES:
+        raise HTTPException(400, "This task is not open")
+
+    capture_fields = []
+    if task.flow_step and task.flow_step.capture_fields:
+        capture_fields = [f.strip() for f in task.flow_step.capture_fields.split(",")
+                          if f.strip()]
+
+    return templates.TemplateResponse(request, "_markbox.html", {
+        "user": user, "task": task, "capture_fields": capture_fields,
+        "captured": json.loads(task.captured_data or "{}"),
+        "decision_step": task.flow_step
+                         if (task.flow_step and task.flow_step.is_decision) else None,
+    })
+
+
+def _safe_return(raw: str, fallback: str) -> str:
+    """Where to land after submitting — but only somewhere on this site.
+
+    A redirect target that arrives in a form field is a classic way to bounce
+    someone onto another site from a link that looks like ours, so anything
+    that is not a plain path on this app is thrown away rather than trusted.
+    """
+    dest = (raw or "").strip()
+    if not dest.startswith("/"):
+        return fallback
+    if dest.startswith("//") or dest.startswith("/\\"):
+        return fallback              # "//evil.com" is a full URL to a browser
+    if "\n" in dest or "\r" in dest:
+        return fallback              # header splitting
+    return dest
+
+
 # ------------------------------------------------------- edit / delete -----
 @router.post("/tasks/{task_id}/edit")
 def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
@@ -519,7 +571,12 @@ async def submit_task(task_id: int, request: Request,
             flow_svc.advance_flow(db, task)
     flash.set(request, "submitted" if task.requires_audit else "completed",
               task.title)
-    return RedirectResponse(f"/tasks/{task_id}", status_code=303)
+    # Submitted from the pop-up on a list: go back to that list, on the same
+    # tab and filter the person was reading, rather than dumping them on the
+    # task page they were trying to avoid opening.
+    return RedirectResponse(
+        _safe_return(form.get("return_to"), f"/tasks/{task_id}"),
+        status_code=303)
 
 
 def close_help_ticket(db: Session, task: Task) -> None:
