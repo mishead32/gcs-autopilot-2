@@ -27,7 +27,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -44,6 +44,11 @@ router = APIRouter()
 
 OPEN_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
                TaskStatus.REJECTED, TaskStatus.REOPENED)
+
+# Finished by the doer — closed outright, or submitted and waiting on an
+# auditor. Both belong under "completed" in a report about how much work got
+# done; the audit columns beside it say how much of it has been checked.
+FINISHED_STATES = (TaskStatus.SUBMITTED, TaskStatus.COMPLETED)
 
 # The three kinds of work, in the order they appear everywhere else.
 SOURCES = {
@@ -243,9 +248,14 @@ def _between(q, col, f: Filters):
     return q
 
 
+def _finished_at(t: Task):
+    """When the doer finished it — closed if it is closed, otherwise sent."""
+    return t.closed_at or t.submitted_at
+
+
 def _sorted(rows: list[Task], by_close: bool = False) -> list[Task]:
     if by_close:
-        return sorted(rows, key=lambda t: t.closed_at or t.due_at, reverse=True)
+        return sorted(rows, key=lambda t: _finished_at(t) or t.due_at, reverse=True)
     return sorted(rows, key=lambda t: (PRIORITY_ORDER.get(t.priority, 9), t.due_at))
 
 
@@ -293,31 +303,52 @@ def task_report(request: Request, source: str = "delegation",
 
     f = build_filters(db, user, "/reports/tasks", date_from, date_to, branch,
                       doer, priority, state, hidden={"source": source})
-    if f.state not in ("pending", "completed", "overdue", "all"):
+    if f.state not in ("pending", "completed", "overdue", "audit_pending",
+                       "audit_done", "false", "all"):
         f.state = "pending"
 
     base = _apply_common(_scoped(user, select(Task)).where(Task.source == src), f)
 
-    # Pending is about the PLANNED date; completed is about the date it was
-    # actually closed. Same window, two different columns on purpose.
+    # Pending is about the PLANNED date; finished work is about the date the
+    # doer finished it. Same window, two different columns on purpose.
     pending = list(db.scalars(
         _between(base.where(Task.status.in_(OPEN_STATES)), Task.due_at, f)).all())
+    # A task waiting on an auditor has no closed_at yet, so the window has to
+    # look at whichever of the two dates exists — filtering on closed_at alone
+    # would drop every submitted task out of the report.
     completed = list(db.scalars(
-        _between(base.where(Task.status == TaskStatus.COMPLETED), Task.closed_at, f)).all())
+        _between(base.where(Task.status.in_(FINISHED_STATES)),
+                 func.coalesce(Task.closed_at, Task.submitted_at), f)).all())
 
     now = clock.now()
     overdue = [t for t in pending if t.due_at < now]
     on_time = [t for t in completed if t.was_on_time]
 
+    # The audit picture, over everything in the window rather than only the
+    # finished half: a task can be flagged for audit before it is closed, and
+    # a false mark sends the task back to the doer, so it is open again.
+    everything = pending + completed
+    audit_pending = [t for t in everything if t.audit_state == AuditState.PENDING]
+    audit_done = [t for t in everything if t.audit_state == AuditState.COMPLETED]
+    false_marks = [t for t in everything if t.false_marked]
+    with_auditor = [t for t in completed if t.status == TaskStatus.SUBMITTED]
+
     rows = {"pending": _sorted(pending), "overdue": _sorted(overdue),
             "completed": _sorted(completed, by_close=True),
+            "audit_pending": _sorted(audit_pending),
+            "audit_done": _sorted(audit_done, by_close=True),
+            "false": _sorted(false_marks),
             "all": _sorted(pending) + _sorted(completed, by_close=True)}[f.state]
 
     total = len(pending) + len(completed)
     return templates.TemplateResponse(request, "report_tasks.html", {
         "user": user, "f": f, "cfg": cfg, "source": source, "rows": rows,
         "counts": {"pending": len(pending), "completed": len(completed),
-                   "overdue": len(overdue), "all": total},
+                   "overdue": len(overdue), "all": total,
+                   "audit_pending": len(audit_pending),
+                   "audit_done": len(audit_done),
+                   "false": len(false_marks)},
+        "with_auditor": len(with_auditor),
         "weights": {"pending": _weight(pending), "completed": _weight(completed)},
         "rate": round(len(completed) / total * 100, 1) if total else 0.0,
         "on_time_rate": round(len(on_time) / len(completed) * 100, 1) if completed else 0.0,

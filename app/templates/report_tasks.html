@@ -34,14 +34,39 @@
     <div class="m">{{ on_time_rate }}% of those were on time</div></div>
 </div>
 
+{# The audit side of the same window. Kept apart from the four figures above
+   because they answer a different question: not "was the work done" but
+   "has anybody checked it". #}
+<h2 style="margin-top:22px">Audit</h2>
+<div class="grid g3">
+  <div class="kpi warn"><div class="n">{{ counts.audit_pending }}</div>
+    <div class="l">Audit pending</div>
+    <div class="m">{{ with_auditor }} of them finished and waiting</div></div>
+  <div class="kpi ok"><div class="n">{{ counts.audit_done }}</div>
+    <div class="l">Audit completed</div><div class="m">checked and signed off</div></div>
+  <div class="kpi {{ 'bad' if counts.false else '' }}"><div class="n">{{ counts.false }}</div>
+    <div class="l">False marking</div>
+    <div class="m">closed without the work being done — −10 each</div></div>
+</div>
+
 <div class="tabs" style="margin-top:18px">
   {% for k, label in [('pending', 'Pending'), ('overdue', 'Overdue'),
-                      ('completed', 'Completed'), ('all', 'Both')] %}
+                      ('completed', 'Completed'), ('audit_pending', 'Audit pending'),
+                      ('audit_done', 'Audit completed'), ('false', 'False marking'),
+                      ('all', 'Both')] %}
   <a class="{{ 'active' if f.state == k }}" href="{{ f.url(state=k) }}">
     {{ label }} ({{ counts[k] }})</a>
   {% endfor %}
 </div>
 
-<h2>{{ f.state|title }} — {{ rows|length }} task(s)</h2>
+{% set state_titles = {'pending': 'Pending', 'overdue': 'Overdue',
+                       'completed': 'Completed', 'audit_pending': 'Audit pending',
+                       'audit_done': 'Audit completed', 'false': 'False marking',
+                       'all': 'Pending and completed'} %}
+<h2>{{ state_titles[f.state] }} — {{ rows|length }} task(s)</h2>
+{% if f.state == 'completed' %}
+<p class="sub" style="margin-top:-8px">Finished by the doer, including work
+  still with an auditor. It scores once the audit closes.</p>
+{% endif %}
 {{ task_table(rows) }}
 {% endblock %}

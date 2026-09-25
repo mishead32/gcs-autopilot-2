@@ -2550,5 +2550,103 @@ check("and loads its script", "/static/markbox.js" in _list)
 check("the sign-in page does not", 'id="markDialog"' not in
       TestClient(app).get("/login").text)
 
+print("\n== Completed means the doer has finished it ==")
+# The complaint: mark a task complete, it needs an audit, and the Completed
+# tab stays empty. From the doer's side the job IS done — whether an auditor
+# has looked at it yet is a separate column, not a reason to hide the row.
+from app.models import AuditState as _AS2
+
+_ca = mgr.post("/tasks/new", data={
+    "title": f"SMOKE completed tab {RUN}", "details": "",
+    "doer_id": str(_amit.id), "branch_id": "", "priority": "medium",
+    "due_at": "2026-12-31T23:59", "requires_audit": "1"})
+_cid = int(_re.findall(r"/tasks/(\d+)/comment", _ca.text)[-1])
+attach(doer, _cid)
+doer.post(f"/tasks/{_cid}/submit", data={"completion_note": "finished"})
+
+with _SLT() as _d:
+    _t = _d.get(_MT, _cid)
+    check("it is waiting on an auditor", _t.status == _MST.SUBMITTED, _t.status)
+    check("and its audit is pending", _t.audit_state == _AS2.PENDING)
+
+_done = doer.get("/tasks?scope=mine&status=done").text
+check("it now appears under Completed", f'/tasks/{_cid}"' in _done, "still missing")
+check("the page explains what Completed covers",
+      "still sitting with an auditor" in _done)
+check("its row says where the audit stands", "Audit pending" in _done)
+check("it is still under With auditor",
+      f'/tasks/{_cid}"' in doer.get("/tasks?scope=mine&status=audit").text)
+check("and still under Audit pending",
+      f'/tasks/{_cid}"' in doer.get("/tasks?scope=mine&status=audit_pending").text)
+check("no Mark complete button on it any more",
+      f'data-mark="{_cid}"' not in _done)
+
+# The date filter has to find it too. Completed used to filter on closed_at,
+# which a task waiting on an auditor does not have yet — so picking any date
+# range would have emptied the tab all over again.
+_today = _clock.today().isoformat()
+_ranged = doer.get(f"/tasks?scope=mine&status=done&date_from={_today}&date_to={_today}").text
+check("a date range on Completed still finds it",
+      f'/tasks/{_cid}"' in _ranged, "dropped by the date filter")
+check("and says which date it is filtering on", "Completion date" in _ranged)
+
+# Closing the audit must not push it back out of the tab.
+admin.post(f"/tasks/{_cid}/audit",
+           data={"decision": "approve", "score": "9", "remark": "checked"})
+_done2 = doer.get("/tasks?scope=mine&status=done").text
+check("it stays under Completed once the audit closes",
+      f'/tasks/{_cid}"' in _done2)
+check("and appears under Audit completed",
+      f'/tasks/{_cid}"' in doer.get("/tasks?scope=mine&status=audit_done").text)
+
+print("\n== Audit completed and False marking have tabs of their own ==")
+_tabs = doer.get("/tasks?scope=mine&status=open").text
+for _lbl in ("Completed", "With auditor", "Audit pending", "Audit completed",
+             "False marking"):
+    check(f"the tab row offers {_lbl}", f">{_lbl}</a>" in _tabs or _lbl in _tabs)
+
+# A flagged task must be findable by the flag, and say so on its row.
+_fm = mgr.post("/tasks/new", data={
+    "title": f"SMOKE false mark tab {RUN}", "details": "",
+    "doer_id": str(_amit.id), "branch_id": "", "priority": "high",
+    "due_at": "2026-12-31T23:59"})
+_fid2 = int(_re.findall(r"/tasks/(\d+)/comment", _fm.text)[-1])
+attach(doer, _fid2)
+doer.post(f"/tasks/{_fid2}/submit", data={"completion_note": "done"})
+admin.post(f"/tasks/{_fid2}/false-mark",
+           data={"confirm": "yes", "reason": "register was never filled"})
+_fpage = doer.get("/tasks?scope=mine&status=false_mark")
+check("the False marking tab opens", _fpage.status_code == 200, _fpage.status_code)
+check("and lists the flagged task", f'/tasks/{_fid2}"' in _fpage.text)
+check("the row carries the penalty chip", "false marking −10" in _fpage.text)
+check("sorted by when it was flagged",
+      "most recently flagged first" in _fpage.text.lower())
+check("a task nobody flagged is not in there",
+      f'/tasks/{_cid}"' not in _fpage.text)
+
+print("\n== the three reports carry the audit figures ==")
+for _src in ("delegation", "checklist", "fms"):
+    _rp = admin.get(f"/reports/tasks?source={_src}")
+    check(f"{_src} report opens", _rp.status_code == 200, _rp.status_code)
+    for _lbl in ("Audit pending", "Audit completed", "False marking"):
+        check(f"{_src}: it shows {_lbl}", _lbl in _rp.text)
+    for _st in ("audit_pending", "audit_done", "false"):
+        _sp2 = admin.get(f"/reports/tasks?source={_src}&state={_st}")
+        check(f"{_src}: the {_st} tab opens", _sp2.status_code == 200, _sp2.status_code)
+
+# The figures must be the database's, not a guess.
+_dr = admin.get("/reports/tasks?source=delegation&state=false")
+check("the delegation report lists the flagged task",
+      f'/tasks/{_fid2}"' in _dr.text, "missing from False marking")
+_dc = admin.get("/reports/tasks?source=delegation&state=completed")
+check("and counts work waiting on an auditor as completed",
+      f'/tasks/{_cid}"' in _dc.text)
+check("saying plainly that it scores only once the audit closes",
+      "scores once the audit closes" in _dc.text)
+
+# An unknown state falls back rather than breaking the page.
+check("a nonsense state falls back to Pending",
+      admin.get("/reports/tasks?source=fms&state=banana").status_code == 200)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

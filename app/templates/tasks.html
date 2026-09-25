@@ -6,6 +6,11 @@
     <h1>Tasks</h1>
     <p class="sub">{{ tasks|length }} {{ source_tabs[source].label if source else '' }}
       task(s) · sorted {{ sort_label|lower }}</p>
+    {% if status == 'done' %}
+    <p class="sub" style="margin-top:-6px">Work the doer has finished —
+      including anything still sitting with an auditor. The Audit column
+      shows where each one stands.</p>
+    {% endif %}
   </div>
   {% if user.has_create_task %}
   <div>
@@ -28,8 +33,10 @@
 
 <div class="tabs">
   {% for s,label in [('open','Open'),('overdue','Overdue'),('upcoming','Coming up'),
-                     ('audit','Awaiting audit'),('audit_pending','Audit pending'),
-                     ('done','Completed'),('all','All')] %}
+                     ('done','Completed'),
+                     ('audit','With auditor'),('audit_pending','Audit pending'),
+                     ('audit_done','Audit completed'),('false_mark','False marking'),
+                     ('all','All')] %}
   <a class="{{ 'active' if status==s }}"
      href="/tasks?scope={{ scope }}&status={{ s }}&source={{ source }}&date_from={{ date_from }}&date_to={{ date_to }}">{{ label }}</a>
   {% endfor %}

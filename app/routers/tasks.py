@@ -24,6 +24,18 @@ router = APIRouter()
 OPEN_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
                TaskStatus.REJECTED, TaskStatus.REOPENED)
 
+# What "Completed" means on a task list: the person doing it has finished it.
+#
+# It used to mean only CLOSED, which left anything waiting on an auditor in a
+# limbo of its own — the doer had done the work, the tab said nothing was
+# there, and the only place it appeared was Audit pending. From where they
+# sit the job IS done; whether the auditor has looked at it yet is the
+# auditor's business, and the Audit column says so on every row.
+#
+# The score is deliberately not changed by this. A task still earns its marks
+# when the audit closes, because an audit can send it back.
+FINISHED_STATES = (TaskStatus.SUBMITTED, TaskStatus.COMPLETED)
+
 
 def _visible_tasks_query(user: User):
     q = select(Task).where(Task.org_id == user.org_id)
@@ -44,14 +56,30 @@ def _visible_tasks_query(user: User):
 # means the date it was PLANNED for. Filtering both on the same column is the
 # usual way these reports end up quietly wrong.
 DATE_BASIS = {
-    "done": ("closed_at", "Completion date"),
+    "done": ("finished_at", "Completion date"),
     "audit": ("submitted_at", "Submission date"),
     "audit_pending": ("due_at", "Planned date"),
+    "audit_done": ("audited_at", "Audit date"),
+    "false_mark": ("false_marked_at", "Flagged on"),
     "open": ("due_at", "Planned date"),
     "overdue": ("due_at", "Planned date"),
     "upcoming": ("due_at", "Planned date"),
     "all": ("due_at", "Planned date"),
 }
+
+
+def _basis_col(name: str):
+    """The date column a view is filtered and sorted on.
+
+    "finished_at" is not a column. A task closed outright has closed_at; one
+    sitting with the auditor has only submitted_at. Both are finished as far
+    as the doer is concerned, so the Completed view filters on whichever of
+    the two exists — otherwise picking a date range would silently drop every
+    task still awaiting audit.
+    """
+    if name == "finished_at":
+        return func.coalesce(Task.closed_at, Task.submitted_at)
+    return getattr(Task, name)
 
 
 # High first, then medium, then low. The database stores the name, so an
@@ -111,11 +139,15 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
         q = q.where(Task.status == TaskStatus.SUBMITTED)
     elif status == "audit_pending":
         q = q.where(Task.audit_state == AuditState.PENDING)
+    elif status == "audit_done":
+        q = q.where(Task.audit_state == AuditState.COMPLETED)
+    elif status == "false_mark":
+        q = q.where(Task.false_marked.is_(True))
     elif status == "done":
-        q = q.where(Task.status == TaskStatus.COMPLETED)
+        q = q.where(Task.status.in_(FINISHED_STATES))
 
     col_name, basis_label = DATE_BASIS.get(status, ("due_at", "Planned date"))
-    col = getattr(Task, col_name)
+    col = _basis_col(col_name)
     start, end = _parse_day(date_from), _parse_day(date_to)
     if start and end and start > end:
         start, end = end, start          # someone typed them the wrong way round
@@ -150,9 +182,11 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
     if source:
         q = q.where(Task.source == SOURCE_TABS[source]["src"])
 
-    if col_name == "closed_at":
-        order = (col.desc(),)                     # newest completions first
-        sort_label = "Most recently completed first"
+    if col_name in ("finished_at", "audited_at", "false_marked_at"):
+        order = (col.desc(),)                     # newest first
+        sort_label = {"finished_at": "Most recently completed first",
+                      "audited_at": "Most recently audited first",
+                      "false_marked_at": "Most recently flagged first"}[col_name]
     else:
         order = (PRIORITY_RANK, Task.due_at.asc())
         sort_label = "High priority first, then by deadline"
