@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -10,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import (
     SECRET_KEY, BASE_DIR, APP_NAME, SERVERLESS, CRON_SECRET, DATABASE_URL,
 )
+from . import clock
 from .db import Base, engine, SessionLocal
 from .deps import RedirectToLogin
 from . import migrate
@@ -19,6 +21,39 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       reports as reports_router)
 from .services import recurring
 from .templating import templates
+
+
+SPAWN_CHECK_SECONDS = 600      # look at the calendar every ten minutes
+
+
+async def _daily_spawn():
+    """Create each day's checklist tasks, once, for as long as we are running.
+
+    Checks the date rather than sleeping 24 hours, so it survives the clock
+    moving and starts the new day within ten minutes of midnight. run_spawn
+    is blocking, so it goes to a thread — a slow database must not freeze
+    every request on the server.
+    """
+    last_done = None
+    while True:
+        try:
+            today = clock.today()
+            if today != last_done:
+                created = await asyncio.to_thread(_spawn_once)
+                last_done = today
+                if created:
+                    print(f"Checklist for {today}: created {created} task(s)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A bad day must not kill the loop — tomorrow deserves a try.
+            print(f"Checklist spawn failed: {exc!r}")
+        await asyncio.sleep(SPAWN_CHECK_SECONDS)
+
+
+def _spawn_once() -> int:
+    with SessionLocal() as db:
+        return recurring.run_spawn(db)
 
 
 @asynccontextmanager
@@ -42,12 +77,27 @@ async def lifespan(app: FastAPI):
                              admin_email, admin_pw)
                 print(f"Created the first administrator: {admin_email}")
 
-    # Long-running hosts spawn today's checklist tasks at boot. On serverless
-    # there is no boot, so a scheduler must call /cron/spawn instead.
+    # Today's checklist tasks. This used to happen only at boot, which was
+    # fine while the host slept every night and woke each morning — the wake
+    # WAS the daily trigger. Keep such a host awake around the clock and it
+    # never boots again, so the checklist silently stops after day one.
+    #
+    # So the app now carries its own daily clock: it spawns at boot and then
+    # once per day for as long as it is running, whatever the host does.
+    # /cron/spawn still works and is still safe to call — each rule fires at
+    # most once a day either way.
+    spawner = None
     if not SERVERLESS:
-        with SessionLocal() as db:
-            recurring.run_spawn(db)
-    yield
+        spawner = asyncio.create_task(_daily_spawn())
+    try:
+        yield
+    finally:
+        if spawner:
+            spawner.cancel()
+            try:
+                await spawner
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title=APP_NAME, lifespan=lifespan)

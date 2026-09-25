@@ -1222,13 +1222,31 @@ if _ids:
           ea.post(f"/followups/{tid_f}/tick",
                   data={"day": "2030-01-01", "desk": "ea"}).status_code == 400)
 
-    # yesterday's tick must not cover today
-    _yday = (_date.today() - __import__("datetime").timedelta(days=1)).isoformat()
-    ea.post(f"/followups/{tid_f}/tick", data={"day": _yday, "desk": "ea"})
-    ypage = ea.get(f"/followups?desk=ea&day={_yday}").text
-    check("yesterday can be ticked separately", "fu-done" in ypage)
-    check("and today keeps its own tally",
-          f'/followups/{tid_f}/tick' in ea.get(f"/followups?desk=ea&day={_today}").text)
+    # Yesterday's tick must not cover today. Tested on a task that was
+    # genuinely open yesterday — the desk only lists what was open on the day
+    # you are looking at, so ticking today's brand-new task and then asking
+    # for yesterday's page proves nothing.
+    import datetime as _dtf
+    from app import clock as _ckf
+    _yday_d = _ckf.today() - _dtf.timedelta(days=1)
+    _yday = _yday_d.isoformat()
+    _old_id = int(re.search(r"/tasks/(\d+)", admin.post("/tasks/new", data={
+        "title": f"open since before yesterday {RUN}", "doer_id": 6,
+        "priority": "medium",
+        "due_at": (_ckf.now() - _dtf.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M")},
+        follow_redirects=False).headers["location"]).group(1))
+
+    _ypage_before = ea.get(f"/followups?desk=ea&day={_yday}").text
+    check("that task was open yesterday", f"/tasks/{_old_id}" in _ypage_before)
+    ea.post(f"/followups/{_old_id}/tick", data={"day": _yday, "desk": "ea"})
+    _ypage = ea.get(f"/followups?desk=ea&day={_yday}").text
+    check("yesterday can be ticked separately", "fu-done" in _ypage)
+    _tpage = ea.get(f"/followups?desk=ea&day={_today}").text
+    check("and today keeps its own tally — still untickled",
+          f'/followups/{_old_id}/tick' in _tpage)
+    check("yesterday's tick did not mark today done",
+          _tpage.count("fu-done") < _ypage.count("fu-done") + 1
+          or "fu-done" not in _tpage.split(f"/tasks/{_old_id}")[0][-400:])
 
 print("\n== follow-up report (now under Reports) ==")
 check("the old link still lands on the report",
@@ -2243,6 +2261,76 @@ _dash = _pmc.get("/").text
 check("the doer's dashboard says how much is scored by software",
       "50 of the 100 points are scored by the" in _dash
       or "50 of 100 scored here" in _dash, "no note shown")
+
+print("\n== the checklist no longer depends on the server restarting ==")
+# This used to happen only at boot. On a host kept awake around the clock
+# there is no second boot, so the checklist would have stopped after day one.
+import asyncio as _aio, datetime as _dtm
+from app import main as _M
+from app.models import RecurringRule as _RR
+
+def _recurring_count():
+    with _SLP() as _d:
+        return len(_d.scalars(_sp(_TP).where(_TP.source == _TSR.RECURRING)).all())
+
+_real_today = _clock.today
+_day = _clock.today()
+_M.SPAWN_CHECK_SECONDS = 0.05
+with _SLP() as _d:
+    for _r in _d.scalars(_sp(_RR)).all():
+        _r.last_spawned_on = None
+    _d.commit()
+
+async def _walk_two_days():
+    _t = _aio.create_task(_M._daily_spawn())
+    await _aio.sleep(0.3)
+    _before = _recurring_count()
+    _clock.today = lambda: _day + _dtm.timedelta(days=1)
+    await _aio.sleep(0.4)
+    _after = _recurring_count()
+    await _aio.sleep(0.4)          # same day again
+    _again = _recurring_count()
+    _t.cancel()
+    try:
+        await _t
+    except _aio.CancelledError:
+        pass
+    return _before, _after, _again
+
+try:
+    _b, _a, _ag = _aio.run(_walk_two_days())
+finally:
+    _clock.today = _real_today
+    _M.SPAWN_CHECK_SECONDS = 600
+
+check("the app spawns today's checklist on its own", _b > 0, _b)
+check("and a new day's checklist without any restart", _a > _b, f"{_b} -> {_a}")
+check("running again the same day creates no duplicates", _ag == _a, f"{_a} -> {_ag}")
+
+# The loop must survive a bad day rather than dying silently.
+async def _survive_error():
+    _boom = _clock.today
+    _clock.today = lambda: (_ for _ in ()).throw(RuntimeError("bad clock"))
+    _t = _aio.create_task(_M._daily_spawn())
+    await _aio.sleep(0.2)
+    _alive = not _t.done()
+    _clock.today = _boom
+    _t.cancel()
+    try:
+        await _t
+    except _aio.CancelledError:
+        pass
+    return _alive
+
+_M.SPAWN_CHECK_SECONDS = 0.05
+try:
+    check("a failure does not kill the loop", _aio.run(_survive_error()))
+finally:
+    _M.SPAWN_CHECK_SECONDS = 600
+    _clock.today = _real_today
+
+check("/cron/spawn still works alongside it",
+      admin.get("/cron/spawn").status_code in (200, 401))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
