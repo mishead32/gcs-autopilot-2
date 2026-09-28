@@ -15,12 +15,15 @@
     {% if branches %}
     <div class="table-wrap">
     <table>
-      <tr><th>Name</th><th>City</th><th>Staff</th><th>Tasks</th>
+      <tr><th>Name</th><th>City</th><th>Weekly off</th><th>Staff</th><th>Tasks</th>
           <th>Checklist</th><th>FMS</th><th></th></tr>
       {% for b in branches %}
       <tr>
         <td><a href="/admin/branches/{{ b.id }}"><strong>{{ b.name }}</strong></a></td>
         <td>{{ b.city or '—' }}</td>
+        <td>{% if b.weekly_off is none %}<span class="m">open 7 days</span>
+            {% else %}{{ ['Monday','Tuesday','Wednesday','Thursday','Friday',
+                          'Saturday','Sunday'][b.weekly_off] }}{% endif %}</td>
         <td>{{ branch_use[b.id].staff }}</td>
         <td>{{ branch_use[b.id].tasks }}</td>
         <td>{{ branch_use[b.id].rules }}</td>

@@ -12,7 +12,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, User, Role, RecurringRule, Recurrence,
     Priority, Branch, OutboundMessage, FlowInstance
 )
-from ..services import scoring, recurring, xlsx
+from ..services import scoring, recurring, xlsx, bulk
 from ..templating import templates
 
 router = APIRouter()
@@ -286,7 +286,11 @@ async def create_rule(
         title=title.strip(), details=details.strip() or None,
         doer_id=doer_id, assigner_id=user.id,
         priority=Priority(priority), frequency=Recurrence(frequency),
-        day_of=int(day_of) if day_of else None,
+        # Yearly is written as DD/MM and stored as MMDD; everything else is a
+        # plain number. Reusing the bulk importer's reader keeps the form and
+        # the spreadsheet agreeing on what a date means.
+        day_of=(bulk.yearly_day(day_of) if frequency == "yearly" and day_of
+                else int(day_of) if day_of.strip().isdigit() else None),
         due_time=due_time, requires_audit=bool(requires_audit),
         requires_attachment=proof_required,
     ))

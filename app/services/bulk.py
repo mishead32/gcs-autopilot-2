@@ -33,7 +33,7 @@ NOTE_FONT = Font(color="6B7A8C", size=9, italic=True)
 DELEGATION_COLS = [
     ("Task title", 42, "Required. What must be done."),
     ("Details", 46, "Optional. Instructions, and what 'done' looks like."),
-    ("Doer email", 26, "Required. Must match a user already in the system."),
+    ("Doer", 26, "Required. Their email, or their full name as it is spelt in Users."),
     ("Company", 26, "Optional. Defaults to the doer's own company."),
     ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Due date", 14, "Required. DD/MM/YYYY, e.g. 25/09/2026"),
@@ -44,10 +44,10 @@ DELEGATION_COLS = [
 CHECKLIST_COLS = [
     ("Task title", 42, "Required. The recurring job."),
     ("Details", 46, "Optional."),
-    ("Doer email", 26, "Required. Must match a user already in the system."),
+    ("Doer", 26, "Required. Their email, or their full name as it is spelt in Users."),
     ("Company", 26, "Optional. Defaults to the doer's own company."),
-    ("Frequency", 16, "daily / weekdays / weekly / monthly"),
-    ("Day", 10, "Weekly: Mon-Sun. Monthly: 1-31. Daily: leave blank."),
+    ("Frequency", 16, "daily / weekdays / weekly / monthly / yearly"),
+    ("Day", 10, "Weekly: Mon-Sun. Monthly: 1-31. Yearly: DD/MM. Daily: blank."),
     ("Due time", 12, "HH:MM 24-hour, e.g. 18:00. Blank = 18:00."),
     ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Needs audit", 13, "YES or NO. Blank = NO."),
@@ -122,7 +122,7 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
             ["Monthly machine maintenance audit", "", sample_email, "",
              "monthly", "1", "16:00", "high", "YES"],
         ])
-        _dropdown(ws, "E", ["daily", "weekdays", "weekly", "monthly"])
+        _dropdown(ws, "E", ["daily", "weekdays", "weekly", "monthly", "yearly"])
         _dropdown(ws, "H", ["high", "medium", "low"])
         _dropdown(ws, "I", ["YES", "NO"])
 
@@ -237,8 +237,18 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
         raise ValueError("That file isn't a readable Excel workbook (.xlsx).")
 
     ws = wb[wb.sheetnames[0]]
-    users = {u.email.lower(): u for u in db.scalars(
-        select(User).where(User.org_id == org_id, User.active.is_(True))).all()}
+
+    # A person can be named by their email or by their name. Every real list
+    # anybody keeps has names in it, and making somebody look up fourteen
+    # email addresses to import three hundred rows is work the software
+    # should do. Two names spelt the same is the only case that has to be
+    # refused, and it is refused loudly rather than guessed at.
+    people = db.scalars(
+        select(User).where(User.org_id == org_id, User.active.is_(True))).all()
+    users = {u.email.lower(): u for u in people}
+    by_name: dict[str, list[User]] = {}
+    for u in people:
+        by_name.setdefault(_norm_name(u.name), []).append(u)
     branches = {b.name.strip().lower(): b for b in db.scalars(
         select(Branch).where(Branch.org_id == org_id)).all()}
 
@@ -256,12 +266,7 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
             if not title:
                 raise ValueError("Task title is empty")
 
-            email = _text(raw[2]).lower()
-            doer = users.get(email)
-            if not doer:
-                raise ValueError(
-                    f"No active user with the email '{_text(raw[2])}'"
-                    if email else "Doer email is empty")
+            doer = _find_person(_text(raw[2]), users, by_name)
 
             bname = _text(raw[3])
             branch = branches.get(bname.lower()) if bname else None
@@ -280,7 +285,13 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
                 base["due_at"] = _due(raw[5], raw[6])
                 base["requires_audit"] = _yes(raw[7])
             else:
-                freq = _text(raw[4]).lower() or "daily"
+                freq = _text(raw[4]).lower()
+                if not freq:
+                    raise ValueError(
+                        "Frequency is empty — use daily, weekdays, weekly, "
+                        "monthly or yearly. A blank one used to be read as "
+                        "daily, which is a task landing on somebody every "
+                        "single day because a cell was missed.")
                 if freq not in {f.value for f in Recurrence}:
                     raise ValueError(
                         f"'{freq}' is not a frequency — use daily, weekdays, "
@@ -300,7 +311,13 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
                         raise ValueError(
                             f"Monthly needs a day 1-31 — got '{day_raw}'")
                     day = int(day_raw)
+                elif freq == "yearly":
+                    day = yearly_day(day_raw)
                 base["day_of"] = day
+                # the same wording the Checklist page uses, so the preview and
+                # the saved rule cannot describe the schedule differently
+                base["schedule_label"] = RecurringRule(
+                    frequency=base["frequency"], day_of=day).schedule_label
 
                 t = _text(raw[6]) or "18:00"
                 _due("01/01/2026", t)          # reuse the time validator
@@ -352,3 +369,56 @@ def commit(db: Session, org_id: int, actor: User, parsed: Parsed) -> int:
 
     db.commit()
     return made
+
+
+# ------------------------------------------------------- people by name ----
+def _norm_name(name: str) -> str:
+    """Fold a name down to what two spellings of it have in common.
+
+    Case and extra spaces are noise. A middle name or an initial is not, so
+    "Alok Kumar" and "Alok K Kumar" stay different people — guessing there
+    would hand somebody else's work to the wrong person.
+    """
+    return " ".join((name or "").lower().split())
+
+
+def _find_person(raw: str, users: dict, by_name: dict):
+    """Turn whatever is in the Doer column into one person, or say why not."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("The Doer column is empty — put their name or email")
+
+    found = users.get(text.lower())
+    if found:
+        return found
+    if "@" in text:
+        raise ValueError(f"No active user with the email '{text}'")
+
+    matches = by_name.get(_norm_name(text), [])
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            f"There are {len(matches)} active people called '{text}' — "
+            "use their email address instead so the right one gets it")
+    raise ValueError(
+        f"Nobody active is called '{text}'. Check the spelling against the "
+        "Users page, or use their email address")
+
+
+def yearly_day(raw: str) -> int:
+    """DD/MM (or a real date) stored as MMDD — 17/04 becomes 417."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Yearly needs the date it falls on — use DD/MM")
+    if isinstance(raw, datetime):
+        return raw.month * 100 + raw.day
+    parts = [p for p in text.replace("-", "/").replace(".", "/").split("/") if p]
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        raise ValueError(f"'{text}' is not a date — yearly wants DD/MM, e.g. 17/04")
+    dd, mm = int(parts[0]), int(parts[1])
+    if dd > 31 and mm <= 31:               # somebody typed MM/DD
+        dd, mm = mm, dd
+    if not (1 <= mm <= 12 and 1 <= dd <= 31):
+        raise ValueError(f"'{text}' is not a real date — yearly wants DD/MM")
+    return mm * 100 + dd

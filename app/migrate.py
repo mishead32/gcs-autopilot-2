@@ -37,9 +37,16 @@ ADDITIONS = {
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
         ("decision", "VARCHAR(10)"),
         ("held_from", "VARCHAR(20)"),
+        ("covers_day", "DATE"),
     ],
     "recurring_rules": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+    ],
+    "branches": [
+        # Existing companies get Sunday off, which is true of every one of
+        # them except the gym and the spa — those two are switched off by
+        # hand on the Branches page, where it is visible.
+        ("weekly_off", "INTEGER DEFAULT 6"),
     ],
     "flow_instances": [
         ("held_at", "DATETIME"),
@@ -112,6 +119,7 @@ PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
 # which is what SQLAlchemy stores by default (ON_HOLD, not on_hold).
 ENUM_VALUES = {
     "taskstatus": ["ON_HOLD"],
+    "recurrence": ["YEARLY"],
 }
 
 

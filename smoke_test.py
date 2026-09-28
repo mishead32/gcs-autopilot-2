@@ -1047,10 +1047,16 @@ check("and the day after, tasks are created again", after2 > after, f"{after} ->
 check("the holiday is skipped, not owed the next day",
       after2 - after < 20, after2 - after)
 
-# a deadline landing on a holiday moves forward
+# A deadline landing on a closed day comes FORWARD, to the last working day
+# before it. Pushing it to the day after means the Sunday report is handed in
+# on Monday — late, by a day, every single time.
 _moved, _why = _hol.shift_due(_db, _org, _dt.combine(_hday, _dt.min.time()).replace(hour=18))
-check("a deadline on a holiday moves to the next day",
-      _moved.date() == _hday + _td(days=1), _moved)
+check("a deadline on a holiday comes back to the working day before",
+      _moved.date() < _hday, _moved)
+check("and not to the day after", _moved.date() != _hday + _td(days=1), _moved)
+# Mon 15 Mar 2027 is the holiday, Sun 14 is the weekly off, so Sat 13 it is.
+check("skipping back over the weekly off as well",
+      _moved.date() == _date(2027, 3, 13), _moved)
 check("and keeps the time of day", _moved.hour == 18, _moved)
 check("the reason is reported back", _why == "SMOKE holiday", _why)
 _ok, _none = _hol.shift_due(_db, _org, _dt(2027, 3, 20, 18, 0))
@@ -1061,7 +1067,44 @@ _db.add(_H(org_id=_org, branch_id=None, day=_date(2027, 4, 1), name="A"))
 _db.add(_H(org_id=_org, branch_id=None, day=_date(2027, 4, 2), name="B"))
 _db.commit()
 _m2, _ = _hol.shift_due(_db, _org, _dt(2027, 4, 1, 10, 0))
-check("a run of holidays is skipped through", _m2.date() == _date(2027, 4, 3), _m2)
+check("a run of holidays is skipped back through",
+      _m2.date() == _date(2027, 3, 31), _m2)
+check("which is a working day", not _hol.is_closed(_db, _org, _m2.date()), _m2)
+
+# Sunday, with no holiday involved at all.
+_sun = _date(2027, 4, 11)
+check("Sunday counts as closed for head office",
+      _hol.is_closed(_db, _org, _sun, None))
+_ms, _wsun = _hol.shift_due(_db, _org, _dt.combine(_sun, _dt.min.time()).replace(hour=17))
+check("a Sunday deadline comes back to Saturday",
+      _ms.date() == _sun - _td(days=1), _ms)
+check("and says so in words", _wsun and "Sunday" in _wsun, _wsun)
+
+# But NOT for a company that never closes — the gym and the spa work Sundays.
+from app.models import Branch as _BR
+_bz = _db.scalar(_sel(_BR).where(_BR.name.like("Bodyzone%")))
+if _bz:
+    _bz.weekly_off = None
+    _db.commit()
+    check("a company set to open seven days is not closed on Sunday",
+          not _hol.is_closed(_db, _org, _sun, _bz.id))
+    _mb, _wb = _hol.shift_due(_db, _org,
+                              _dt.combine(_sun, _dt.min.time()).replace(hour=17),
+                              _bz.id)
+    check("so its Sunday deadline stays on Sunday",
+          _mb.date() == _sun and _wb is None, f"{_mb} {_wb}")
+else:
+    check("a seven-day company was available to test", False, "no Bodyzone branch")
+
+# A deadline already in the past is never moved — an impossible deadline
+# helps nobody, and there is no working day before it left to use.
+from app import clock as _clk
+_gone = _clk.now() - _td(days=400)
+while _gone.weekday() != 6:
+    _gone -= _td(days=1)
+_mg, _wg = _hol.shift_due(_db, _org, _gone)
+check("a Sunday that has already passed is left alone",
+      _mg == _gone and _wg is None, f"{_mg} {_wg}")
 
 # a branch holiday must not affect another branch
 _db.add(_H(org_id=_org, branch_id=4, day=_date(2027, 5, 5), name="Jharkhand only"))
@@ -1076,8 +1119,10 @@ r = admin.post("/tasks/new", data={
     "title": f"SMOKE holiday deadline {RUN}", "details": "", "doer_id": "6",
     "branch_id": "", "priority": "medium", "due_at": "2026-11-08T18:00"})
 check("delegating onto a holiday still works", r.status_code == 200, r.status_code)
-check("and the task says the deadline moved", "is a holiday" in r.text)
-check("the new deadline is the next day", "09 Nov 2026" in r.text)
+check("and the task says the deadline moved", "Brought forward" in r.text)
+# 8 Nov 2026 is a Sunday, so the working day before it is Saturday the 7th.
+check("the new deadline is the working day BEFORE", "07 Nov 2026" in r.text)
+check("and not the day after", "09 Nov 2026" not in r.text)
 
 print("\n== date filters on the task lists ==")
 r = admin.get("/tasks?scope=all&status=done")
@@ -3216,6 +3261,226 @@ else:
 
 # Whatever the backend: the migrator must be safe to run again at any time.
 check("the migrator is safe to re-run", isinstance(_upmig.run(), list))
+
+print("\n== a checklist job due on a closed day is created a day early ==")
+from app.models import (RecurringRule as _RR2, Recurrence as _Rec2,
+                        Task as _T2, Branch as _BR2, Holiday as _H2)
+from app.services import recurring as _rec2, holidays as _hol2
+from datetime import date as _d2, timedelta as _td2
+
+_w = _SLT()
+# Head office: closed Sundays. A daily job, and a job due only on Sundays.
+_ho = _w.scalar(_msel(_BR2).where(_BR2.name.like("%HO%"))) or _w.scalar(_msel(_BR2))
+_ho.weekly_off = 6
+_w.commit()
+
+_sat = _d2(2027, 5, 8)          # Saturday
+_sun = _d2(2027, 5, 9)          # Sunday
+check("the test dates are the days they should be",
+      _sat.weekday() == 5 and _sun.weekday() == 6)
+
+_daily = _RR2(org_id=1, branch_id=_ho.id, title=f"SMOKE daily closed {RUN}",
+              doer_id=6, assigner_id=2, frequency=_Rec2.DAILY, due_time="18:00")
+_sunday_job = _RR2(org_id=1, branch_id=_ho.id, title=f"SMOKE sunday job {RUN}",
+                   doer_id=6, assigner_id=2, frequency=_Rec2.WEEKLY, day_of=6,
+                   due_time="17:00")
+_w.add_all([_daily, _sunday_job])
+_w.commit()
+
+def _made(rule_id):
+    return _w.scalars(_msel(_T2).where(_T2.rule_id == rule_id)).all()
+
+_rec2.run_spawn(_w, today=_sat)
+_dtasks = _made(_daily.id)
+_stasks = _made(_sunday_job.id)
+check("Saturday makes the daily job twice — its own and Sunday's",
+      len(_dtasks) == 2, [str(t.covers_day) for t in _dtasks])
+check("one covering Saturday and one covering Sunday",
+      {t.covers_day for t in _dtasks} == {_sat, _sun},
+      sorted(str(t.covers_day) for t in _dtasks))
+check("both are due on Saturday, not on the Sunday nobody is in",
+      all(t.due_at.date() == _sat for t in _dtasks),
+      [str(t.due_at) for t in _dtasks])
+check("the Sunday-only job is created on Saturday too",
+      len(_stasks) == 1 and _stasks[0].covers_day == _sun,
+      [str(t.covers_day) for t in _stasks])
+check("and it says on the task why it turned up early",
+      any("brought forward" in c.body.lower() for c in _stasks[0].comments),
+      [c.body[:50] for c in _stasks[0].comments])
+
+# Sunday itself creates nothing — everybody is off.
+_rec2.run_spawn(_w, today=_sun)
+check("Sunday itself creates nothing", len(_made(_daily.id)) == 2,
+      len(_made(_daily.id)))
+
+# Monday creates only Monday's.
+_rec2.run_spawn(_w, today=_sun + _td2(days=1))
+check("Monday creates its own and nothing else", len(_made(_daily.id)) == 3,
+      len(_made(_daily.id)))
+
+# Running the spawner twice on the same day must not double anything.
+_before = len(_made(_daily.id))
+_rec2.run_spawn(_w, today=_sun + _td2(days=1))
+check("running it again the same day creates nothing",
+      len(_made(_daily.id)) == _before, len(_made(_daily.id)))
+
+# A company that never closes keeps its Sunday work on Sunday.
+_gym = _w.scalar(_msel(_BR2).where(_BR2.name.like("Bodyzone%")))
+if _gym:
+    _gym.weekly_off = None
+    _gymrule = _RR2(org_id=1, branch_id=_gym.id, title=f"SMOKE gym sunday {RUN}",
+                    doer_id=7, assigner_id=2, frequency=_Rec2.WEEKLY, day_of=6,
+                    due_time="10:00")
+    _w.add(_gymrule)
+    _w.commit()
+    _rec2.run_spawn(_w, today=_d2(2027, 5, 15))          # the Saturday before
+    check("a seven-day company does not get its Sunday job early",
+          not _made(_gymrule.id), [str(t.covers_day) for t in _made(_gymrule.id)])
+    _rec2.run_spawn(_w, today=_d2(2027, 5, 16))          # the Sunday itself
+    _g = _made(_gymrule.id)
+    check("it gets it on the Sunday, as it should",
+          len(_g) == 1 and _g[0].covers_day == _d2(2027, 5, 16),
+          [str(t.covers_day) for t in _g])
+
+# A run of closed days is created once, by the working day before the run.
+_w.add(_H2(org_id=1, branch_id=None, day=_d2(2027, 6, 3), name="SMOKE festival 1"))
+_w.add(_H2(org_id=1, branch_id=None, day=_d2(2027, 6, 4), name="SMOKE festival 2"))
+_run_rule = _RR2(org_id=1, branch_id=_ho.id, title=f"SMOKE festival daily {RUN}",
+                 doer_id=6, assigner_id=2, frequency=_Rec2.DAILY, due_time="18:00")
+_w.add(_run_rule)
+_w.commit()
+_rec2.run_spawn(_w, today=_d2(2027, 6, 2))       # Wednesday before the festival
+_covers = sorted(str(t.covers_day) for t in _made(_run_rule.id))
+# Wed 2 Jun carries its own plus the Thu/Fri festival. Sat 5 Jun is a normal
+# working day for this company, so the run of closed days stops there — and
+# Saturday will make its own, plus the Sunday after it.
+check("the day before a festival carries the whole closed run",
+      _covers == ["2027-06-02", "2027-06-03", "2027-06-04"], _covers)
+check("every one of them is due on that working day",
+      all(t.due_at.date() == _d2(2027, 6, 2) for t in _made(_run_rule.id)),
+      sorted(str(t.due_at.date()) for t in _made(_run_rule.id)))
+_rec2.run_spawn(_w, today=_d2(2027, 6, 5))
+check("and Saturday then carries itself and the Sunday",
+      sorted(str(t.covers_day) for t in _made(_run_rule.id))
+      == ["2027-06-02", "2027-06-03", "2027-06-04", "2027-06-05", "2027-06-06"],
+      sorted(str(t.covers_day) for t in _made(_run_rule.id)))
+_w.close()
+
+print("\n== the bulk import takes a person's name, and yearly work ==")
+import io as _bio
+from openpyxl import Workbook as _WB
+from app.services import bulk as _bulk
+
+def _sheet_bytes(rows, kind="checklist"):
+    wb = _WB(); ws = wb.active
+    cols = (_bulk.CHECKLIST_COLS if kind == "checklist" else _bulk.DELEGATION_COLS)
+    for i, (name, _w2, note) in enumerate(cols, start=1):
+        ws.cell(row=1, column=i, value=name)
+        ws.cell(row=2, column=i, value=note)
+    for r, row in enumerate(rows, start=3):
+        for c, v in enumerate(row, start=1):
+            ws.cell(row=r, column=c, value=v)
+    buf = _bio.BytesIO(); wb.save(buf); return buf.getvalue()
+
+with _SLT() as _d:
+    _amit_name = _d.get(_MU, _amit.id).name
+    _amit_mail = _d.get(_MU, _amit.id).email
+
+_blob = _sheet_bytes([
+    [f"By name {RUN}", "", _amit_name, "", "daily", "", "18:00", "high", "NO"],
+    [f"By email {RUN}", "", _amit_mail, "", "daily", "", "18:00", "high", "NO"],
+    [f"By name odd case {RUN}", "", _amit_name.upper(), "", "weekly", "Fri",
+     "18:00", "medium", "NO"],
+    [f"Yearly renewal {RUN}", "", _amit_name, "", "yearly", "17/04", "11:00",
+     "high", "NO"],
+    [f"Nobody {RUN}", "", "Ghost Person", "", "daily", "", "18:00", "high", "NO"],
+    [f"Bad year {RUN}", "", _amit_name, "", "yearly", "", "11:00", "high", "NO"],
+])
+_p = _bulk.parse(_SLT(), 1, "checklist", _blob)
+_by = {r.data.get("title", f"row {r.number}") if r.ok else f"row {r.number}": r
+       for r in _p.rows}
+check("a row naming the person by name is accepted",
+      _by[f"By name {RUN}"].ok, _by[f"By name {RUN}"].error)
+check("so is one naming them by email", _by[f"By email {RUN}"].ok)
+check("both land on the same person",
+      _by[f"By name {RUN}"].data["doer"].id
+      == _by[f"By email {RUN}"].data["doer"].id)
+check("capitals in a name do not matter",
+      _by[f"By name odd case {RUN}"].ok, _by[f"By name odd case {RUN}"].error)
+check("a yearly rule is accepted", _by[f"Yearly renewal {RUN}"].ok,
+      _by[f"Yearly renewal {RUN}"].error)
+check("with the date stored as month and day",
+      _by[f"Yearly renewal {RUN}"].data["day_of"] == 417,
+      _by[f"Yearly renewal {RUN}"].data.get("day_of"))
+check("and described in words",
+      "17 Apr" in _by[f"Yearly renewal {RUN}"].data["schedule_label"],
+      _by[f"Yearly renewal {RUN}"].data.get("schedule_label"))
+_ghost = [r for r in _p.rows if not r.ok and "Ghost" in (r.error or "")]
+check("a name nobody has is refused, by name", _ghost,
+      [r.error for r in _p.bad])
+check("and the message says where to look",
+      _ghost and "Users page" in _ghost[0].error, _ghost[0].error if _ghost else "")
+_noday = [r for r in _p.rows if not r.ok and "DD/MM" in (r.error or "")]
+check("a yearly rule with no date is refused", _noday,
+      [r.error for r in _p.bad])
+
+# Two people with the same name must be refused rather than guessed at.
+_dup = admin.post("/admin/users", data={
+    "name": _amit_name, "email": f"dup.{RUN}@gcs.local", "password": "gcs1234",
+    "role": "doer", "branch_id": "", "department_id": "",
+    "bm_delegation": "60", "bm_checklist": "20", "bm_fms": "20"})
+check("a second person with the same name can exist",
+      _dup.status_code in (200, 303), _dup.status_code)
+_p2 = _bulk.parse(_SLT(), 1, "checklist", _sheet_bytes([
+    [f"Ambiguous {RUN}", "", _amit_name, "", "daily", "", "18:00", "high", "NO"]]))
+check("and then that name is refused, not guessed",
+      _p2.rows and not _p2.rows[0].ok
+      and "use their email" in (_p2.rows[0].error or ""),
+      _p2.rows[0].error if _p2.rows else "no rows")
+check("while their email still works",
+      _bulk.parse(_SLT(), 1, "checklist", _sheet_bytes([
+          [f"By email still {RUN}", "", _amit_mail, "", "daily", "", "18:00",
+           "high", "NO"]])).rows[0].ok)
+
+# And the yearly rule actually fires on its day, once.
+_yr = _RR2(org_id=1, branch_id=None, title=f"SMOKE yearly fire {RUN}",
+           doer_id=6, assigner_id=2, frequency=_Rec2.YEARLY, day_of=417,
+           due_time="11:00")
+with _SLT() as _d:
+    _d.add(_yr); _d.commit()
+    _rec2.run_spawn(_d, today=_d2(2027, 4, 16))
+    check("a yearly rule does not fire the day before",
+          not _d.scalars(_msel(_T2).where(_T2.rule_id == _yr.id)).all())
+    _rec2.run_spawn(_d, today=_d2(2027, 4, 17))
+    _fired = _d.scalars(_msel(_T2).where(_T2.rule_id == _yr.id)).all()
+    check("it fires on its date", len(_fired) == 1, len(_fired))
+    _rec2.run_spawn(_d, today=_d2(2027, 4, 17))
+    check("and not twice",
+          len(_d.scalars(_msel(_T2).where(_T2.rule_id == _yr.id)).all()) == 1)
+    _rec2.run_spawn(_d, today=_d2(2028, 4, 17))
+    check("but again the following year",
+          len(_d.scalars(_msel(_T2).where(_T2.rule_id == _yr.id)).all()) == 2)
+
+check("a blank frequency is refused rather than read as daily",
+      not _bulk.parse(_SLT(), 1, "checklist", _sheet_bytes([
+          [f"No freq {RUN}", "", _amit_mail, "", "", "", "18:00", "high", "NO"]
+      ])).rows[0].ok)
+
+# The Checklist form and the spreadsheet must agree on what a yearly date is.
+_yform = admin.post("/recurring", data={
+    "title": f"SMOKE yearly form {RUN}", "details": "", "doer_id": str(_amit.id),
+    "branch_id": "", "frequency": "yearly", "day_of": "17/04",
+    "due_time": "11:00", "priority": "high"})
+check("the Checklist form takes a yearly date", _yform.status_code in (200, 303),
+      _yform.status_code)
+with _SLT() as _d:
+    _yr2 = _d.scalar(_msel(_RR2).where(_RR2.title == f"SMOKE yearly form {RUN}"))
+    check("stored the same way the spreadsheet stores it",
+          _yr2 is not None and _yr2.day_of == 417,
+          _yr2.day_of if _yr2 else "missing")
+    check("and reads back in words",
+          _yr2 and "17 Apr" in _yr2.schedule_label, _yr2.schedule_label if _yr2 else "")
+check("the Checklist page shows it", "17 Apr" in admin.get("/recurring").text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

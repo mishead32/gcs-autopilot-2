@@ -177,6 +177,11 @@ class Recurrence(str, enum.Enum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
     WEEKDAYS = "weekdays"
+    # Once a year: domain renewals, licences, subscriptions. day_of holds the
+    # month and day together as MMDD — 417 is 17 April, 1231 is 31 December —
+    # because a yearly rule needs both and the rule has only one column for it.
+    YEARLY = "yearly"
+
 
 
 # --------------------------------------------------------------------------
@@ -200,6 +205,14 @@ class Branch(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     name: Mapped[str] = mapped_column(String(120))
     city: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # The day of the week this company is closed, 0=Monday … 6=Sunday, or
+    # NULL for a company that never closes.
+    #
+    # It is per company on purpose. The offices keep Sunday off, but the gym
+    # and the spa are at their busiest on a Sunday — a group-wide "Sunday is
+    # off" would quietly take every Sunday job off those two rotas.
+    weekly_off: Mapped[int | None] = mapped_column(Integer, nullable=True,
+                                                   default=6)
 
     org: Mapped[Organization] = relationship(back_populates="branches")
 
@@ -659,6 +672,11 @@ class Task(Base):
     # puts it back exactly where it was rather than guessing "in progress"
     # and quietly erasing that an auditor had sent it back.
     held_from: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # For a checklist task: the calendar day this one is FOR. Normally the
+    # same day it was created, but a job due on a Sunday is created on the
+    # Saturday before, and then the two differ. It is also what stops the
+    # same day's job being created twice.
+    covers_day: Mapped[date | None] = mapped_column(Date, nullable=True)
     captured_data: Mapped[str] = mapped_column(Text, default="{}")
 
     # false marking: auditor says the doer closed this without really doing it
@@ -801,6 +819,29 @@ class RecurringRule(Base):
 
     doer: Mapped[User] = relationship(foreign_keys=[doer_id])
     assigner: Mapped[User] = relationship(foreign_keys=[assigner_id])
+
+    @property
+    def schedule_label(self) -> str:
+        """How this rule reads in a sentence — one wording, used everywhere."""
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                "Saturday", "Sunday"]
+        f = self.frequency
+        if f == Recurrence.DAILY:
+            return "Every day"
+        if f == Recurrence.WEEKDAYS:
+            return "Monday to Friday"
+        if f == Recurrence.WEEKLY:
+            return f"Every {days[self.day_of if self.day_of is not None else 0]}"
+        if f == Recurrence.MONTHLY:
+            return f"Day {self.day_of or 1} of every month"
+        if f == Recurrence.YEARLY:
+            month, dom = divmod(self.day_of or 101, 100)
+            names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            if 1 <= month <= 12:
+                return f"Every year on {dom} {names[month]}"
+            return "Once a year"
+        return f.value.title()
 
 
 class HelpTicket(Base):

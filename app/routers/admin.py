@@ -361,6 +361,9 @@ def branches_page(request: Request, export: str = "",
         use = {b.id: _branch_links(db, b) for b in branches}
         return xlsx.one("branches", "Branches", [
             ("Branch", lambda b: b.name),
+            ("Weekly off", lambda b: ("Open 7 days" if b.weekly_off is None
+                else ["Monday","Tuesday","Wednesday","Thursday","Friday",
+                      "Saturday","Sunday"][b.weekly_off])),
             ("People", lambda b: use[b.id]["staff"]),
             ("Departments", lambda b: use[b.id]["depts"]),
             ("Tasks", lambda b: use[b.id]["tasks"]),
@@ -389,6 +392,7 @@ def edit_branch_form(branch_id: int, request: Request,
 
 @router.post("/branches/{branch_id}")
 def edit_branch(branch_id: int, name: str = Form(...), city: str = Form(""),
+                weekly_off: str = Form("6"),
                 user: User = Depends(manage), db: Session = Depends(get_db)):
     branch = _branch_or_404(db, user, branch_id)
     name = name.strip()
@@ -403,6 +407,10 @@ def edit_branch(branch_id: int, name: str = Form(...), city: str = Form(""),
     # tasks and scores follow the new name rather than being orphaned.
     branch.name = name
     branch.city = city.strip() or None
+    # Which day this company is closed. "" means it never closes — the gym and
+    # the spa are busiest on the day the offices are shut.
+    off = weekly_off.strip()
+    branch.weekly_off = int(off) if off.isdigit() and 0 <= int(off) <= 6 else None
     db.commit()
     return RedirectResponse("/admin/branches", status_code=303)
 

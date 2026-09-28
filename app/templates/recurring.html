@@ -17,9 +17,7 @@
             last spawned {{ r.last_spawned_on or 'never' }}</div></td>
         <td>{{ r.doer.name }}</td>
         <td><span class="chip">{{ r.frequency.value }}</span>
-          {% if r.frequency.value=='weekly' %}
-            {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.day_of or 0] }}
-          {% elif r.frequency.value=='monthly' %}day {{ r.day_of or 1 }}{% endif %}</td>
+          <div class="m">{{ r.schedule_label }}</div></td>
         <td>{{ r.due_time }}</td>
         <td><form method="post" action="/recurring/{{ r.id }}/toggle">
           <button class="btn sm {{ '' if r.active else 'ghost' }}">{{ 'On' if r.active else 'Off' }}</button>
@@ -47,7 +45,12 @@
     <div class="row">
       <div><label>Frequency</label><select name="frequency">
         {% for f in frequencies %}<option value="{{ f.value }}">{{ f.value|title }}</option>{% endfor %}</select></div>
-      <div><label>Day (weekly 0=Mon / monthly 1–31)</label><input type="number" name="day_of" min="0" max="31"></div>
+      <div><label>Day</label>
+        <input name="day_of" placeholder="weekly 0–6 · monthly 1–31 · yearly DD/MM">
+        <div class="m" style="margin-top:4px">
+          Weekly: 0 is Monday, 6 is Sunday. Monthly: the date, 1–31.
+          Yearly: the date it falls on, like 17/04. Daily: leave it empty.
+        </div></div>
       <div><label>Due time</label><input name="due_time" value="23:59" placeholder="HH:MM"></div>
     </div>
     <div class="row">

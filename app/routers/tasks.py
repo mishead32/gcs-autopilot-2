@@ -277,8 +277,9 @@ async def create_task(
     _proof = form.getlist("requires_attachment")
     proof_required = True if not _proof else ("1" in _proof)
 
-    # A deadline on a holiday would mark the doer late for a day nobody was
-    # in, so it moves to the next working day and the task says why.
+    # A deadline on a closed day would mark the doer late for a day nobody
+    # was in, so it moves BACK to the working day before and the task says
+    # why — in before the office shuts, rather than late the day after.
     branch_for_holiday = int(branch_id) if branch_id else doer.branch_id
     due_dt, moved_from = holidays.shift_due(
         db, user.org_id, datetime.fromisoformat(due_at), branch_for_holiday)
@@ -315,10 +316,15 @@ async def create_task(
                               storage="local"))
 
     if moved_from:
+        # closed_reason gives either a holiday's name or "a Sunday", so the
+        # sentence has to read correctly for both.
+        why = (moved_from if moved_from.startswith("a ")
+               else f"it is {moved_from}")
         db.add(TaskComment(
             task_id=task.id, author_id=user.id,
-            body=f"Deadline moved to {due_dt:%d %b %Y, %I:%M %p} — "
-                 f"{moved_from} is a holiday."))
+            body=f"Brought forward to {due_dt:%d %b %Y, %I:%M %p} — nobody is "
+                 f"in on the day you picked ({why}), so it is due the working "
+                 "day before rather than being late the day after."))
 
     notify.queue_task_assigned(db, task)
     db.commit()

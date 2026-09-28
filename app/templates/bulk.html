@@ -45,7 +45,7 @@
   {% if kind == 'delegation' %}
   <tr><td><strong>Task title</strong></td><td>Required. What must be done.</td></tr>
   <tr><td>Details</td><td>Instructions, and what "done" looks like.</td></tr>
-  <tr><td><strong>Doer email</strong></td><td>Required. Must match an active user — see the People tab.</td></tr>
+  <tr><td><strong>Doer</strong></td><td>Required. Their email, or their full name exactly as it is spelt on the Users page — see the People tab.</td></tr>
   <tr><td>Branch</td><td>Leave blank to use the doer's own branch.</td></tr>
   <tr><td>Priority</td><td>high / medium / low. High counts as 5 tasks in the score, medium 2, low 1. Blank means medium.</td></tr>
   <tr><td><strong>Due date</strong></td><td>Required. DD/MM/YYYY, e.g. 25/09/2026.</td></tr>
@@ -54,7 +54,7 @@
   {% else %}
   <tr><td><strong>Task title</strong></td><td>Required. The job that repeats.</td></tr>
   <tr><td>Details</td><td>Instructions for the doer.</td></tr>
-  <tr><td><strong>Doer email</strong></td><td>Required. Must match an active user.</td></tr>
+  <tr><td><strong>Doer</strong></td><td>Required. Their email, or their full name exactly as it is spelt on the Users page.</td></tr>
   <tr><td>Branch</td><td>Leave blank to use the doer's own branch.</td></tr>
   <tr><td><strong>Frequency</strong></td><td>daily, weekdays, weekly or monthly.</td></tr>
   <tr><td>Day</td><td>Weekly → Mon–Sun. Monthly → 1–31. Daily/weekdays → blank.</td></tr>
@@ -110,10 +110,7 @@
     <td>{{ r.data.due_at|dt('%d %b %Y, %I:%M %p') }}</td>
     {% else %}
     <td><span class="chip">{{ r.data.frequency.value }}</span>
-      {% if r.data.day_of is not none %}
-        {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.data.day_of]
-           if r.data.frequency.value == 'weekly' else 'day ' ~ r.data.day_of }}
-      {% endif %}</td>
+      <div class="m">{{ r.data.schedule_label }}</div></td>
     <td>{{ r.data.due_time }}</td>
     {% endif %}
     <td>{{ 'Yes' if r.data.requires_audit else '—' }}</td>
