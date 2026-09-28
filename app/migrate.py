@@ -45,6 +45,7 @@ ADDITIONS = {
         # All nullable: an existing rule keeps running off day_of exactly as
         # it did, and nothing has to be re-entered.
         ("weekdays", "VARCHAR(20)"),
+        ("month_days", "VARCHAR(60)"),
         ("weeks_of_month", "VARCHAR(20)"),
         ("start_month", "INTEGER"),
         ("anchor_on", "DATE"),

@@ -80,7 +80,12 @@ def _lands_in_month(rule: RecurringRule, today: date) -> bool:
     moves around the week, "the first Saturday" moves around the dates.
     """
     if rule.month_mode == MonthMode.DATE:
-        return today.day == _month_day(rule.day_of or 1, today)
+        # Several dates are allowed — "the 15th and the 30th" is one job on
+        # one rota, not two rules. Each is pulled back in a month too short
+        # for it, and the set stops the 30th and the 31st both landing on
+        # the 28th of February and creating the same task twice.
+        wanted = {_month_day(d, today) for d in (rule.month_day_list or [1])}
+        return today.day in wanted
 
     if today.weekday() not in rule.weekday_list:
         return False
@@ -244,7 +249,7 @@ def read_schedule(frequency: str, values) -> dict:
             f"'{frequency}' is not a frequency — use daily, weekdays, weekly, "
             "fortnightly, monthly, quarterly or yearly")
     f = Recurrence(freq)
-    out = {"frequency": f, "day_of": None, "weekdays": None,
+    out = {"frequency": f, "day_of": None, "weekdays": None, "month_days": None,
            "weeks_of_month": None, "start_month": None, "anchor_on": None}
 
     def one(name, default=""):
@@ -261,10 +266,28 @@ def read_schedule(frequency: str, values) -> dict:
         return out
 
     if f in (Recurrence.WEEKLY, Recurrence.FORTNIGHTLY):
-        days = _weekday_numbers(",".join(str(v) for v in many("weekdays")))
+        raw_days = ",".join(str(v) for v in many("weekdays")) or one("day")
+        try:
+            days = _weekday_numbers(raw_days)
+        except ValueError as bad_day:
+            # Dates given where a weekday belongs is the commonest mix-up,
+            # and worth its own sentence. Anything else keeps the message
+            # that names what could not be read.
+            if not _month_dates(raw_days):
+                raise
+            days = []
         if not days:
-            days = _weekday_numbers(one("day"))
-        if not days:
+            # The commonest mix-up: dates given where a weekday belongs.
+            # "the 15th and the 30th" is twice a month, not every two weeks —
+            # one fires 24 times a year, the other 26, and they drift apart.
+            looks_like_dates = _month_dates(raw_days)
+            if looks_like_dates:
+                joined = ",".join(str(d) for d in looks_like_dates)
+                raise ValueError(
+                    "That looks like dates in the month, not days of the "
+                    f"week. {freq.title()} runs on a weekday — for the "
+                    f"{joined.replace(',', 'th and the ')}th of every month, "
+                    f"set the frequency to monthly and the day to “{joined}”.")
             raise ValueError(
                 f"A {freq} rule needs at least one day of the week.")
         out["weekdays"] = ",".join(str(d) for d in days)
@@ -326,12 +349,28 @@ def read_schedule(frequency: str, values) -> dict:
         return out
 
     raw = one("day_of_month") or one("day")
-    if not raw.isdigit() or not 1 <= int(raw) <= 31:
+    dates = _month_dates(raw)
+    if not dates:
         raise ValueError(
-            f"A {freq} rule needs a date 1-31, or the week and day instead "
-            "(“first Saturday”). Got '{}'.".format(raw or "nothing"))
-    out["day_of"] = int(raw)
+            f"A {freq} rule needs a date 1-31 — several are fine, like "
+            "“15,30” — or the week and day instead (“first Saturday”). "
+            "Got '{}'.".format(raw or "nothing"))
+    out["month_days"] = ",".join(str(d) for d in dates)
+    out["day_of"] = dates[0]          # kept in step for anything reading it
     return out
+
+
+def _month_dates(raw: str) -> list[int]:
+    """"15" or "15,30" or "15th and 30th" -> [15, 30]."""
+    out = []
+    for part in re.split(r"[,/&+]|\band\b", str(raw or ""), flags=re.I):
+        part = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", part.strip(), flags=re.I).strip()
+        if not part:
+            continue
+        if not part.isdigit() or not 1 <= int(part) <= 31:
+            return []
+        out.append(int(part))
+    return sorted(set(out))
 
 
 def _year_day(raw: str) -> int:

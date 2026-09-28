@@ -852,6 +852,12 @@ class RecurringRule(Base):
     # job, not two, and splitting it into two rules splits its score too.
     weekdays: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Several dates in the same month — "the 15th and the 30th", which is how
+    # salaries, EMIs and utility bills are actually scheduled. It is NOT
+    # every-two-weeks: a fortnightly rule drifts through the month and fires
+    # twenty-six times a year, this fires exactly twenty-four.
+    month_days: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
     # Which weeks of the month, for "the first Saturday" — "1", or "1,3" for
     # the first AND third, or "-1" for the last, which is not the same as the
     # fourth in a month with five of them. A list for the same reason as the
@@ -910,6 +916,18 @@ class RecurringRule(Base):
         return []
 
     @property
+    def month_day_list(self) -> list[int]:
+        """The dates in the month this rule runs on — [15, 30], or [10]."""
+        out = []
+        for part in str(self.month_days or "").split(","):
+            part = part.strip()
+            if part.isdigit() and 1 <= int(part) <= 31:
+                out.append(int(part))
+        if out:
+            return sorted(set(out))
+        return [self.day_of] if self.day_of else []
+
+    @property
     def week_list(self) -> list[int]:
         """Which weeks of the month — [1, 3], or [-1] for the last one."""
         out = []
@@ -957,7 +975,12 @@ class RecurringRule(Base):
                        else ", ".join(names[:-1]) + " and " + names[-1])
                 when = f"The {nth} {self.weekday_words}"
             else:
-                when = f"Day {self.day_of or 1}"
+                dates = self.month_day_list or [1]
+                if len(dates) == 1:
+                    when = f"Day {dates[0]}"
+                else:
+                    shown = [str(d) for d in dates]
+                    when = ("Days " + ", ".join(shown[:-1]) + " and " + shown[-1])
             if f == Recurrence.MONTHLY:
                 return f"{when} of every month"
             months = self.quarter_months

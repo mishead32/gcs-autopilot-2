@@ -52,7 +52,8 @@ CHECKLIST_COLS = [
     ("Frequency", 18, "daily / weekdays / weekly / fortnightly / monthly / "
                       "quarterly / yearly"),
     ("Day", 22, "Weekly & fortnightly: Mon — or Mon,Thu for both. "
-                "Monthly & quarterly: a date like 15, or a week and day like "
+                "Monthly & quarterly: a date like 15 — or 15,30 for twice a "
+                "month — or a week and day like "
                 "1st Sat, first & third Sat, last Fri. Quarterly can add "
                 "'from Feb'; fortnightly can add 'from 30/09/2026' to say "
                 "which week. Yearly: 17/04. Daily: leave blank."),
@@ -432,8 +433,8 @@ def yearly_day(raw: str) -> int:
 # Everything that describes WHEN a rule runs. One list, used by the parser,
 # by the preview and by the save — so a schedule cannot be read correctly and
 # then written away incompletely.
-SCHEDULE_FIELDS = ("frequency", "day_of", "weekdays", "weeks_of_month",
-                   "start_month", "anchor_on")
+SCHEDULE_FIELDS = ("frequency", "day_of", "weekdays", "month_days",
+                   "weeks_of_month", "start_month", "anchor_on")
 
 
 # ------------------------------------------------- reading the Day column --
@@ -461,13 +462,21 @@ def _days_in(cell: str) -> str:
 
     "1st & 3rd Sat" -> "Sat" · "Fri,Mon" -> "Fri,Mon" · "15" -> ""
     """
-    text = _NTH_IN.sub("", cell or "")
-    text = _FROM_DATE.sub("", text)
-    text = _FROM_MONTH.sub("", text)
-    text = re.sub(r"[&]+", ",", text)
-    parts = [p.strip() for p in re.split(r"[,/+]|\band\b", text, flags=re.I)]
-    days = [p for p in parts if p and p.lower().rstrip(".") in WEEKDAY_WORDS]
-    return ",".join(days)
+    text = _NTH_IN.sub(" ", cell or "")
+    text = _FROM_DATE.sub(" ", text)
+    text = _FROM_MONTH.sub(" ", text)
+    # Pick the weekday words out wherever they sit. People write "Mon,Thu" but
+    # they also write "first Saturday of every month", and the second is not a
+    # list with a stray word in it — it is a sentence with a day inside.
+    found = [w for w in re.findall(r"[A-Za-z]+", text)
+             if w.lower() in WEEKDAY_WORDS]
+    seen, out = set(), []
+    for w in found:
+        n = WEEKDAY_WORDS[w.lower()]
+        if n not in seen:
+            seen.add(n)
+            out.append(w)
+    return ",".join(out)
 
 
 def _weeks_in(cell: str) -> str:
@@ -477,9 +486,17 @@ def _weeks_in(cell: str) -> str:
 
 
 def _date_in(cell: str) -> str:
-    """A plain day of the month — "15" yes, "15 from Feb" yes, "17/04" no."""
+    """Dates in the month — "15", "15,30", "15th and 30th". Not "17/04"."""
     text = _FROM_MONTH.sub("", _FROM_DATE.sub("", cell or "")).strip()
-    return text if text.isdigit() and 1 <= int(text) <= 31 else ""
+    if "/" in text:
+        return ""                                 # a yearly date, DD/MM
+    # Take the ordinal tails off — "15th and 30th" is a list of dates, and
+    # the "th" is just how people write them.
+    bare = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", text, flags=re.I)
+    bare = re.sub(r"\band\b", ",", bare, flags=re.I)
+    if re.search(r"[A-Za-z]", bare):
+        return ""                                 # a weekday or a week word
+    return text
 
 
 _FROM_DATE = re.compile(

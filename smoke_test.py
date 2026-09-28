@@ -3693,6 +3693,10 @@ _TRIP = [
     ("fortnightly", "Wed from 30/09/2026",
      "Every second Wednesday, counting from 30 Sep 2026"),
     ("monthly", "15", "Day 15 of every month"),
+    ("monthly", "15,30", "Days 15 and 30 of every month"),
+    ("monthly", "15th and 30th", "Days 15 and 30 of every month"),
+    ("monthly", "first Saturday of every month",
+     "The first Saturday of every month"),
     ("monthly", "1st Sat", "The first Saturday of every month"),
     ("monthly", "first & third Sat",
      "The first and third Saturday of every month"),
@@ -3727,8 +3731,14 @@ with _SLT() as _d:
               _saved.schedule_label if _saved else "not saved")
 
 # Saved rules must also fire on the right days, not merely describe them.
+def _trip_row(want):
+    """Find a saved trip rule by what it should say, not by its position —
+    a test that counts rows breaks the moment a row is added above it."""
+    return next(n for n, (_f, _d2, w) in enumerate(_TRIP) if w == want)
+
 with _SLT() as _d:
-    _fort = _d.scalar(_msel(_RR2).where(_RR2.title == f"TRIP 2 {RUN}"))
+    _fort = _d.scalar(_msel(_RR2).where(_RR2.title == (
+        f"TRIP {_trip_row('Every second Wednesday, counting from 30 Sep 2026')} {RUN}")))
     _hits = [x for x in (_dq(2026, 10, 1) + _tq(days=n) for n in range(60))
              if _due_q(_fort, x)]
     check("a saved fortnightly rule fires every second Wednesday",
@@ -3736,7 +3746,8 @@ with _SLT() as _d:
           and all((_hits[i+1] - _hits[i]).days == 14 for i in range(len(_hits)-1))
           and len(_hits) >= 4,
           [str(h) for h in _hits[:5]])
-    _first_sat_saved = _d.scalar(_msel(_RR2).where(_RR2.title == f"TRIP 4 {RUN}"))
+    _first_sat_saved = _d.scalar(_msel(_RR2).where(_RR2.title == (
+        f"TRIP {_trip_row('The first Saturday of every month')} {RUN}")))
     _fs = [x for x in (_dq(2027, 1, 1) + _tq(days=n) for n in range(365))
            if _due_q(_first_sat_saved, x)]
     check("a saved first-Saturday rule fires twelve times on Saturdays",
@@ -3749,6 +3760,46 @@ from app.services.bulk import SCHEDULE_FIELDS as _SF
 check("every schedule column is in the list the import carries",
       {"frequency", "day_of", "weekdays", "weeks_of_month", "start_month",
        "anchor_on"} <= set(_SF), _SF)
+
+print("\n== twice a month is not every two weeks ==")
+# A rule on the 15th and the 30th fires 24 times a year and always on those
+# dates. A fortnightly rule fires 26 times and drifts through the month.
+# People write both as "fortnightly", so the difference has to be kept.
+_twice = _RQ(**_rs("monthly", {"day": "15,30"}))
+_hits2 = _year(_twice)
+check("the 15th and 30th fires twenty-four times", len(_hits2) == 24, len(_hits2))
+check("always on one of those dates",
+      {d.day for d in _hits2} <= {15, 28, 29, 30}, sorted({d.day for d in _hits2}))
+check("in February it pulls back to the last day",
+      [d.day for d in _hits2 if d.month == 2] == [15, 28],
+      [d.day for d in _hits2 if d.month == 2])
+_fort2 = _RQ(frequency=_FQ.FORTNIGHTLY, weekdays="3", anchor_on=_dq(2027, 1, 7))
+check("while a fortnightly rule fires twenty-six times",
+      len(_year(_fort2)) == 26, len(_year(_fort2)))
+check("and the two are genuinely different schedules",
+      _hits2 != _year(_fort2))
+
+# The 30th and the 31st must not both land on 28 February and make two tasks.
+_end = _RQ(**_rs("monthly", {"day": "30,31"}))
+_feb = [d for d in _year(_end) if d.month == 2]
+check("the 30th and 31st together make one February task, not two",
+      len(_feb) == 1 and _feb[0] == _dq(2027, 2, 28), [str(d) for d in _feb])
+
+# And the mix-up gets a message that says what to do about it.
+for _f in ("fortnightly", "weekly"):
+    try:
+        _rs(_f, {"day": "15th and 30th"})
+        check(f"{_f} with dates is refused", False, "accepted")
+    except ValueError as _e:
+        check(f"{_f} with dates is refused", True)
+        check(f"and the message tells you to use monthly 15,30",
+              "monthly" in str(_e) and "15,30" in str(_e), str(_e))
+
+# A weekday inside a sentence is still a weekday.
+_sent = _RQ(**_rs("monthly", {"weeks_of_month": "first", "weekdays": "Saturday"}))
+check("“first Saturday of every month” typed in full still works",
+      _sent.schedule_label == "The first Saturday of every month",
+      _sent.schedule_label)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

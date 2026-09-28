@@ -84,10 +84,11 @@
         </select>
       </div>
       <div data-when="month-date">
-        <label>Which date</label>
-        <input type="number" name="day_of_month" min="1" max="31" value="1">
-        <div class="m">1 to 31. In a month too short for it, the last day is
-          used instead — the 31st becomes the 30th in April.</div>
+        <label>Which date(s)</label>
+        <input name="day_of_month" value="1" placeholder="1 to 31 — or 15,30 for both">
+        <div class="m">1 to 31. Several are fine: type <strong>15,30</strong>
+          for a job done twice a month. In a month too short for it, the last
+          day is used instead — the 31st becomes the 30th in April.</div>
       </div>
       <div data-when="month-weekday">
         <label>Which week(s)</label>
@@ -189,8 +190,13 @@
       if(!wk || !days) return 'Pick the week(s) and the day.';
       when = 'the ' + wk + ' ' + days;
     } else {
-      when = 'the ' + (box.querySelector('[name=day_of_month]').value || '1') +
-             ordinal(box.querySelector('[name=day_of_month]').value);
+      var raw = (box.querySelector('[name=day_of_month]').value || '1');
+      var list = raw.split(/[,&]|\band\b/).map(function(x){
+        return x.trim().replace(/(st|nd|rd|th)$/i, ''); }).filter(Boolean);
+      if(!list.length || list.some(function(x){
+           return !/^\d+$/.test(x) || +x < 1 || +x > 31; }))
+        return 'Type a date from 1 to 31 — or several, like 15,30.';
+      when = 'the ' + words(list, function(x){ return x + ordinal(x); });
     }
     if(f === 'monthly') return 'A task on ' + when + ' of every month.';
     var sm = box.querySelector('[name=start_month]');
