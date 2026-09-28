@@ -455,7 +455,8 @@ r = admin.post("/bulk/preview", data={"kind": "checklist"},
                files={"file": ("c.xlsx", cblob,
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
 check("checklist preview works", r.status_code == 200)
-check("weekly without a day is rejected", "Weekly needs a day" in r.text)
+check("weekly without a day is rejected",
+      "needs at least one day of the week" in r.text, r.text[-400:])
 payload = re.findall(r'name="payload" value="([^"]+)"', r.text)[0]
 admin.post("/bulk/commit", data={"kind": "checklist", "payload": payload})
 rec = admin.get("/recurring").text
@@ -3469,7 +3470,7 @@ check("a blank frequency is refused rather than read as daily",
 # The Checklist form and the spreadsheet must agree on what a yearly date is.
 _yform = admin.post("/recurring", data={
     "title": f"SMOKE yearly form {RUN}", "details": "", "doer_id": str(_amit.id),
-    "branch_id": "", "frequency": "yearly", "day_of": "17/04",
+    "branch_id": "", "frequency": "yearly", "year_day": "17/04",
     "due_time": "11:00", "priority": "high"})
 check("the Checklist form takes a yearly date", _yform.status_code in (200, 303),
       _yform.status_code)
@@ -3481,6 +3482,273 @@ with _SLT() as _d:
     check("and reads back in words",
           _yr2 and "17 Apr" in _yr2.schedule_label, _yr2.schedule_label if _yr2 else "")
 check("the Checklist page shows it", "17 Apr" in admin.get("/recurring").text)
+
+print("\n== every schedule, walked against a real calendar ==")
+# The only honest way to check a schedule is to walk a year of real dates and
+# see which ones it picks. Anything less tests the code against itself.
+import calendar as _cal
+from datetime import date as _dq, timedelta as _tq
+from app.models import (RecurringRule as _RQ, Recurrence as _FQ,
+                        MonthMode as _MM)
+from app.services.recurring import is_due_today as _due_q, read_schedule as _rs
+
+def _year(rule, year=2027):
+    out, d = [], _dq(year, 1, 1)
+    while d.year == year:
+        if _due_q(rule, d):
+            out.append(d)
+        d += _tq(days=1)
+    return out
+
+# --- weekly, one day and several -----------------------------------------
+_mon_thu = _RQ(frequency=_FQ.WEEKLY, weekdays="0,3")
+_hits = _year(_mon_thu)
+check("Monday and Thursday fires twice a week all year", len(_hits) == 104,
+      len(_hits))
+check("and only on Mondays and Thursdays",
+      {d.weekday() for d in _hits} == {0, 3},
+      sorted({d.weekday() for d in _hits}))
+check("it reads as one rule, not two",
+      _mon_thu.schedule_label == "Every Monday and Thursday",
+      _mon_thu.schedule_label)
+
+# A rule made before several days were allowed must not change behaviour.
+_old = _RQ(frequency=_FQ.WEEKLY, day_of=5)
+_oldhits = _year(_old)
+check("an older weekly rule still fires on its own day", len(_oldhits) == 52,
+      len(_oldhits))
+check("which is the Saturday it always was",
+      {d.weekday() for d in _oldhits} == {5})
+
+# --- fortnightly ----------------------------------------------------------
+_fort = _RQ(frequency=_FQ.FORTNIGHTLY, weekdays="1", anchor_on=_dq(2027, 1, 5))
+_fh = _year(_fort)
+check("fortnightly fires every second week", len(_fh) == 26, len(_fh))
+check("starting on the date it was anchored to", _fh[0] == _dq(2027, 1, 5), _fh[0])
+check("with a fortnight between each",
+      all((_fh[i+1] - _fh[i]).days == 14 for i in range(len(_fh) - 1)),
+      sorted({(_fh[i+1]-_fh[i]).days for i in range(len(_fh)-1)}))
+# The week is what counts, not the date — so reading it from a different day
+# of the same week must not flip which fortnight it is.
+check("an anchor later in the same week means the same weeks",
+      _year(_RQ(frequency=_FQ.FORTNIGHTLY, weekdays="1",
+                anchor_on=_dq(2027, 1, 8))) == _fh)
+
+# --- monthly by date ------------------------------------------------------
+_d10 = _year(_RQ(frequency=_FQ.MONTHLY, day_of=10))
+check("a monthly date fires twelve times", len(_d10) == 12, len(_d10))
+check("always on that date", {d.day for d in _d10} == {10})
+_d31 = _year(_RQ(frequency=_FQ.MONTHLY, day_of=31))
+check("the 31st still fires every month", len(_d31) == 12, len(_d31))
+check("pulling back to the last day of a short month",
+      [d for d in _d31 if d.month == 2][0] == _dq(2027, 2, 28),
+      [str(d) for d in _d31 if d.month == 2])
+check("and never skipping a month",
+      sorted({d.month for d in _d31}) == list(range(1, 13)))
+
+# --- monthly, nth weekday -------------------------------------------------
+_first_sat = _year(_RQ(frequency=_FQ.MONTHLY, weeks_of_month="1", weekdays="5"))
+check("the first Saturday fires twelve times", len(_first_sat) == 12)
+check("always on a Saturday", {d.weekday() for d in _first_sat} == {5})
+check("always in the first seven days of the month",
+      all(d.day <= 7 for d in _first_sat), [str(d) for d in _first_sat[:3]])
+
+_third_sat = _year(_RQ(frequency=_FQ.MONTHLY, weeks_of_month="3", weekdays="5"))
+check("the third Saturday fires twelve times", len(_third_sat) == 12)
+check("always between the 15th and the 21st",
+      all(15 <= d.day <= 21 for d in _third_sat),
+      [str(d) for d in _third_sat[:3]])
+
+_both = _year(_RQ(frequency=_FQ.MONTHLY, weeks_of_month="1,3", weekdays="5"))
+check("first AND third Saturday fires twenty-four times", len(_both) == 24,
+      len(_both))
+check("and is exactly the two sets added together",
+      _both == sorted(_first_sat + _third_sat))
+
+# The one that catches a lazy implementation: last is not fourth.
+_last_fri = _year(_RQ(frequency=_FQ.MONTHLY, weeks_of_month="-1", weekdays="4"))
+_fourth_fri = _year(_RQ(frequency=_FQ.MONTHLY, weeks_of_month="4", weekdays="4"))
+check("the last Friday fires twelve times", len(_last_fri) == 12)
+check("and really is the last one in its month",
+      all((d + _tq(days=7)).month != d.month for d in _last_fri))
+_five = [(y, m) for y, m in [(2027, mm) for mm in range(1, 13)]
+         if len([1 for x in range(1, _cal.monthrange(y, m)[1] + 1)
+                 if _dq(y, m, x).weekday() == 4]) == 5]
+check("some month this year has five Fridays", _five, "none — pick another year")
+check("and in those months last and fourth are different days",
+      all(next(d for d in _last_fri if (d.year, d.month) == ym)
+          != next(d for d in _fourth_fri if (d.year, d.month) == ym)
+          for ym in _five), [str(ym) for ym in _five])
+
+# --- quarterly ------------------------------------------------------------
+_q1 = _year(_RQ(frequency=_FQ.QUARTERLY, day_of=5, start_month=1))
+check("quarterly fires four times a year", len(_q1) == 4, len(_q1))
+check("in January, April, July and October",
+      [d.month for d in _q1] == [1, 4, 7, 10], [d.month for d in _q1])
+_q2 = _year(_RQ(frequency=_FQ.QUARTERLY, day_of=5, start_month=2))
+check("starting in February shifts the whole cycle",
+      [d.month for d in _q2] == [2, 5, 8, 11], [d.month for d in _q2])
+_qw = _year(_RQ(frequency=_FQ.QUARTERLY, weeks_of_month="3", weekdays="5",
+                start_month=1))
+check("quarterly works by weekday too", len(_qw) == 4, len(_qw))
+check("on a Saturday each time", {d.weekday() for d in _qw} == {5})
+check("three months apart",
+      [d.month for d in _qw] == [1, 4, 7, 10], [d.month for d in _qw])
+
+# --- yearly ---------------------------------------------------------------
+_yy = _year(_RQ(frequency=_FQ.YEARLY, day_of=417))
+check("a yearly rule fires once", len(_yy) == 1, len(_yy))
+check("on its date", _yy[0] == _dq(2027, 4, 17), _yy[0])
+check("and again the next year",
+      _year(_RQ(frequency=_FQ.YEARLY, day_of=417), 2028)[0] == _dq(2028, 4, 17))
+
+# --- daily and weekdays ---------------------------------------------------
+check("daily fires every day of the year",
+      len(_year(_RQ(frequency=_FQ.DAILY))) == 365)
+_wd = _year(_RQ(frequency=_FQ.WEEKDAYS))
+check("weekdays never fires at a weekend",
+      all(d.weekday() < 5 for d in _wd))
+check("and covers every working day", len(_wd) == 261, len(_wd))
+
+print("\n== the same schedules, typed the way people type them ==")
+# read_schedule is what both the Checklist form and the spreadsheet use, so
+# what it accepts is the whole grammar people have to learn.
+for _text, _freq, _want in [
+        ({"weekdays": "Mon,Thu"}, "weekly", "Every Monday and Thursday"),
+        ({"weekdays": "Mon and Thu"}, "weekly", "Every Monday and Thursday"),
+        ({"day": "Sat"}, "weekly", "Every Saturday"),
+        ({"weekdays": "Tue", "anchor_on": "2027-01-05"}, "fortnightly",
+         "Every second Tuesday, counting from 05 Jan 2027"),
+        ({"day": "15"}, "monthly", "Day 15 of every month"),
+        ({"weeks_of_month": "first", "weekdays": "Sat"}, "monthly",
+         "The first Saturday of every month"),
+        ({"weeks_of_month": "1,3", "weekdays": "Sat"}, "monthly",
+         "The first and third Saturday of every month"),
+        ({"weeks_of_month": "last", "weekdays": "Fri"}, "monthly",
+         "The last Friday of every month"),
+        ({"day": "5", "start_month": "2"}, "quarterly",
+         "Day 5 of every third month (Feb, May, Aug, Nov)"),
+        ({"day": "17/04"}, "yearly", "Every year on 17 Apr")]:
+    _r = _RQ(**_rs(_freq, _text))
+    check(f"{_freq} {list(_text.values())} reads as “{_want}”",
+          _r.schedule_label == _want, _r.schedule_label)
+
+for _bad, _freq, _why in [
+        ({}, "weekly", "no day"),
+        ({}, "monthly", "no date"),
+        ({}, "yearly", "no date"),
+        ({"weekdays": "Funday"}, "weekly", "not a day"),
+        ({"weeks_of_month": "1st"}, "monthly", "week but no weekday"),
+        ({"day": "0"}, "monthly", "date out of range"),
+        ({"day": "32"}, "monthly", "date out of range")]:
+    try:
+        _rs(_freq, _bad)
+        check(f"{_freq} with {_why} is refused", False, "it was accepted")
+    except ValueError as _e:
+        check(f"{_freq} with {_why} is refused, in words",
+              len(str(_e)) > 25 and str(_e)[0].isupper() or "'" in str(_e),
+              str(_e))
+try:
+    _rs("banana", {})
+    check("an unknown frequency is refused", False, "it was accepted")
+except ValueError as _e:
+    check("an unknown frequency is refused", "not a frequency" in str(_e), str(_e))
+    check("and the message lists the ones that work",
+          all(w in str(_e) for w in ("weekly", "fortnightly", "quarterly",
+                                     "yearly")), str(_e))
+
+print("\n== and they still step off a closed day ==")
+# A schedule landing on a Sunday must still come forward a day, whatever kind
+# of schedule it is.
+with _SLT() as _dq2:
+    _brq = _dq2.scalar(_msel(_BR2))
+    _brq.weekly_off = 6
+    _dq2.commit()
+    _sunday_monthly = _RQ(org_id=1, branch_id=_brq.id,
+                          title=f"SMOKE quarterly closed {RUN}", doer_id=6,
+                          assigner_id=2, frequency=_FQ.MONTHLY,
+                          weeks_of_month="1", weekdays="6", due_time="23:59")
+    _dq2.add(_sunday_monthly)
+    _dq2.commit()
+    # 1 Aug 2027 is a Sunday and the first Sunday of that month.
+    check("the test date is the first Sunday of the month",
+          _dq(2027, 8, 1).weekday() == 6)
+    _rec2.run_spawn(_dq2, today=_dq(2027, 7, 31))       # the Saturday before
+    _made_q = _dq2.scalars(_msel(_T2).where(
+        _T2.rule_id == _sunday_monthly.id)).all()
+    check("a first-Sunday job is created on the Saturday before",
+          len(_made_q) == 1 and _made_q[0].covers_day == _dq(2027, 8, 1),
+          [str(t.covers_day) for t in _made_q])
+    check("and is due on that Saturday",
+          _made_q[0].due_at.date() == _dq(2027, 7, 31), _made_q[0].due_at)
+
+print("\n== a schedule survives the whole trip, spreadsheet to database ==")
+# Reading a schedule correctly and then writing it away incompletely is a
+# quiet bug: the preview shows the right thing and the saved rule fires on
+# the wrong day. It happened to the weekday of every fortnightly rule, so it
+# is checked here end to end rather than at either end.
+_TRIP = [
+    ("weekly", "Mon,Thu", "Every Monday and Thursday"),
+    ("weekly", "Sat", "Every Saturday"),
+    ("fortnightly", "Wed from 30/09/2026",
+     "Every second Wednesday, counting from 30 Sep 2026"),
+    ("monthly", "15", "Day 15 of every month"),
+    ("monthly", "1st Sat", "The first Saturday of every month"),
+    ("monthly", "first & third Sat",
+     "The first and third Saturday of every month"),
+    ("monthly", "last Fri", "The last Friday of every month"),
+    ("quarterly", "5 from Feb", "Day 5 of every third month (Feb, May, Aug, Nov)"),
+    ("quarterly", "3rd Sat",
+     "The third Saturday of every third month (Jan, Apr, Jul, Oct)"),
+    ("yearly", "17/04", "Every year on 17 Apr"),
+    ("daily", "", "Every day"),
+    ("weekdays", "", "Monday to Friday"),
+]
+_tblob = _sheet_bytes([
+    [f"TRIP {n} {RUN}", "", _amit_mail, "", f, day, "23:59", "high", "NO"]
+    for n, (f, day, _want) in enumerate(_TRIP)])
+_tp = _bulk.parse(_SLT(), 1, "checklist", _tblob)
+check("every schedule shape parses", len(_tp.good) == len(_TRIP),
+      [r.error for r in _tp.bad])
+for n, (f, day, want) in enumerate(_TRIP):
+    _row = next((r for r in _tp.good
+                 if r.data["title"] == f"TRIP {n} {RUN}"), None)
+    check(f"preview reads “{f} {day}” as “{want}”",
+          _row is not None and _row.data["schedule_label"] == want,
+          _row.data["schedule_label"] if _row else "missing")
+
+with _SLT() as _d:
+    _admin_u = _d.scalar(_msel(_MU).where(_MU.email == "mis@gcs.local"))
+    _bulk.commit(_d, 1, _admin_u, _tp)
+    for n, (f, day, want) in enumerate(_TRIP):
+        _saved = _d.scalar(_msel(_RR2).where(_RR2.title == f"TRIP {n} {RUN}"))
+        check(f"and the SAVED rule still says “{want}”",
+              _saved is not None and _saved.schedule_label == want,
+              _saved.schedule_label if _saved else "not saved")
+
+# Saved rules must also fire on the right days, not merely describe them.
+with _SLT() as _d:
+    _fort = _d.scalar(_msel(_RR2).where(_RR2.title == f"TRIP 2 {RUN}"))
+    _hits = [x for x in (_dq(2026, 10, 1) + _tq(days=n) for n in range(60))
+             if _due_q(_fort, x)]
+    check("a saved fortnightly rule fires every second Wednesday",
+          all(h.weekday() == 2 for h in _hits)
+          and all((_hits[i+1] - _hits[i]).days == 14 for i in range(len(_hits)-1))
+          and len(_hits) >= 4,
+          [str(h) for h in _hits[:5]])
+    _first_sat_saved = _d.scalar(_msel(_RR2).where(_RR2.title == f"TRIP 4 {RUN}"))
+    _fs = [x for x in (_dq(2027, 1, 1) + _tq(days=n) for n in range(365))
+           if _due_q(_first_sat_saved, x)]
+    check("a saved first-Saturday rule fires twelve times on Saturdays",
+          len(_fs) == 12 and {h.weekday() for h in _fs} == {5}
+          and all(h.day <= 7 for h in _fs), [str(h) for h in _fs[:3]])
+
+# The list of schedule fields is the thing that stops this recurring — if a
+# column is added to the model and forgotten here, this notices.
+from app.services.bulk import SCHEDULE_FIELDS as _SF
+check("every schedule column is in the list the import carries",
+      {"frequency", "day_of", "weekdays", "weeks_of_month", "start_month",
+       "anchor_on"} <= set(_SF), _SF)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

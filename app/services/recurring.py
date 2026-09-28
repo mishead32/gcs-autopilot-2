@@ -16,13 +16,15 @@ That means a Saturday can carry two copies of a daily job — its own, and the
 Sunday one brought forward. That is deliberate: the work still has to be done,
 and doing it a day early is the point.
 """
+import re
 from datetime import datetime, date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..models import RecurringRule, Recurrence, Task, TaskComment, TaskSource
+from ..models import (RecurringRule, Recurrence, MonthMode, Task, TaskComment,
+                      TaskSource)
 from . import notify, holidays
 
 # How far ahead to look for closed days whose work has to be pulled back.
@@ -36,15 +38,31 @@ def is_due_today(rule: RecurringRule, today: date) -> bool:
     Says nothing about whether anybody is in that day — that is decided
     separately, so the two questions cannot get tangled.
     """
-    if rule.frequency == Recurrence.DAILY:
+    f = rule.frequency
+    if f == Recurrence.DAILY:
         return True
-    if rule.frequency == Recurrence.WEEKDAYS:
+    if f == Recurrence.WEEKDAYS:
         return today.weekday() < 5
-    if rule.frequency == Recurrence.WEEKLY:
-        return today.weekday() == (rule.day_of if rule.day_of is not None else 0)
-    if rule.frequency == Recurrence.MONTHLY:
-        return today.day == _month_day(rule.day_of or 1, today)
-    if rule.frequency == Recurrence.YEARLY:
+    if f == Recurrence.WEEKLY:
+        return today.weekday() in rule.weekday_list
+    if f == Recurrence.FORTNIGHTLY:
+        if today.weekday() not in rule.weekday_list:
+            return False
+        # Count whole weeks between the Monday of the anchor's week and the
+        # Monday of this one. Comparing week starts rather than the dates
+        # themselves is what makes a rule set on a Friday and read on the
+        # Monday after land in the same fortnight, instead of flipping.
+        anchor = rule.anchor_on or today
+        a_week = anchor - timedelta(days=anchor.weekday())
+        t_week = today - timedelta(days=today.weekday())
+        return ((t_week - a_week).days // 7) % 2 == 0
+    if f == Recurrence.MONTHLY:
+        return _lands_in_month(rule, today)
+    if f == Recurrence.QUARTERLY:
+        if today.month not in rule.quarter_months:
+            return False
+        return _lands_in_month(rule, today)
+    if f == Recurrence.YEARLY:
         # day_of holds the month and day together as MMDD — 417 is 17 April —
         # because a yearly rule needs both and there is only one column.
         want = rule.day_of or 101
@@ -53,6 +71,27 @@ def is_due_today(rule: RecurringRule, today: date) -> bool:
             return False
         return today.month == month and today.day == _month_day(dom, today)
     return False
+
+
+def _lands_in_month(rule: RecurringRule, today: date) -> bool:
+    """Within a month this rule runs in, is today the day?
+
+    Two ways of saying it, and neither can be written as the other: "the 5th"
+    moves around the week, "the first Saturday" moves around the dates.
+    """
+    if rule.month_mode == MonthMode.DATE:
+        return today.day == _month_day(rule.day_of or 1, today)
+
+    if today.weekday() not in rule.weekday_list:
+        return False
+    # Which occurrence of this weekday today is: the 1st to 7th of the month
+    # hold the first of each weekday, the 8th to 14th the second, and so on.
+    nth = (today.day - 1) // 7 + 1
+    # And whether it is the last one — no day of the same weekday after it
+    # this month. Not the same as the fourth: some months have five.
+    is_last = (today + timedelta(days=7)).month != today.month
+    wanted = rule.week_list or [1]
+    return nth in wanted or (is_last and -1 in wanted)
 
 
 def _month_day(target: int, today: date) -> int:
@@ -155,3 +194,157 @@ def run_spawn(db: Session, today: date | None = None) -> int:
 
     db.commit()
     return created
+
+
+# ==================================================== reading a schedule ====
+# One reader, used by the Checklist form AND the bulk import, so a schedule
+# typed into the page and the same schedule in a spreadsheet cannot end up
+# meaning two different things.
+
+WEEKDAY_WORDS = {
+    "mon": 0, "monday": 0, "tue": 1, "tues": 1, "tuesday": 1,
+    "wed": 2, "weds": 2, "wednesday": 2, "thu": 3, "thur": 3, "thurs": 3,
+    "thursday": 3, "fri": 4, "friday": 4, "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
+NTH_WORDS = {"1st": 1, "first": 1, "2nd": 2, "second": 2, "3rd": 3,
+             "third": 3, "4th": 4, "fourth": 4, "5th": 5, "fifth": 5,
+             "last": -1, "final": -1}
+
+
+def _weekday_numbers(raw) -> list[int]:
+    """"Mon,Thu" or "0,3" or "Monday and Thursday" -> [0, 3]."""
+    out = []
+    for part in re.split(r"[,/&+]|\band\b", str(raw or ""), flags=re.I):
+        part = part.strip().lower().rstrip(".")
+        if not part:
+            continue
+        if part.isdigit() and 0 <= int(part) <= 6:
+            out.append(int(part))
+        elif part in WEEKDAY_WORDS:
+            out.append(WEEKDAY_WORDS[part])
+        else:
+            raise ValueError(
+                f"'{part}' is not a day — use Mon, Tue, Wed, Thu, Fri, Sat "
+                "or Sun, and separate several with a comma")
+    return sorted(set(out))
+
+
+def read_schedule(frequency: str, values) -> dict:
+    """Turn what somebody chose into the columns a rule stores.
+
+    `values` is anything with .get / .getlist — a submitted form, or a small
+    dict built from a spreadsheet row. Raises ValueError with a sentence the
+    person can act on, never a silent default: a schedule guessed wrong puts
+    work on somebody on the wrong day for months before anyone notices.
+    """
+    freq = (frequency or "").strip().lower()
+    if freq not in {f.value for f in Recurrence}:
+        raise ValueError(
+            f"'{frequency}' is not a frequency — use daily, weekdays, weekly, "
+            "fortnightly, monthly, quarterly or yearly")
+    f = Recurrence(freq)
+    out = {"frequency": f, "day_of": None, "weekdays": None,
+           "weeks_of_month": None, "start_month": None, "anchor_on": None}
+
+    def one(name, default=""):
+        got = values.get(name, default)
+        return ("" if got is None else str(got)).strip()
+
+    def many(name):
+        if hasattr(values, "getlist"):
+            return values.getlist(name)
+        got = values.get(name) or ""
+        return [got] if got else []
+
+    if f in (Recurrence.DAILY, Recurrence.WEEKDAYS):
+        return out
+
+    if f in (Recurrence.WEEKLY, Recurrence.FORTNIGHTLY):
+        days = _weekday_numbers(",".join(str(v) for v in many("weekdays")))
+        if not days:
+            days = _weekday_numbers(one("day"))
+        if not days:
+            raise ValueError(
+                f"A {freq} rule needs at least one day of the week.")
+        out["weekdays"] = ",".join(str(d) for d in days)
+        if f == Recurrence.FORTNIGHTLY:
+            anchor = one("anchor_on") or one("anchor")
+            if anchor:
+                try:
+                    out["anchor_on"] = datetime.strptime(
+                        anchor[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    raise ValueError(
+                        f"'{anchor}' is not a date — a fortnightly rule counts "
+                        "from a date, written YYYY-MM-DD")
+            else:
+                # No anchor given: this week is an on week. Stated rather
+                # than left to chance, because "every second Tuesday" with no
+                # starting point is only half an instruction.
+                out["anchor_on"] = clock.today()
+        return out
+
+    if f == Recurrence.YEARLY:
+        raw = one("year_day") or one("day")
+        if not raw:
+            raise ValueError("A yearly rule needs the date it falls on, as DD/MM.")
+        out["day_of"] = _year_day(raw)
+        return out
+
+    # monthly and quarterly
+    if f == Recurrence.QUARTERLY:
+        sm = one("start_month") or "1"
+        out["start_month"] = int(sm) if sm.isdigit() and 1 <= int(sm) <= 12 else 1
+
+    mode = (one("month_mode") or "").lower()
+    # A form sends one value per tick box; a spreadsheet sends "1,3" in one
+    # cell. Flatten both to the same list rather than making the caller care.
+    weeks = [w.strip() for raw in many("weeks_of_month")
+             for w in str(raw).replace("&", ",").split(",") if w.strip()]
+    if mode == "weekday" or (not mode and weeks):
+        picked = []
+        for w in weeks:
+            w = str(w).strip().lower()
+            if w in NTH_WORDS:
+                picked.append(NTH_WORDS[w])
+            elif w.lstrip("-").isdigit() and int(w) in (1, 2, 3, 4, 5, -1):
+                picked.append(int(w))
+            else:
+                raise ValueError(
+                    f"'{w}' is not a week — use first, second, third, fourth "
+                    "or last")
+        if not picked:
+            raise ValueError(
+                "Pick which week(s) of the month — first, third, last…")
+        days = _weekday_numbers(",".join(str(v) for v in many("weekdays")))
+        if not days:
+            raise ValueError("Pick which day of the week, e.g. Saturday.")
+        out["weeks_of_month"] = ",".join(str(w) for w in sorted(
+            set(picked), key=lambda n: (n < 0, n)))
+        out["weekdays"] = ",".join(str(d) for d in days)
+        return out
+
+    raw = one("day_of_month") or one("day")
+    if not raw.isdigit() or not 1 <= int(raw) <= 31:
+        raise ValueError(
+            f"A {freq} rule needs a date 1-31, or the week and day instead "
+            "(“first Saturday”). Got '{}'.".format(raw or "nothing"))
+    out["day_of"] = int(raw)
+    return out
+
+
+def _year_day(raw: str) -> int:
+    """DD/MM (or a real date) stored as MMDD — 17/04 becomes 417."""
+    text = str(raw).strip()
+    if isinstance(raw, (datetime, date)):
+        return raw.month * 100 + raw.day
+    parts = [p for p in re.split(r"[/\-. ]", text) if p]
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        raise ValueError(f"'{text}' is not a date — yearly wants DD/MM, e.g. 17/04")
+    dd, mm = int(parts[0]), int(parts[1])
+    if dd > 31 and mm <= 31:              # somebody typed MM/DD
+        dd, mm = mm, dd
+    if not (1 <= mm <= 12 and 1 <= dd <= 31):
+        raise ValueError(f"'{text}' is not a real date — yearly wants DD/MM")
+    return mm * 100 + dd

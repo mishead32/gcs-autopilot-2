@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request, Form
+from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from ..db import get_db
 from ..deps import current_user, manager_up, admin_up
 from ..models import (
     Task, TaskStatus, TaskSource, User, Role, RecurringRule, Recurrence,
-    Priority, Branch, OutboundMessage, FlowInstance
+    Priority, Branch, OutboundMessage, FlowInstance, FREQ_ORDER, FREQ_LABELS,
 )
 from ..services import scoring, recurring, xlsx, bulk
 from ..templating import templates
@@ -262,7 +262,9 @@ def recurring_list(request: Request, export: str = "",
 
     return templates.TemplateResponse(request, "recurring.html", {
         "user": user, "rules": rules, "doers": doers, "branches": branches,
-        "frequencies": list(Recurrence), "priorities": list(Priority),
+        "frequencies": FREQ_ORDER, "FREQ_LABELS": FREQ_LABELS,
+        "today_iso": clock.today().isoformat(),
+        "priorities": list(Priority),
     })
 
 
@@ -270,7 +272,7 @@ def recurring_list(request: Request, export: str = "",
 async def create_rule(
     request: Request,
     title: str = Form(...), details: str = Form(""), doer_id: int = Form(...),
-    branch_id: str = Form(""), frequency: str = Form("daily"), day_of: str = Form(""),
+    branch_id: str = Form(""), frequency: str = Form("daily"),
     due_time: str = Form("23:59"), priority: str = Form("medium"),
     requires_audit: str = Form(""),
     user: User = Depends(manager_up), db: Session = Depends(get_db),
@@ -280,19 +282,21 @@ async def create_rule(
     _proof = form.getlist("requires_attachment")
     proof_required = True if not _proof else ("1" in _proof)
     doer = db.get(User, doer_id)
+
+    try:
+        sched = recurring.read_schedule(frequency, form)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
     db.add(RecurringRule(
         org_id=user.org_id,
         branch_id=int(branch_id) if branch_id else (doer.branch_id if doer else None),
         title=title.strip(), details=details.strip() or None,
         doer_id=doer_id, assigner_id=user.id,
-        priority=Priority(priority), frequency=Recurrence(frequency),
-        # Yearly is written as DD/MM and stored as MMDD; everything else is a
-        # plain number. Reusing the bulk importer's reader keeps the form and
-        # the spreadsheet agreeing on what a date means.
-        day_of=(bulk.yearly_day(day_of) if frequency == "yearly" and day_of
-                else int(day_of) if day_of.strip().isdigit() else None),
+        priority=Priority(priority),
         due_time=due_time, requires_audit=bool(requires_audit),
         requires_attachment=proof_required,
+        **sched,
     ))
     db.commit()
     return RedirectResponse("/recurring", status_code=303)

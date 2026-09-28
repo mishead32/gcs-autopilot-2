@@ -689,3 +689,21 @@ tr.held td{background:#fffdf5}
 .inline-check{display:flex;align-items:center;gap:7px;font-size:13px;
   margin:0;flex:1 1 300px}
 .inline-check input{margin:0;width:auto}
+
+/* ------------------------------------------- checklist schedule picker -- */
+.sched{margin-top:14px;padding:14px 16px;border:1px solid var(--line);
+  border-radius:10px;background:#fafbfd}
+.sched>div[hidden]{display:none}
+.sched label{margin-top:12px}
+.sched>div:first-child label{margin-top:0}
+.daypick{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.daybtn{display:inline-flex;align-items:center;gap:5px;margin:0!important;
+  padding:6px 11px;border:1px solid var(--line);border-radius:999px;
+  background:#fff;font-size:12.5px;font-weight:600;text-transform:none;
+  letter-spacing:0;color:var(--ink);cursor:pointer}
+.daybtn:hover{border-color:var(--brand)}
+.daybtn input{margin:0;width:auto}
+.daybtn:has(input:checked){background:var(--brand);border-color:var(--brand);
+  color:#fff}
+.schedsum{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
+  font-weight:600;color:var(--brand)}

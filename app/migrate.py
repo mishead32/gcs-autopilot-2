@@ -41,6 +41,13 @@ ADDITIONS = {
     ],
     "recurring_rules": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
+        # Everything a schedule needs that a single number could not hold.
+        # All nullable: an existing rule keeps running off day_of exactly as
+        # it did, and nothing has to be re-entered.
+        ("weekdays", "VARCHAR(20)"),
+        ("weeks_of_month", "VARCHAR(20)"),
+        ("start_month", "INTEGER"),
+        ("anchor_on", "DATE"),
     ],
     "branches": [
         # Existing companies get Sunday off, which is true of every one of
@@ -119,7 +126,7 @@ PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
 # which is what SQLAlchemy stores by default (ON_HOLD, not on_hold).
 ENUM_VALUES = {
     "taskstatus": ["ON_HOLD"],
-    "recurrence": ["YEARLY"],
+    "recurrence": ["YEARLY", "FORTNIGHTLY", "QUARTERLY"],
 }
 
 

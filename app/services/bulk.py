@@ -11,8 +11,9 @@ ones and fix the rest.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -25,6 +26,8 @@ from .. import clock
 from ..models import (
     Task, TaskSource, Priority, RecurringRule, Recurrence, User, Branch,
 )
+from . import recurring
+from .recurring import WEEKDAY_WORDS
 
 HEAD = PatternFill("solid", fgColor="0F4C81")
 HEAD_FONT = Font(color="FFFFFF", bold=True, size=10)
@@ -46,8 +49,13 @@ CHECKLIST_COLS = [
     ("Details", 46, "Optional."),
     ("Doer", 26, "Required. Their email, or their full name as it is spelt in Users."),
     ("Company", 26, "Optional. Defaults to the doer's own company."),
-    ("Frequency", 16, "daily / weekdays / weekly / monthly / yearly"),
-    ("Day", 10, "Weekly: Mon-Sun. Monthly: 1-31. Yearly: DD/MM. Daily: blank."),
+    ("Frequency", 18, "daily / weekdays / weekly / fortnightly / monthly / "
+                      "quarterly / yearly"),
+    ("Day", 22, "Weekly & fortnightly: Mon — or Mon,Thu for both. "
+                "Monthly & quarterly: a date like 15, or a week and day like "
+                "1st Sat, first & third Sat, last Fri. Quarterly can add "
+                "'from Feb'; fortnightly can add 'from 30/09/2026' to say "
+                "which week. Yearly: 17/04. Daily: leave blank."),
     ("Due time", 12, "HH:MM 24-hour, e.g. 18:00. Blank = 18:00."),
     ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Needs audit", 13, "YES or NO. Blank = NO."),
@@ -116,13 +124,20 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
     else:
         ws = _sheet(wb, "Checklist", CHECKLIST_COLS, [
             ["Post daily sales MIS to CMD", "", sample_email, sample_branch,
-             "weekdays", "", "19:00", "high", "NO"],
-            ["Weekly trainer performance review", "", sample_email, "",
-             "weekly", "Mon", "12:00", "high", "YES"],
-            ["Monthly machine maintenance audit", "", sample_email, "",
-             "monthly", "1", "16:00", "high", "YES"],
+             "weekdays", "", "23:59", "high", "NO"],
+            ["Trainer performance review", "", sample_email, "",
+             "weekly", "Mon,Thu", "23:59", "high", "YES"],
+            ["Machine maintenance audit", "", sample_email, "",
+             "monthly", "1st Sat", "23:59", "high", "YES"],
+            ["Pay the electricity bill", "", sample_email, "",
+             "monthly", "15", "23:59", "high", "NO"],
+            ["Quarterly budget review", "", sample_email, "",
+             "quarterly", "5 from Feb", "23:59", "high", "YES"],
+            ["Renew the domain", "", sample_email, "",
+             "yearly", "17/04", "23:59", "high", "NO"],
         ])
-        _dropdown(ws, "E", ["daily", "weekdays", "weekly", "monthly", "yearly"])
+        _dropdown(ws, "E", ["daily", "weekdays", "weekly", "fortnightly",
+                            "monthly", "quarterly", "yearly"])
         _dropdown(ws, "H", ["high", "medium", "low"])
         _dropdown(ws, "I", ["YES", "NO"])
 
@@ -285,39 +300,22 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
                 base["due_at"] = _due(raw[5], raw[6])
                 base["requires_audit"] = _yes(raw[7])
             else:
-                freq = _text(raw[4]).lower()
-                if not freq:
-                    raise ValueError(
-                        "Frequency is empty — use daily, weekdays, weekly, "
-                        "monthly or yearly. A blank one used to be read as "
-                        "daily, which is a task landing on somebody every "
-                        "single day because a cell was missed.")
-                if freq not in {f.value for f in Recurrence}:
-                    raise ValueError(
-                        f"'{freq}' is not a frequency — use daily, weekdays, "
-                        "weekly or monthly")
-                base["frequency"] = Recurrence(freq)
-
-                day_raw = _text(raw[5])
-                day = None
-                if freq == "weekly":
-                    key = day_raw.lower()[:3]
-                    if key not in WEEKDAYS:
-                        raise ValueError(
-                            f"Weekly needs a day — got '{day_raw}'. Use Mon-Sun.")
-                    day = WEEKDAYS[key]
-                elif freq == "monthly":
-                    if not day_raw.isdigit() or not 1 <= int(day_raw) <= 31:
-                        raise ValueError(
-                            f"Monthly needs a day 1-31 — got '{day_raw}'")
-                    day = int(day_raw)
-                elif freq == "yearly":
-                    day = yearly_day(day_raw)
-                base["day_of"] = day
-                # the same wording the Checklist page uses, so the preview and
-                # the saved rule cannot describe the schedule differently
+                # One reader for the form and the spreadsheet, so a
+                # schedule typed on the page and the same schedule in a
+                # column cannot come to mean two different things.
+                cell = _text(raw[5])
+                base.update(recurring.read_schedule(_text(raw[4]), {
+                    "day": _days_in(cell) or cell,
+                    "weekdays": _days_in(cell),
+                    "weeks_of_month": _weeks_in(cell),
+                    "day_of_month": _date_in(cell),
+                    "year_day": cell,
+                    "start_month": _month_in(cell),
+                    "anchor_on": _anchor_in(cell),
+                    "month_mode": "weekday" if _weeks_in(cell) else "date",
+                }))
                 base["schedule_label"] = RecurringRule(
-                    frequency=base["frequency"], day_of=day).schedule_label
+                    **{k: base.get(k) for k in SCHEDULE_FIELDS}).schedule_label
 
                 t = _text(raw[6]) or "18:00"
                 _due("01/01/2026", t)          # reuse the time validator
@@ -358,12 +356,19 @@ def commit(db: Session, org_id: int, actor: User, parsed: Parsed) -> int:
             db.flush()
             notify.queue_task_assigned(db, t)
         else:
+            # The schedule fields are taken as a group rather than listed
+            # one by one. A hand-written list is how a new column gets added
+            # to the parser, read correctly off the spreadsheet, and then
+            # silently dropped on the way to the database — which is exactly
+            # what happened to the weekday of every fortnightly rule.
+            sched = {k: d.get(k) for k in SCHEDULE_FIELDS}
             db.add(RecurringRule(
                 org_id=org_id, branch_id=d["branch_id"], title=d["title"],
                 details=d["details"], doer_id=d["doer"].id, assigner_id=actor.id,
-                priority=d["priority"], frequency=d["frequency"],
-                day_of=d["day_of"], due_time=d["due_time"],
+                priority=d["priority"], due_time=d["due_time"],
                 requires_audit=d["requires_audit"],
+                requires_attachment=d.get("requires_attachment", True),
+                **sched,
             ))
         made += 1
 
@@ -422,3 +427,86 @@ def yearly_day(raw: str) -> int:
     if not (1 <= mm <= 12 and 1 <= dd <= 31):
         raise ValueError(f"'{text}' is not a real date — yearly wants DD/MM")
     return mm * 100 + dd
+
+
+# Everything that describes WHEN a rule runs. One list, used by the parser,
+# by the preview and by the save — so a schedule cannot be read correctly and
+# then written away incompletely.
+SCHEDULE_FIELDS = ("frequency", "day_of", "weekdays", "weeks_of_month",
+                   "start_month", "anchor_on")
+
+
+# ------------------------------------------------- reading the Day column --
+# One column has to carry every kind of schedule, because a spreadsheet with a
+# column per option is a spreadsheet nobody fills in. So the Day cell is read
+# for whatever it turns out to hold:
+#
+#     Mon            Fri,Mon        a weekday, or several
+#     15                            a date in the month
+#     1st Sat        first & third Sat     a week and a weekday
+#     last Fri                      the last one in the month
+#     17/04                         a yearly date
+#     15 from Feb                   quarterly, starting in February
+
+_NTH_IN = re.compile(r"\b(1st|2nd|3rd|4th|5th|first|second|third|fourth|fifth|last)\b",
+                     re.I)
+_FROM_MONTH = re.compile(r"\bfrom\s+([a-z]+)\b", re.I)
+_MONTH_NAMES = {m.lower()[:3]: i for i, m in enumerate(
+    ["", "January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"]) if m}
+
+
+def _days_in(cell: str) -> str:
+    """The weekday part of a cell, with the week words and month taken off.
+
+    "1st & 3rd Sat" -> "Sat" · "Fri,Mon" -> "Fri,Mon" · "15" -> ""
+    """
+    text = _NTH_IN.sub("", cell or "")
+    text = _FROM_DATE.sub("", text)
+    text = _FROM_MONTH.sub("", text)
+    text = re.sub(r"[&]+", ",", text)
+    parts = [p.strip() for p in re.split(r"[,/+]|\band\b", text, flags=re.I)]
+    days = [p for p in parts if p and p.lower().rstrip(".") in WEEKDAY_WORDS]
+    return ",".join(days)
+
+
+def _weeks_in(cell: str) -> str:
+    """"1st & 3rd Sat" -> "1st,3rd"; anything with no week word -> ""."""
+    found = _NTH_IN.findall(cell or "")
+    return ",".join(found)
+
+
+def _date_in(cell: str) -> str:
+    """A plain day of the month — "15" yes, "15 from Feb" yes, "17/04" no."""
+    text = _FROM_MONTH.sub("", _FROM_DATE.sub("", cell or "")).strip()
+    return text if text.isdigit() and 1 <= int(text) <= 31 else ""
+
+
+_FROM_DATE = re.compile(
+    r"\bfrom\s+(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b", re.I)
+
+
+def _anchor_in(cell: str) -> str:
+    """"Wed from 30/09/2026" -> "2026-09-30", the week a fortnight counts from."""
+    m = _FROM_DATE.search(cell or "")
+    if not m:
+        return ""
+    text = m.group(1)
+    if "-" in text and len(text.split("-")[0]) == 4:
+        y, mo, d = (int(x) for x in text.split("-"))
+    else:
+        d, mo, y = (int(x) for x in re.split(r"[/.-]", text))
+        if y < 100:
+            y += 2000
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return ""
+
+
+def _month_in(cell: str) -> str:
+    """"15 from Feb" -> "2", for a quarterly cycle that does not start in Jan."""
+    m = _FROM_MONTH.search(cell or "")
+    if not m:
+        return ""
+    return str(_MONTH_NAMES.get(m.group(1).lower()[:3], "") or "")

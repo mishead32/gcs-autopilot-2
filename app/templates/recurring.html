@@ -42,16 +42,80 @@
       <div><label>Branch</label><select name="branch_id"><option value="">Doer's branch</option>
         {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select></div>
     </div>
+    {# Pick how often, and only the boxes that apply to it appear. A form
+       that shows every option at once is a form people fill in wrongly. #}
     <div class="row">
-      <div><label>Frequency</label><select name="frequency">
-        {% for f in frequencies %}<option value="{{ f.value }}">{{ f.value|title }}</option>{% endfor %}</select></div>
-      <div><label>Day</label>
-        <input name="day_of" placeholder="weekly 0–6 · monthly 1–31 · yearly DD/MM">
-        <div class="m" style="margin-top:4px">
-          Weekly: 0 is Monday, 6 is Sunday. Monthly: the date, 1–31.
-          Yearly: the date it falls on, like 17/04. Daily: leave it empty.
-        </div></div>
-      <div><label>Due time</label><input name="due_time" value="23:59" placeholder="HH:MM"></div>
+      <div><label>How often</label><select name="frequency" id="freqSel">
+        {% for f in frequencies %}
+        <option value="{{ f.value }}">{{ FREQ_LABELS[f] }}</option>{% endfor %}
+      </select></div>
+      <div><label>Due time</label><input name="due_time" value="23:59" placeholder="HH:MM">
+        <div class="m" style="margin-top:4px">By when on the day it falls.</div></div>
+    </div>
+
+    <div class="sched" id="schedBox">
+      {# --- which weekdays: weekly, fortnightly, and the nth-weekday mode #}
+      <div data-when="weekly fortnightly month-weekday">
+        <label>On which day(s)</label>
+        <div class="daypick">
+          {% for i, d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),
+                          (5,'Sat'),(6,'Sun')] %}
+          <label class="daybtn"><input type="checkbox" name="weekdays" value="{{ i }}"> {{ d }}</label>
+          {% endfor %}
+        </div>
+        <div class="m">Tick more than one if the job is done on several days —
+          it stays one rule, and one line on the scorecard.</div>
+      </div>
+
+      {# --- fortnightly needs to know which of the two weeks is the on week #}
+      <div data-when="fortnightly">
+        <label>Counting from</label>
+        <input type="date" name="anchor_on" value="{{ today_iso }}">
+        <div class="m">The week of this date is an “on” week. Every second
+          week after it is too.</div>
+      </div>
+
+      {# --- monthly and quarterly: by date, or by the nth weekday #}
+      <div data-when="monthly quarterly">
+        <label>When in the month</label>
+        <select name="month_mode" id="monthMode">
+          <option value="date">On a date — the 5th, the 15th…</option>
+          <option value="weekday">On a weekday — the first Saturday, the last Friday…</option>
+        </select>
+      </div>
+      <div data-when="month-date">
+        <label>Which date</label>
+        <input type="number" name="day_of_month" min="1" max="31" value="1">
+        <div class="m">1 to 31. In a month too short for it, the last day is
+          used instead — the 31st becomes the 30th in April.</div>
+      </div>
+      <div data-when="month-weekday">
+        <label>Which week(s)</label>
+        <div class="daypick">
+          {% for v, t in [(1,'First'),(2,'Second'),(3,'Third'),(4,'Fourth'),(-1,'Last')] %}
+          <label class="daybtn"><input type="checkbox" name="weeks_of_month" value="{{ v }}"> {{ t }}</label>
+          {% endfor %}
+        </div>
+        <div class="m">“Last” is not the same as “fourth” — some months have
+          five Saturdays.</div>
+      </div>
+      <div data-when="quarterly">
+        <label>Which months</label>
+        <select name="start_month">
+          {% for i, m in [(1,'Jan, Apr, Jul, Oct'),(2,'Feb, May, Aug, Nov'),
+                          (3,'Mar, Jun, Sep, Dec')] %}
+          <option value="{{ i }}">{{ m }}</option>{% endfor %}
+        </select>
+      </div>
+
+      {# --- yearly #}
+      <div data-when="yearly">
+        <label>Which date each year</label>
+        <input name="year_day" placeholder="DD/MM — e.g. 17/04">
+        <div class="m">Renewals, licences, subscriptions.</div>
+      </div>
+
+      <div class="m schedsum" id="schedSum"></div>
     </div>
     <div class="row">
       <div><label>Priority</label><select name="priority">
@@ -68,5 +132,93 @@
     </div>
     <div style="margin-top:18px"><button class="btn">Create rule</button></div>
   </form>
+
+<script>
+/* Show only the boxes that belong to the chosen frequency, and say in plain
+ * words what the rule will do. A form that shows every option at once is a
+ * form people fill in wrongly — and a schedule filled in wrongly is a task
+ * that turns up on the wrong day for months before anybody notices. */
+(function(){
+  var freq = document.getElementById('freqSel'),
+      mode = document.getElementById('monthMode'),
+      box  = document.getElementById('schedBox'),
+      sum  = document.getElementById('schedSum');
+  if(!freq || !box) return;
+
+  var DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  var NTH  = {'1':'first','2':'second','3':'third','4':'fourth','-1':'last'};
+  var MONTHS = {'1':'January, April, July and October',
+                '2':'February, May, August and November',
+                '3':'March, June, September and December'};
+
+  function ticked(name){
+    return Array.prototype.slice.call(
+      box.querySelectorAll('input[name="' + name + '"]:checked')).map(function(i){
+        return i.value; });
+  }
+
+  function words(list, fmt){
+    var n = list.map(fmt);
+    if(!n.length) return '';
+    if(n.length === 1) return n[0];
+    return n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+  }
+
+  function states(){
+    var f = freq.value, m = mode ? mode.value : 'date', on = [f];
+    if(f === 'monthly' || f === 'quarterly') on.push('month-' + m);
+    return on;
+  }
+
+  function describe(){
+    var f = freq.value,
+        days = words(ticked('weekdays'), function(v){ return DAYS[+v]; });
+    if(f === 'daily')    return 'A task every single day.';
+    if(f === 'weekdays') return 'A task every Monday to Friday.';
+    if(f === 'weekly')
+      return days ? 'A task every ' + days + '.' : 'Tick at least one day.';
+    if(f === 'fortnightly')
+      return days ? 'A task every second ' + days + '.' : 'Tick at least one day.';
+    if(f === 'yearly'){
+      var d = box.querySelector('[name=year_day]').value.trim();
+      return d ? 'One task a year, on ' + d + '.' : 'Type the date as DD/MM.';
+    }
+    var when;
+    if(mode && mode.value === 'weekday'){
+      var wk = words(ticked('weeks_of_month'), function(v){ return NTH[v] || v; });
+      if(!wk || !days) return 'Pick the week(s) and the day.';
+      when = 'the ' + wk + ' ' + days;
+    } else {
+      when = 'the ' + (box.querySelector('[name=day_of_month]').value || '1') +
+             ordinal(box.querySelector('[name=day_of_month]').value);
+    }
+    if(f === 'monthly') return 'A task on ' + when + ' of every month.';
+    var sm = box.querySelector('[name=start_month]');
+    return 'A task on ' + when + ' of ' +
+           (MONTHS[sm && sm.value] || MONTHS['1']) + '.';
+  }
+
+  function ordinal(n){
+    n = parseInt(n, 10) || 1;
+    if(n % 100 >= 11 && n % 100 <= 13) return 'th';
+    return ({1:'st', 2:'nd', 3:'rd'})[n % 10] || 'th';
+  }
+
+  function apply(){
+    var on = states();
+    box.querySelectorAll('[data-when]').forEach(function(el){
+      var want = el.getAttribute('data-when').split(' ');
+      el.hidden = !want.some(function(w){ return on.indexOf(w) !== -1; });
+    });
+    sum.textContent = describe();
+  }
+
+  freq.addEventListener('change', apply);
+  if(mode) mode.addEventListener('change', apply);
+  box.addEventListener('change', apply);
+  box.addEventListener('input', apply);
+  apply();
+})();
+</script>
 </div>
 {% endblock %}

@@ -175,12 +175,41 @@ class TaskSource(str, enum.Enum):
 class Recurrence(str, enum.Enum):
     DAILY = "daily"
     WEEKLY = "weekly"
+    FORTNIGHTLY = "fortnightly"     # every second week, on chosen weekdays
     MONTHLY = "monthly"
+    QUARTERLY = "quarterly"         # every third month
     WEEKDAYS = "weekdays"
     # Once a year: domain renewals, licences, subscriptions. day_of holds the
     # month and day together as MMDD — 417 is 17 April, 1231 is 31 December —
     # because a yearly rule needs both and the rule has only one column for it.
     YEARLY = "yearly"
+
+
+FREQ_LABELS = {
+    Recurrence.DAILY: "Daily — every single day",
+    Recurrence.WEEKDAYS: "Weekdays — Monday to Friday",
+    Recurrence.WEEKLY: "Weekly — on the day(s) you pick",
+    Recurrence.FORTNIGHTLY: "Fortnightly — every second week",
+    Recurrence.MONTHLY: "Monthly — a date, or the first/third Saturday",
+    Recurrence.QUARTERLY: "Quarterly — every third month",
+    Recurrence.YEARLY: "Yearly — renewals and licences",
+}
+
+# The order they are offered in: how often, most often first.
+FREQ_ORDER = [Recurrence.DAILY, Recurrence.WEEKDAYS, Recurrence.WEEKLY,
+              Recurrence.FORTNIGHTLY, Recurrence.MONTHLY,
+              Recurrence.QUARTERLY, Recurrence.YEARLY]
+
+
+class MonthMode(str, enum.Enum):
+    """The two ways people say when in the month something happens.
+
+    "the 5th of every month" and "the first Saturday of every month" are both
+    monthly, and neither can be written as the other: the 5th moves around the
+    week, and the first Saturday moves around the dates.
+    """
+    DATE = "date"           # day_of holds 1-31
+    WEEKDAY = "weekday"     # week_of_month + weekdays, e.g. 1 + Sat
 
 
 
@@ -809,8 +838,37 @@ class RecurringRule(Base):
     assigner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     frequency: Mapped[Recurrence] = mapped_column(Enum(Recurrence), default=Recurrence.DAILY)
-    # weekly -> 0=Mon..6=Sun ; monthly -> day of month
+    # The original single-value column, kept because every rule ever made
+    # uses it and nothing should have to be re-entered:
+    #   monthly / quarterly by date -> the day of the month, 1-31
+    #   yearly                      -> month and day as MMDD
+    #   weekly (rules made before several days were allowed) -> 0=Mon..6=Sun
     day_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- everything a schedule needs that one number cannot hold -----------
+    # Which weekdays, as "0,3" for Monday and Thursday. Used by weekly and
+    # fortnightly, and by monthly/quarterly in "first Saturday" mode. A rule
+    # can name several: the report that goes out on Monday AND Thursday is one
+    # job, not two, and splitting it into two rules splits its score too.
+    weekdays: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Which weeks of the month, for "the first Saturday" — "1", or "1,3" for
+    # the first AND third, or "-1" for the last, which is not the same as the
+    # fourth in a month with five of them. A list for the same reason as the
+    # weekdays: "first and third Saturday" is one job on a rota, and two rules
+    # would split its score in two.
+    weeks_of_month: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Quarterly: the first month of the cycle, 1-12. January means Jan, Apr,
+    # Jul, Oct; February means Feb, May, Aug, Nov. Without it "quarterly"
+    # would silently assume the calendar quarter, which is wrong for anyone
+    # whose year starts in April.
+    start_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Fortnightly: a date in a week the job IS due, which is what decides
+    # which of the two weeks is the on week. Every-two-weeks means nothing
+    # without it.
+    anchor_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     due_time: Mapped[str] = mapped_column(String(5), default="23:59")   # HH:MM local
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -820,28 +878,103 @@ class RecurringRule(Base):
     doer: Mapped[User] = relationship(foreign_keys=[doer_id])
     assigner: Mapped[User] = relationship(foreign_keys=[assigner_id])
 
+    # ---------------------------------------------------------- schedule ---
+    WEEK_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                  "Saturday", "Sunday"]
+    WEEK_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+                   "July", "August", "September", "October", "November",
+                   "December"]
+    NTH_NAMES = {1: "first", 2: "second", 3: "third", 4: "fourth", -1: "last"}
+
+    @property
+    def weekday_list(self) -> list[int]:
+        """The weekdays this rule runs on, 0=Monday.
+
+        Reads the newer several-days column, and falls back to the single
+        day_of that every rule made before it used — so an old weekly rule
+        keeps running on exactly the day it always did.
+        """
+        if self.weekdays:
+            out = []
+            for part in str(self.weekdays).split(","):
+                part = part.strip()
+                if part.isdigit() and 0 <= int(part) <= 6:
+                    out.append(int(part))
+            if out:
+                return sorted(set(out))
+        if self.frequency in (Recurrence.WEEKLY, Recurrence.FORTNIGHTLY):
+            return [self.day_of if self.day_of is not None else 0]
+        if self.month_mode == MonthMode.WEEKDAY:
+            return [0]
+        return []
+
+    @property
+    def week_list(self) -> list[int]:
+        """Which weeks of the month — [1, 3], or [-1] for the last one."""
+        out = []
+        for part in str(self.weeks_of_month or "").split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit() and int(part) in (1, 2, 3, 4, 5, -1):
+                out.append(int(part))
+        return sorted(set(out), key=lambda n: (n < 0, n))
+
+    @property
+    def month_mode(self) -> "MonthMode":
+        """Whether a monthly or quarterly rule counts dates or weekdays."""
+        return MonthMode.WEEKDAY if self.week_list else MonthMode.DATE
+
+    @property
+    def weekday_words(self) -> str:
+        """"Monday", or "Monday and Thursday", or "Mon, Wed and Fri"."""
+        days = self.weekday_list
+        if not days:
+            return ""
+        names = [self.WEEK_NAMES[d] if len(days) <= 2 else self.WEEK_SHORT[d]
+                 for d in days]
+        if len(names) == 1:
+            return names[0]
+        return ", ".join(names[:-1]) + " and " + names[-1]
+
     @property
     def schedule_label(self) -> str:
         """How this rule reads in a sentence — one wording, used everywhere."""
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-                "Saturday", "Sunday"]
         f = self.frequency
         if f == Recurrence.DAILY:
             return "Every day"
         if f == Recurrence.WEEKDAYS:
             return "Monday to Friday"
         if f == Recurrence.WEEKLY:
-            return f"Every {days[self.day_of if self.day_of is not None else 0]}"
-        if f == Recurrence.MONTHLY:
-            return f"Day {self.day_of or 1} of every month"
+            return f"Every {self.weekday_words}"
+        if f == Recurrence.FORTNIGHTLY:
+            every = f"Every second {self.weekday_words}"
+            return (f"{every}, counting from {self.anchor_on:%d %b %Y}"
+                    if self.anchor_on else every)
+        if f in (Recurrence.MONTHLY, Recurrence.QUARTERLY):
+            if self.month_mode == MonthMode.WEEKDAY:
+                names = [self.NTH_NAMES.get(n, str(n)) for n in self.week_list]
+                nth = (names[0] if len(names) == 1
+                       else ", ".join(names[:-1]) + " and " + names[-1])
+                when = f"The {nth} {self.weekday_words}"
+            else:
+                when = f"Day {self.day_of or 1}"
+            if f == Recurrence.MONTHLY:
+                return f"{when} of every month"
+            months = self.quarter_months
+            names = ", ".join(self.MONTH_NAMES[m][:3] for m in months)
+            return f"{when} of every third month ({names})"
         if f == Recurrence.YEARLY:
             month, dom = divmod(self.day_of or 101, 100)
-            names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
             if 1 <= month <= 12:
-                return f"Every year on {dom} {names[month]}"
+                return f"Every year on {dom} {self.MONTH_NAMES[month][:3]}"
             return "Once a year"
         return f.value.title()
+
+    @property
+    def quarter_months(self) -> list[int]:
+        """The four months a quarterly rule runs in."""
+        start = self.start_month if self.start_month in range(1, 13) else 1
+        return sorted(((start - 1 + n * 3) % 12) + 1 for n in range(4))
 
 
 class HelpTicket(Base):
