@@ -216,6 +216,22 @@ def run() -> list[str]:
                     f"ALTER TABLE {table} ADD COLUMN {name} {_ddl_for(ddl, dialect)}"))
                 applied.append(f"{table}.{name}")
 
+        # "Weekdays" is no longer offered: Monday to Friday is Weekly with
+        # five days ticked, and two names for one schedule only ever made
+        # people pick the one that would not let them add Saturday. Existing
+        # rules are converted rather than left as an orphan value nothing in
+        # the page can show.
+        if "recurring_rules" in existing_tables:
+            cols = {c["name"] for c in insp.get_columns("recurring_rules")}
+            if "weekdays" in cols:
+                moved = conn.execute(text(
+                    "UPDATE recurring_rules SET frequency = :weekly, "
+                    "weekdays = '0,1,2,3,4' "
+                    "WHERE UPPER(CAST(frequency AS VARCHAR)) = 'WEEKDAYS'"),
+                    {"weekly": "WEEKLY"})
+                if moved.rowcount:
+                    applied.append(f"{moved.rowcount} weekdays rule(s) -> weekly Mon-Fri")
+
         # backfill rights for users created before the rights model existed
         if "users" in existing_tables:
             conn.execute(text(

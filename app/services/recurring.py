@@ -262,7 +262,15 @@ def read_schedule(frequency: str, values) -> dict:
         got = values.get(name) or ""
         return [got] if got else []
 
-    if f in (Recurrence.DAILY, Recurrence.WEEKDAYS):
+    if f == Recurrence.DAILY:
+        return out
+
+    if f == Recurrence.WEEKDAYS:
+        # Still accepted from a spreadsheet, because people write it — but
+        # saved as what it actually is, so it looks like every other weekly
+        # rule and Saturday can be added to it later.
+        out["frequency"] = Recurrence.WEEKLY
+        out["weekdays"] = "0,1,2,3,4"
         return out
 
     if f in (Recurrence.WEEKLY, Recurrence.FORTNIGHTLY):
@@ -315,10 +323,20 @@ def read_schedule(frequency: str, values) -> dict:
         out["day_of"] = _year_day(raw)
         return out
 
-    # monthly and quarterly
     if f == Recurrence.QUARTERLY:
-        sm = one("start_month") or "1"
-        out["start_month"] = int(sm) if sm.isdigit() and 1 <= int(sm) <= 12 else 1
+        # Quarterly asks for one thing: the date it first falls on. The other
+        # three follow every third month from it, which is how anybody would
+        # work them out on paper — 5 February means 5 May, 5 August, 5
+        # November, and nobody has to think about which quarter that is.
+        raw = (one("quarter_start") or one("start_date") or one("day")
+               or one("day_of_month"))
+        day, month = _first_date(raw, freq)
+        out["day_of"] = day
+        out["month_days"] = str(day)
+        out["start_month"] = month
+        return out
+
+    # monthly
 
     mode = (one("month_mode") or "").lower()
     # A form sends one value per tick box; a spreadsheet sends "1,3" in one
@@ -387,3 +405,34 @@ def _year_day(raw: str) -> int:
     if not (1 <= mm <= 12 and 1 <= dd <= 31):
         raise ValueError(f"'{text}' is not a real date — yearly wants DD/MM")
     return mm * 100 + dd
+
+
+def _first_date(raw: str, freq: str) -> tuple[int, int]:
+    """The day and month a quarterly or yearly rule first falls on.
+
+    Takes a real date from a date box, or DD/MM typed by hand.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError(
+            f"A {freq} rule needs the date it first falls on — the three "
+            "after it are every third month from there.")
+    if isinstance(raw, (datetime, date)):
+        return raw.day, raw.month
+    parts = [p for p in re.split(r"[/\-. ]", text) if p]
+    if len(parts) >= 3 and len(parts[0]) == 4:            # YYYY-MM-DD
+        try:
+            d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            return d.day, d.month
+        except ValueError:
+            raise ValueError(f"'{text}' is not a real date.")
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        raise ValueError(
+            f"'{text}' is not a date — write it as DD/MM, e.g. 05/02 for the "
+            "5th of February.")
+    dd, mm = int(parts[0]), int(parts[1])
+    if dd > 31 and mm <= 31:
+        dd, mm = mm, dd
+    if not (1 <= mm <= 12 and 1 <= dd <= 31):
+        raise ValueError(f"'{text}' is not a real date — write it as DD/MM.")
+    return dd, mm

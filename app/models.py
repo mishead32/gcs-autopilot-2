@@ -186,19 +186,24 @@ class Recurrence(str, enum.Enum):
 
 
 FREQ_LABELS = {
-    Recurrence.DAILY: "Daily — every single day",
-    Recurrence.WEEKDAYS: "Weekdays — Monday to Friday",
-    Recurrence.WEEKLY: "Weekly — on the day(s) you pick",
-    Recurrence.FORTNIGHTLY: "Fortnightly — every second week",
-    Recurrence.MONTHLY: "Monthly — a date, or the first/third Saturday",
-    Recurrence.QUARTERLY: "Quarterly — every third month",
-    Recurrence.YEARLY: "Yearly — renewals and licences",
+    Recurrence.DAILY: "Daily",
+    Recurrence.WEEKLY: "Weekly",
+    Recurrence.FORTNIGHTLY: "Fortnightly",
+    Recurrence.MONTHLY: "Monthly",
+    Recurrence.QUARTERLY: "Quarterly",
+    Recurrence.YEARLY: "Yearly",
+    Recurrence.WEEKDAYS: "Weekly",     # only ever seen on an older rule
 }
 
-# The order they are offered in: how often, most often first.
-FREQ_ORDER = [Recurrence.DAILY, Recurrence.WEEKDAYS, Recurrence.WEEKLY,
-              Recurrence.FORTNIGHTLY, Recurrence.MONTHLY,
-              Recurrence.QUARTERLY, Recurrence.YEARLY]
+# The six offered, most often first.
+#
+# Weekdays is deliberately not among them. "Monday to Friday" is Weekly with
+# five days ticked, and offering it twice made people choose between two
+# names for one thing — then wonder why one of them would not let them add
+# Saturday. Rules already saved as Weekdays keep working and are converted on
+# the next upgrade.
+FREQ_ORDER = [Recurrence.DAILY, Recurrence.WEEKLY, Recurrence.FORTNIGHTLY,
+              Recurrence.MONTHLY, Recurrence.QUARTERLY, Recurrence.YEARLY]
 
 
 class MonthMode(str, enum.Enum):
@@ -944,10 +949,14 @@ class RecurringRule(Base):
 
     @property
     def weekday_words(self) -> str:
-        """"Monday", or "Monday and Thursday", or "Mon, Wed and Fri"."""
+        """"Monday", "Monday and Thursday", "Monday to Friday"."""
         days = self.weekday_list
         if not days:
             return ""
+        # A run of consecutive days reads as a range. "Mon, Tue, Wed, Thu and
+        # Fri" is five words for the thing everybody calls the working week.
+        if len(days) >= 3 and days == list(range(days[0], days[-1] + 1)):
+            return f"{self.WEEK_NAMES[days[0]]} to {self.WEEK_NAMES[days[-1]]}"
         names = [self.WEEK_NAMES[d] if len(days) <= 2 else self.WEEK_SHORT[d]
                  for d in days]
         if len(names) == 1:
@@ -961,7 +970,7 @@ class RecurringRule(Base):
         if f == Recurrence.DAILY:
             return "Every day"
         if f == Recurrence.WEEKDAYS:
-            return "Monday to Friday"
+            return "Every Monday to Friday"
         if f == Recurrence.WEEKLY:
             return f"Every {self.weekday_words}"
         if f == Recurrence.FORTNIGHTLY:
@@ -983,9 +992,15 @@ class RecurringRule(Base):
                     when = ("Days " + ", ".join(shown[:-1]) + " and " + shown[-1])
             if f == Recurrence.MONTHLY:
                 return f"{when} of every month"
-            months = self.quarter_months
-            names = ", ".join(self.MONTH_NAMES[m][:3] for m in months)
-            return f"{when} of every third month ({names})"
+            # Quarterly reads as the four dates themselves. "Every third
+            # month" makes people count on their fingers; "5 Feb, May, Aug
+            # and Nov" is the answer they were counting towards.
+            names = [self.MONTH_NAMES[m][:3] for m in self.quarter_months]
+            if self.month_mode == MonthMode.DATE:
+                dates = self.month_day_list or [1]
+                return (f"{dates[0]} {', '.join(names[:-1])} and {names[-1]}, "
+                        "every year")
+            return (f"{when} of {', '.join(names[:-1])} and {names[-1]}")
         if f == Recurrence.YEARLY:
             month, dom = divmod(self.day_of or 101, 100)
             if 1 <= month <= 12:
@@ -995,9 +1010,14 @@ class RecurringRule(Base):
 
     @property
     def quarter_months(self) -> list[int]:
-        """The four months a quarterly rule runs in."""
+        """The four months a quarterly rule runs in, from the one chosen.
+
+        In cycle order rather than sorted, so a rule starting in November
+        reads "Nov, Feb, May and Aug" — the order it will actually happen in,
+        not January first because January sorts first.
+        """
         start = self.start_month if self.start_month in range(1, 13) else 1
-        return sorted(((start - 1 + n * 3) % 12) + 1 for n in range(4))
+        return [((start - 1 + n * 3) % 12) + 1 for n in range(4)]
 
 
 class HelpTicket(Base):

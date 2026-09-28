@@ -3581,19 +3581,19 @@ check("and in those months last and fourth are different days",
           for ym in _five), [str(ym) for ym in _five])
 
 # --- quarterly ------------------------------------------------------------
-_q1 = _year(_RQ(frequency=_FQ.QUARTERLY, day_of=5, start_month=1))
+_q1 = _year(_RQ(**_rs("quarterly", {"quarter_start": "05/01"})))
 check("quarterly fires four times a year", len(_q1) == 4, len(_q1))
 check("in January, April, July and October",
       [d.month for d in _q1] == [1, 4, 7, 10], [d.month for d in _q1])
-_q2 = _year(_RQ(frequency=_FQ.QUARTERLY, day_of=5, start_month=2))
+_q2 = _year(_RQ(**_rs("quarterly", {"quarter_start": "05/02"})))
 check("starting in February shifts the whole cycle",
       [d.month for d in _q2] == [2, 5, 8, 11], [d.month for d in _q2])
-_qw = _year(_RQ(frequency=_FQ.QUARTERLY, weeks_of_month="3", weekdays="5",
-                start_month=1))
-check("quarterly works by weekday too", len(_qw) == 4, len(_qw))
-check("on a Saturday each time", {d.weekday() for d in _qw} == {5})
-check("three months apart",
-      [d.month for d in _qw] == [1, 4, 7, 10], [d.month for d in _qw])
+check("quarterly needs only the first date, and works the rest out",
+      _RQ(**_rs("quarterly", {"quarter_start": "05/02"})).schedule_label
+      == "5 Feb, May, Aug and Nov, every year")
+check("a bare day number still works, starting in January",
+      _year(_RQ(**_rs("quarterly", {"quarter_start": "15/01"})))
+      == [_dq(2027, m, 15) for m in (1, 4, 7, 10)])
 
 # --- yearly ---------------------------------------------------------------
 _yy = _year(_RQ(frequency=_FQ.YEARLY, day_of=417))
@@ -3609,6 +3609,14 @@ _wd = _year(_RQ(frequency=_FQ.WEEKDAYS))
 check("weekdays never fires at a weekend",
       all(d.weekday() < 5 for d in _wd))
 check("and covers every working day", len(_wd) == 261, len(_wd))
+# Monday to Friday, written the way the page now offers it.
+_mf = _year(_RQ(frequency=_FQ.WEEKLY, weekdays="0,1,2,3,4"))
+check("weekly with five days ticked is the same thing", _mf == _wd,
+      f"{len(_mf)} vs {len(_wd)}")
+check("and reads as a range, not five names",
+      _RQ(frequency=_FQ.WEEKLY, weekdays="0,1,2,3,4").schedule_label
+      == "Every Monday to Friday",
+      _RQ(frequency=_FQ.WEEKLY, weekdays="0,1,2,3,4").schedule_label)
 
 print("\n== the same schedules, typed the way people type them ==")
 # read_schedule is what both the Checklist form and the spreadsheet use, so
@@ -3626,8 +3634,8 @@ for _text, _freq, _want in [
          "The first and third Saturday of every month"),
         ({"weeks_of_month": "last", "weekdays": "Fri"}, "monthly",
          "The last Friday of every month"),
-        ({"day": "5", "start_month": "2"}, "quarterly",
-         "Day 5 of every third month (Feb, May, Aug, Nov)"),
+        ({"quarter_start": "05/02"}, "quarterly",
+         "5 Feb, May, Aug and Nov, every year"),
         ({"day": "17/04"}, "yearly", "Every year on 17 Apr")]:
     _r = _RQ(**_rs(_freq, _text))
     check(f"{_freq} {list(_text.values())} reads as “{_want}”",
@@ -3701,12 +3709,13 @@ _TRIP = [
     ("monthly", "first & third Sat",
      "The first and third Saturday of every month"),
     ("monthly", "last Fri", "The last Friday of every month"),
-    ("quarterly", "5 from Feb", "Day 5 of every third month (Feb, May, Aug, Nov)"),
-    ("quarterly", "3rd Sat",
-     "The third Saturday of every third month (Jan, Apr, Jul, Oct)"),
+    ("quarterly", "05/02", "5 Feb, May, Aug and Nov, every year"),
+    ("quarterly", "5 from Feb", "5 Feb, May, Aug and Nov, every year"),
+
     ("yearly", "17/04", "Every year on 17 Apr"),
     ("daily", "", "Every day"),
-    ("weekdays", "", "Monday to Friday"),
+    ("weekdays", "", "Every Monday to Friday"),
+    ("weekly", "Mon,Tue,Wed,Thu,Fri", "Every Monday to Friday"),
 ]
 _tblob = _sheet_bytes([
     [f"TRIP {n} {RUN}", "", _amit_mail, "", f, day, "23:59", "high", "NO"]
@@ -3800,6 +3809,65 @@ _sent = _RQ(**_rs("monthly", {"weeks_of_month": "first", "weekdays": "Saturday"}
 check("“first Saturday of every month” typed in full still works",
       _sent.schedule_label == "The first Saturday of every month",
       _sent.schedule_label)
+
+print("\n== the frequency list is six single words ==")
+from app.models import FREQ_ORDER as _FO, FREQ_LABELS as _FL
+check("six frequencies are offered", len(_FO) == 6, [f.value for f in _FO])
+check("and Weekdays is not one of them",
+      _FQ.WEEKDAYS not in _FO, [f.value for f in _FO])
+check("they are the six expected",
+      [f.value for f in _FO] == ["daily", "weekly", "fortnightly", "monthly",
+                                 "quarterly", "yearly"],
+      [f.value for f in _FO])
+check("each label is a single word",
+      all(len(_FL[f].split()) == 1 for f in _FO),
+      {f.value: _FL[f] for f in _FO})
+
+_page = admin.get("/recurring").text
+for _word in ["Daily", "Weekly", "Fortnightly", "Monthly", "Quarterly", "Yearly"]:
+    check(f"the page offers {_word}", f">{_word}</option>" in _page, _word)
+check("and no longer offers Weekdays as its own choice",
+      ">Weekdays</option>" not in _page)
+
+# A rule saved as Weekdays before the change must still run, and be converted.
+with _SLT() as _d:
+    _wdr = _RQ(org_id=1, branch_id=None, title=f"SMOKE old weekdays {RUN}",
+               doer_id=6, assigner_id=2, frequency=_FQ.WEEKDAYS,
+               due_time="23:59")
+    _d.add(_wdr)
+    _d.commit()
+    _wid = _wdr.id
+    check("an older Weekdays rule still fires Monday to Friday",
+          [_due_q(_wdr, _dq(2027, 3, d)) for d in range(1, 8)]
+          == [True, True, True, True, True, False, False],
+          [_due_q(_wdr, _dq(2027, 3, d)) for d in range(1, 8)])
+
+import app.migrate as _mig2
+_mig2.run()
+with _SLT() as _d:
+    _after = _d.get(_RQ, _wid)
+    check("and the upgrade converts it to weekly",
+          _after.frequency == _FQ.WEEKLY, _after.frequency)
+    check("with the five days ticked",
+          _after.weekday_list == [0, 1, 2, 3, 4], _after.weekday_list)
+    check("reading exactly as it did before",
+          _after.schedule_label == "Every Monday to Friday",
+          _after.schedule_label)
+    check("and firing on exactly the same days",
+          [_due_q(_after, _dq(2027, 3, d)) for d in range(1, 8)]
+          == [True, True, True, True, True, False, False])
+    check("no rule is left on the retired frequency",
+          _d.scalar(_msel(_func.count()).select_from(_RQ)
+                    .where(_RQ.frequency == _FQ.WEEKDAYS)) == 0)
+
+# The word still works in a spreadsheet, because people write it.
+_wdrow = _bulk.parse(_SLT(), 1, "checklist", _sheet_bytes([
+    [f"SMOKE weekdays word {RUN}", "", _amit_mail, "", "weekdays", "", "23:59",
+     "high", "NO"]])).rows[0]
+check("a spreadsheet saying weekdays is still accepted", _wdrow.ok, _wdrow.error)
+check("and stored as weekly Monday to Friday",
+      _wdrow.ok and _wdrow.data["schedule_label"] == "Every Monday to Friday",
+      _wdrow.data.get("schedule_label") if _wdrow.ok else "")
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

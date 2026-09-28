@@ -49,14 +49,14 @@ CHECKLIST_COLS = [
     ("Details", 46, "Optional."),
     ("Doer", 26, "Required. Their email, or their full name as it is spelt in Users."),
     ("Company", 26, "Optional. Defaults to the doer's own company."),
-    ("Frequency", 18, "daily / weekdays / weekly / fortnightly / monthly / "
-                      "quarterly / yearly"),
+    ("Frequency", 18, "daily / weekly / fortnightly / monthly / quarterly / "
+                      "yearly. Monday to Friday is weekly with the five days."),
     ("Day", 22, "Weekly & fortnightly: Mon — or Mon,Thu for both. "
-                "Monthly & quarterly: a date like 15 — or 15,30 for twice a "
-                "month — or a week and day like "
-                "1st Sat, first & third Sat, last Fri. Quarterly can add "
-                "'from Feb'; fortnightly can add 'from 30/09/2026' to say "
-                "which week. Yearly: 17/04. Daily: leave blank."),
+                "Monthly: a date like 15 — or 15,30 for twice a month — or a "
+                "week and day like 1st Sat, first & third Sat, last Fri. "
+                "Quarterly: the first date it falls on, 05/02. Fortnightly "
+                "can add 'from 30/09/2026' to say which week. Yearly: 17/04. "
+                "Daily: leave blank."),
     ("Due time", 12, "HH:MM 24-hour, e.g. 18:00. Blank = 18:00."),
     ("Priority", 14, "high / medium / low. High counts 5x, medium 2x, low 1x. Blank = medium."),
     ("Needs audit", 13, "YES or NO. Blank = NO."),
@@ -125,20 +125,22 @@ def template(db: Session, org_id: int, kind: str) -> bytes:
     else:
         ws = _sheet(wb, "Checklist", CHECKLIST_COLS, [
             ["Post daily sales MIS to CMD", "", sample_email, sample_branch,
-             "weekdays", "", "23:59", "high", "NO"],
+             "daily", "", "23:59", "high", "NO"],
             ["Trainer performance review", "", sample_email, "",
              "weekly", "Mon,Thu", "23:59", "high", "YES"],
+            ["Post the daily register", "", sample_email, "",
+             "weekly", "Mon,Tue,Wed,Thu,Fri", "23:59", "medium", "NO"],
             ["Machine maintenance audit", "", sample_email, "",
              "monthly", "1st Sat", "23:59", "high", "YES"],
             ["Pay the electricity bill", "", sample_email, "",
              "monthly", "15", "23:59", "high", "NO"],
             ["Quarterly budget review", "", sample_email, "",
-             "quarterly", "5 from Feb", "23:59", "high", "YES"],
+             "quarterly", "05/02", "23:59", "high", "YES"],
             ["Renew the domain", "", sample_email, "",
              "yearly", "17/04", "23:59", "high", "NO"],
         ])
-        _dropdown(ws, "E", ["daily", "weekdays", "weekly", "fortnightly",
-                            "monthly", "quarterly", "yearly"])
+        _dropdown(ws, "E", ["daily", "weekly", "fortnightly", "monthly",
+                            "quarterly", "yearly"])
         _dropdown(ws, "H", ["high", "medium", "low"])
         _dropdown(ws, "I", ["YES", "NO"])
 
@@ -313,6 +315,9 @@ def parse(db: Session, org_id: int, kind: str, blob: bytes) -> Parsed:
                     "year_day": cell,
                     "start_month": _month_in(cell),
                     "anchor_on": _anchor_in(cell),
+                    # Quarterly wants the first date it falls on: 05/02, or
+                    # the older "5 from Feb" spelling, which still reads.
+                    "quarter_start": _quarter_start(cell),
                     "month_mode": "weekday" if _weeks_in(cell) else "date",
                 }))
                 base["schedule_label"] = RecurringRule(
@@ -519,6 +524,24 @@ def _anchor_in(cell: str) -> str:
         return date(y, mo, d).isoformat()
     except ValueError:
         return ""
+
+
+def _quarter_start(cell: str) -> str:
+    """The first date a quarterly rule falls on, as DD/MM.
+
+    Takes "05/02" as written, and also the older "5 from Feb" — nobody should
+    have to redo a spreadsheet because the wording moved on.
+    """
+    text = (cell or "").strip()
+    if re.fullmatch(r"\d{1,2}\s*[/.-]\s*\d{1,2}", text):
+        return text
+    day, month = _date_in(text), _month_in(text)
+    if day and day.isdigit():
+        # A bare "15" means the 15th, and without a month named the cycle
+        # starts in January — the calendar quarters, which is what somebody
+        # writing just a number almost always means.
+        return f"{int(day):02d}/{int(month or 1):02d}"
+    return ""
 
 
 def _month_in(cell: str) -> str:
