@@ -129,12 +129,22 @@
       <p style="white-space:pre-wrap;margin:0">{{ task.audit_remark }}</p>
       {% endif %}
 
+      {% if can_set_audit and not task.doer_finished %}
+      <p class="m" style="margin-top:10px">
+        {{ task.doer.name }} has not marked this complete yet, so there is
+        nothing to audit. It moves to <strong>Audit pending</strong> by itself
+        the moment they do.
+      </p>
+      {% endif %}
+
       {% if can_set_audit %}
       <form method="post" action="/tasks/{{ task.id }}/audit-state" style="margin-top:14px">
+        {% if task.doer_finished %}
         <label>Audit remark {% if task.audit_state.value != 'completed' %}
           <span class="m">(required to mark it completed)</span>{% endif %}</label>
         <textarea name="remark" placeholder="What did you check, and what did you find?"
                   >{{ task.audit_remark or '' }}</textarea>
+        {% endif %}
         <div class="audit-pick">
           {% for st in audit_states %}
           <button class="btn {{ 'ghost' if st != task.audit_state }} sm"
@@ -153,16 +163,60 @@
     {% if can_audit %}
     <div class="card">
       <strong>Audit this submission</strong>
-      <form method="post" action="/tasks/{{ task.id }}/audit" style="margin-top:12px">
+      <p class="sub" style="margin:8px 0 0">
+        {{ task.doer.name }} marked this done
+        {% if task.submitted_at %}on {{ task.submitted_at|dt }}{% endif %}.
+        Three ways to answer it.
+      </p>
+      <form method="post" action="/tasks/{{ task.id }}/audit" id="auditForm"
+            style="margin-top:12px">
         <label>Quality score (0–10)</label>
         <input type="number" name="score" min="0" max="10" step="0.5" value="8">
         <label>Remark</label>
-        <textarea name="remark" placeholder="Feedback for the doer"></textarea>
-        <div style="margin-top:12px">
-          <button class="btn" name="decision" value="approve">Approve &amp; close</button>
-          <button class="btn danger" name="decision" value="reject">Send back</button>
+        <textarea name="remark" id="auditRemark"
+                  placeholder="What did you check, and what did you find?"></textarea>
+        <div class="auditacts">
+          <button class="btn yes" name="decision" value="approve">
+            ✓ Approve &amp; close</button>
+          <button class="btn warn" name="decision" value="reject">
+            ↩ Send back to redo</button>
+          {% if can_false_mark %}
+          <button class="btn danger" type="button" id="fmOpen2">
+            ✕ False marking −10</button>
+          {% endif %}
+        </div>
+        <div class="m" style="margin-top:10px">
+          <strong>Approve</strong> closes it and it counts.
+          <strong>Send back</strong> returns it to {{ task.doer.name }} with your
+          remark; the original deadline still stands.
+          <strong>False marking</strong> is for work closed without being done —
+          it sends the task back <em>and</em> takes 10 off their score.
         </div>
       </form>
+
+      {% if can_false_mark %}
+      <form method="post" action="/tasks/{{ task.id }}/false-mark" id="fmForm2"
+            hidden>
+        <input type="hidden" name="confirm" value="yes">
+        <input type="hidden" name="reason" id="fmReason2">
+      </form>
+      <dialog class="confirm" id="fmDialog2">
+        <div class="body">
+          <h3>Submit this as false marking?</h3>
+          <p>
+            <strong>{{ task.doer.name }}</strong> will receive a
+            <strong>−10 negative score</strong> for “{{ task.title }}”, the task
+            will be reopened, and they will be notified. This is recorded
+            permanently against your name as auditor.
+          </p>
+          <p style="margin:0"><strong>Are you sure?</strong></p>
+        </div>
+        <div class="acts">
+          <button class="btn ghost" id="fmCancel2" type="button">Cancel</button>
+          <button class="btn danger" id="fmConfirm2" type="button">Yes, apply −10</button>
+        </div>
+      </dialog>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -181,7 +235,7 @@
     </div>
     {% endif %}
 
-    {% if can_false_mark %}
+    {% if can_false_mark and not can_audit %}
     <div class="card">
       <strong>False marking</strong>
       <p class="sub" style="margin:8px 0 0">
@@ -308,6 +362,14 @@ function wireConfirm(openId, dialogId, cancelId, okId, formId){
   if(k) k.addEventListener('click', function(){ d.close(); f.submit(); });
 }
 wireConfirm('fmOpen','fmDialog','fmCancel','fmConfirm','fmForm');
+// The false-marking button inside the audit box sends the remark typed there,
+// so the reason and the audit note are the same sentence rather than two.
+(function(){
+  var r = document.getElementById('auditRemark'),
+      hidden = document.getElementById('fmReason2');
+  if(r && hidden) r.addEventListener('input', function(){ hidden.value = r.value; });
+})();
+wireConfirm('fmOpen2','fmDialog2','fmCancel2','fmConfirm2','fmForm2');
 wireConfirm('delOpen','delDialog','delCancel','delConfirm','delForm');
 </script>
 {% endblock %}

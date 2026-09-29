@@ -503,23 +503,26 @@ def audit_report(request: Request, date_from: str = "", date_to: str = "",
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     f = build_filters(db, user, "/reports/audit", date_from, date_to, branch,
                       doer, priority, state)
-    if f.state not in ("pending", "completed", "not_required", "all"):
+    if f.state not in ("pending", "completed", "waiting", "not_required", "all"):
         f.state = "pending"
 
     base = _between(_apply_common(_scoped(user, select(Task)), f), Task.due_at, f)
     tasks = list(db.scalars(base).all())
 
-    # source key -> {pending, completed, not_required, total}
-    grid = {k: {"pending": 0, "completed": 0, "not_required": 0, "total": 0}
-            for k in SOURCES}
+    # source key -> {pending, completed, waiting, not_required, total}
+    # "waiting" is work that needs an audit but the employee has not finished
+    # it yet, so nobody can audit it. It is counted, never called pending.
+    AUDIT_FIELDS = ("pending", "completed", "waiting", "not_required", "total")
+    grid = {k: {fld: 0 for fld in AUDIT_FIELDS} for k in SOURCES}
     for t in tasks:
         key = SOURCE_OF.get(t.source)
         if key is None:
             continue
-        grid[key][t.audit_state.value] += 1
+        bucket = t.audit_state.value
+        if bucket in grid[key]:
+            grid[key][bucket] += 1
         grid[key]["total"] += 1
-    grand = {fld: sum(grid[k][fld] for k in SOURCES)
-             for fld in ("pending", "completed", "not_required", "total")}
+    grand = {fld: sum(grid[k][fld] for k in SOURCES) for fld in AUDIT_FIELDS}
     checked = grand["completed"] + grand["pending"]
     grand["rate"] = round(grand["completed"] / checked * 100, 1) if checked else 0.0
 
@@ -538,6 +541,7 @@ def audit_report(request: Request, date_from: str = "", date_to: str = "",
                 ("Work type", lambda r: r[0]),
                 ("Audit pending", lambda r: r[1]["pending"]),
                 ("Audit completed", lambda r: r[1]["completed"]),
+                ("Not finished yet", lambda r: r[1]["waiting"]),
                 ("Not required", lambda r: r[1]["not_required"]),
                 ("Total", lambda r: r[1]["total"]),
             ], breakdown, f.summary),

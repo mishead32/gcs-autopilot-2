@@ -14,7 +14,8 @@ from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
-    Branch, Right, OutboundMessage, AuditState, AUDIT_LABELS, HelpTicket, HelpStatus,
+    Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
+    HelpTicket, HelpStatus,
     Followup
 )
 from ..services import notify, flows as flow_svc, storage, holidays, xlsx
@@ -58,11 +59,10 @@ def _visible_tasks_query(user: User):
 # usual way these reports end up quietly wrong.
 DATE_BASIS = {
     "done": ("finished_at", "Completion date"),
-    "audit": ("submitted_at", "Submission date"),
-    "audit_pending": ("due_at", "Planned date"),
+    "audit_pending": ("submitted_at", "Submission date"),
     "audit_done": ("audited_at", "Audit date"),
     "false_mark": ("false_marked_at", "Flagged on"),
-    "open": ("due_at", "Planned date"),
+    "pending": ("due_at", "Planned date"),
     "overdue": ("due_at", "Planned date"),
     "upcoming": ("due_at", "Planned date"),
     "all": ("due_at", "Planned date"),
@@ -110,13 +110,53 @@ SOURCE_TABS = {
 }
 SOURCE_KEY = {v["src"]: k for k, v in SOURCE_TABS.items()}
 
-# What each status tab is called, for the line written at the top of an export
-# so a downloaded file says what it is months later.
-STATUS_LABELS = {
-    "open": "Open", "overdue": "Overdue", "upcoming": "Coming up",
-    "done": "Completed", "audit": "With auditor",
-    "audit_pending": "Audit pending", "audit_done": "Audit completed",
-    "false_mark": "False marking", "all": "All",
+# The tabs, in the order they are shown, and what each one is called.
+#
+# There used to be nine, two pairs of which returned the same rows under
+# different names — "Open" and "Pending", "With auditor" and "Audit pending".
+# Somebody choosing between two tabs that give the same answer is being made
+# to wonder which one is lying. These seven each answer a different question:
+#
+#   pending   everything still owed, whenever it is due
+#   overdue   the half of that which is already late
+#   upcoming  the half that is not
+#   done      the doer has finished it, audited or not
+#   audit_pending   finished, and waiting on an auditor
+#   audit_done      checked and signed off
+#   false_mark      closed without the work being done
+#
+STATUS_TABS = [
+    ("pending", "Pending"),
+    ("overdue", "Overdue"),
+    ("upcoming", "Coming up"),
+    ("done", "Completed"),
+    ("audit_pending", "Audit pending"),
+    ("audit_done", "Audit completed"),
+    ("false_mark", "False marking"),
+    ("all", "All"),
+]
+STATUS_LABELS = dict(STATUS_TABS)
+# "open" was the old name for pending, and "audit" for audit_pending. Old
+# links and bookmarks keep working rather than landing on an empty list.
+STATUS_ALIASES = {"open": "pending", "audit": "audit_pending"}
+
+# One plain sentence per tab, so nobody has to guess what a tab counts.
+# "Pending" is deliberately spelled out as overdue + still to come, because
+# that is the number people quote in a meeting.
+STATUS_NOTES = {
+    "pending": "Everything still to be done — overdue work and work still "
+               "coming up, together.",
+    "overdue": "Past its planned date and still not finished.",
+    "upcoming": "Not due yet.",
+    "done": "Everything the employee has marked complete — including work "
+            "still sitting with an auditor.",
+    "audit_pending": "Marked complete by the employee and now waiting on an "
+                     "auditor. Work that is not finished yet cannot be "
+                     "audited, so it does not appear here.",
+    "audit_done": "Checked by an auditor and signed off.",
+    "false_mark": "Marked complete by the employee, but the auditor found the "
+                  "work had not actually been done.",
+    "all": "Every task, whatever state it is in.",
 }
 
 
@@ -128,26 +168,47 @@ def _parse_day(raw: str):
 
 
 @router.get("/tasks", response_class=HTMLResponse)
-def task_list(request: Request, status: str = "open", scope: str = "mine",
+def task_list(request: Request, status: str = "pending", scope: str = "mine",
               date_from: str = "", date_to: str = "", source: str = "",
+              doer: str = "", branch: str = "", dept: str = "",
               export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _visible_tasks_query(user)
     now = clock.now()
+    status = STATUS_ALIASES.get(status, status)
+    if status not in STATUS_LABELS:
+        status = "pending"
 
     if scope == "mine":
         q = q.where(Task.doer_id == user.id)
     elif scope == "assigned":
         q = q.where(Task.assigner_id == user.id)
 
-    if status == "open":
+    # --- who, where, which department ------------------------------------
+    # Three plain pickers rather than one clever search box. A manager asking
+    # "what is outstanding for Accounts at Head Office" should not have to
+    # learn a query language to ask it.
+    doer_id = int(doer) if doer.strip().isdigit() else None
+    branch_id = int(branch) if branch.strip().isdigit() else None
+    dept_id = int(dept) if dept.strip().isdigit() else None
+    if doer_id:
+        q = q.where(Task.doer_id == doer_id)
+    if branch_id:
+        q = q.where(Task.branch_id == branch_id)
+    if dept_id:
+        # A task has no department of its own — it belongs to whoever is
+        # doing it, so filtering by department means filtering by the people
+        # in it. Stated here because it is the kind of thing that looks like
+        # a bug the first time somebody moves between departments.
+        q = q.where(Task.doer_id.in_(
+            select(User.id).where(User.department_id == dept_id)))
+
+    if status == "pending":
         q = q.where(Task.status.in_(OPEN_STATES))
     elif status == "overdue":
         q = q.where(Task.status.in_(OPEN_STATES), Task.due_at < now)
     elif status == "upcoming":
         q = q.where(Task.status.in_(OPEN_STATES), Task.due_at >= now)
-    elif status == "audit":
-        q = q.where(Task.status == TaskStatus.SUBMITTED)
     elif status == "audit_pending":
         q = q.where(Task.audit_state == AuditState.PENDING)
     elif status == "audit_done":
@@ -206,7 +267,7 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
     # different set of rows from the screen it was downloaded off.
     if xlsx.wants(export):
         rows = db.scalars(q.order_by(*order)).all()     # no 500-row screen cap
-        tabs = {"mine": "assigned to me", "assigned": "delegated by me",
+        tabs = {"mine": "assigned to me", "assigned": "delegation I gave out",
                 "all": "everyone"}
         note = (f"{tabs.get(scope, scope)} · "
                 f"{STATUS_LABELS.get(status, status)} · "
@@ -220,10 +281,24 @@ def task_list(request: Request, status: str = "open", scope: str = "mine",
                         xlsx.task_columns(), rows, note)
 
     tasks = db.scalars(q.order_by(*order).limit(500)).all()
+    people = db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True))
+        .order_by(User.name)).all()
+    branches = db.scalars(
+        select(Branch).where(Branch.org_id == user.org_id)
+        .order_by(Branch.name)).all()
+    depts = db.scalars(
+        select(Department).where(Department.org_id == user.org_id)
+        .order_by(Department.name)).all()
+
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,
         "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
+        "status_tabs": STATUS_TABS, "status_labels": STATUS_LABELS,
+        "status_note": STATUS_NOTES.get(status, ""),
         "sort_label": sort_label,
+        "people": people, "branches": branches, "depts": depts,
+        "doer_id": doer_id, "branch_id": branch_id, "dept_id": dept_id,
         "date_from": start.isoformat() if start else "",
         "date_to": end.isoformat() if end else "",
         "basis_label": basis_label,
@@ -367,7 +442,12 @@ def task_detail(task_id: int, request: Request,
         "can_reopen": user.has(Right.REOPEN_TASK)
                       and task.status == TaskStatus.COMPLETED,
         "can_set_audit": user.has(Right.AUDIT_TASK),
-        "audit_states": list(AuditState),
+        # Nothing can be moved onto — or off — an auditor's list until the
+        # person doing the work has said it is done. Turning the audit
+        # requirement off is the one thing still allowed, because that is a
+        # decision about the task, not a verdict on the work.
+        "audit_states": AUDIT_SETTABLE if task.doer_finished
+                        else [AuditState.NOT_REQUIRED],
         "audit_labels": AUDIT_LABELS,
         "can_false_mark": user.has(Right.FALSE_MARK)
                           and task.status in (TaskStatus.SUBMITTED, TaskStatus.COMPLETED)
@@ -534,9 +614,11 @@ def reopen_task(task_id: int, request: Request, reason: str = Form(""),
     task.reopen_count += 1
     task.reopened_by_id = user.id
     task.reopened_at = clock.now()
-    # the work has to be checked again once it comes back
+    # It has to be checked again once it comes back — but it is the doer's
+    # problem now, not the auditor's, so the audit waits rather than sitting
+    # on a list as though it were ready.
     task.requires_audit = True
-    task.audit_state = AuditState.PENDING
+    task.audit_state = AuditState.WAITING
 
     db.add(TaskComment(task_id=task.id, author_id=user.id,
                        body="Reopened by auditor." + (f" Reason: {reason.strip()}"
@@ -578,7 +660,7 @@ def false_mark(task_id: int, request: Request, reason: str = Form(""),
     task.reopened_by_id = user.id
     task.reopened_at = task.false_marked_at
     task.requires_audit = True
-    task.audit_state = AuditState.PENDING
+    task.audit_state = AuditState.WAITING
 
     db.add(TaskComment(
         task_id=task.id, author_id=user.id,
@@ -653,6 +735,7 @@ async def submit_task(task_id: int, request: Request,
 
     task.submitted_at = clock.now()
     if task.requires_audit:
+        # Now, and only now, is it the auditor's to look at.
         task.status = TaskStatus.SUBMITTED
         task.audit_state = AuditState.PENDING
         db.commit()
@@ -704,6 +787,12 @@ def set_audit_state(task_id: int, request: Request, state: str = Form(...),
 
     if new_state == AuditState.COMPLETED and not remark.strip():
         raise HTTPException(400, "An audit remark is required to mark the audit complete.")
+    if new_state in (AuditState.PENDING, AuditState.COMPLETED) \
+            and not task.doer_finished:
+        raise HTTPException(
+            400, f"{task.doer.name} has not finished this task yet, so there "
+                 "is nothing to audit. It will move to Audit pending by "
+                 "itself the moment they mark it complete.")
 
     was = task.audit_state
     task.audit_state = new_state

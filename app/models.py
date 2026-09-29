@@ -84,17 +84,30 @@ class AuditState(str, enum.Enum):
     Kept separate from TaskStatus on purpose: a task can be COMPLETED and still
     be waiting for someone to audit it, and the doer's dashboard needs to show
     both facts at once.
+
+    WAITING is the state that was missing. A task flagged for audit used to be
+    "Audit pending" from the moment it was created, so the auditor's list was
+    full of work nobody had started — and it was possible to audit a job that
+    had not been done. Nothing is pending until the doer finishes it.
     """
     NOT_REQUIRED = "not_required"
-    PENDING = "pending"
+    WAITING = "waiting"          # needs an audit, but the work is not done yet
+    PENDING = "pending"          # finished, and now genuinely waiting on the auditor
     COMPLETED = "completed"
 
 
 AUDIT_LABELS = {
     AuditState.NOT_REQUIRED: "Not required",
+    AuditState.WAITING: "Audit after it's done",
     AuditState.PENDING: "Audit pending",
     AuditState.COMPLETED: "Audit completed",
 }
+
+# The states an auditor can actually set by hand. WAITING is not among them:
+# it is what the software puts a task in until the doer finishes, and setting
+# it from the outside would only be a way to hide finished work.
+AUDIT_SETTABLE = [AuditState.PENDING, AuditState.COMPLETED,
+                  AuditState.NOT_REQUIRED]
 
 
 class HelpStatus(str, enum.Enum):
@@ -766,7 +779,18 @@ class Task(Base):
 
     @property
     def audit_open(self) -> bool:
+        """Genuinely on an auditor's desk right now."""
         return self.audit_state == AuditState.PENDING
+
+    @property
+    def audit_expected(self) -> bool:
+        """Will need an audit, now or once it is finished."""
+        return self.audit_state in (AuditState.WAITING, AuditState.PENDING)
+
+    @property
+    def doer_finished(self) -> bool:
+        """The doer has said they are done — submitted, or closed outright."""
+        return self.status in (TaskStatus.SUBMITTED, TaskStatus.COMPLETED)
 
 
 @event.listens_for(Task, "before_insert")
@@ -776,9 +800,12 @@ def _on_task_created(mapper, connection, target: "Task") -> None:
     Done here rather than at each creation site so delegation, checklist, FMS
     and the bulk importer all behave the same without four copies of the rule.
     """
-    # Flagged for audit -> it starts as 'Audit pending'.
+    # Flagged for audit -> it WAITS. Nothing is pending on an auditor until
+    # the person doing it says they have finished: an auditor cannot check
+    # work that has not happened, and a list full of unstarted jobs is a list
+    # nobody reads.
     if target.requires_audit and target.audit_state in (None, AuditState.NOT_REQUIRED):
-        target.audit_state = AuditState.PENDING
+        target.audit_state = AuditState.WAITING
 
     # A task is live the moment it is assigned. There is no "accept" step:
     # the deadline was set when the work was handed over, so the clock is

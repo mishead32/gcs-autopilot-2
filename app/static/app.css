@@ -707,3 +707,12 @@ tr.held td{background:#fffdf5}
   color:#fff}
 .schedsum{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
   font-weight:600;color:var(--brand)}
+
+/* ------------------------------------------- audit decision buttons ---- */
+.auditacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.auditacts .btn{flex:1 1 auto}
+.btn.yes{background:var(--ok)}
+.btn.yes:hover{filter:brightness(.93)}
+
+/* The one-line explanation of whichever task tab is open. */
+.statusnote{margin:-2px 0 12px;max-width:74ch}

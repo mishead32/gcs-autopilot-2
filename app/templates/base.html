@@ -33,13 +33,13 @@
       {% endif %}
       {% if user.can_manage %}
       <a href="/tasks?scope=assigned&status=open" title="Work you delegated to other people">
-        <span class="ic">➜</span><span class="lb">Delegated by me</span></a>
+        <span class="ic">➜</span><span class="lb">Delegation</span></a>
       <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
         <span class="ic">⇉</span><span class="lb">FMS</span></a>
       <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
         <span class="ic">☑</span><span class="lb">Checklist</span></a>
-      <a href="/tasks?scope=all&status=audit_pending" title="Audit pending">
-        <span class="ic">⚖</span><span class="lb">Audit pending</span></a>
+      <a href="/tasks?scope=all&status=audit_pending" title="Work finished and waiting to be audited">
+        <span class="ic">⚖</span><span class="lb">Audit process</span></a>
       <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
         <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
       {% endif %}

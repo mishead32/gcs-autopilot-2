@@ -128,6 +128,7 @@ PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
 ENUM_VALUES = {
     "taskstatus": ["ON_HOLD"],
     "recurrence": ["YEARLY", "FORTNIGHTLY", "QUARTERLY"],
+    "auditstate": ["WAITING"],
 }
 
 
@@ -215,6 +216,21 @@ def run() -> list[str]:
                 conn.execute(text(
                     f"ALTER TABLE {table} ADD COLUMN {name} {_ddl_for(ddl, dialect)}"))
                 applied.append(f"{table}.{name}")
+
+        # A task flagged for audit used to read "Audit pending" from the
+        # moment it was created, so the auditor's list was full of work
+        # nobody had started. Anything still unfinished goes back to
+        # WAITING; anything the doer has finished stays pending, because
+        # that is exactly what it is.
+        if "tasks" in existing_tables:
+            moved = conn.execute(text(
+                "UPDATE tasks SET audit_state = 'WAITING' "
+                "WHERE UPPER(CAST(audit_state AS VARCHAR)) = 'PENDING' "
+                "AND UPPER(CAST(status AS VARCHAR)) NOT IN "
+                "('SUBMITTED', 'COMPLETED')"))
+            if moved.rowcount:
+                applied.append(
+                    f"{moved.rowcount} unfinished task(s): audit pending -> waiting")
 
         # "Weekdays" is no longer offered: Monday to Friday is Weekly with
         # five days ticked, and two names for one schedule only ever made

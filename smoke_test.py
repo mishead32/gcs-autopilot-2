@@ -676,8 +676,19 @@ r = mgr.post("/tasks/new", data={
     "branch_id": "", "priority": "medium",
     "due_at": "2026-12-31T18:00", "requires_audit": "1"})
 aid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
+from app.db import SessionLocal as _sess
+from app.models import Task as _TaskM
 body = mgr.get(f"/tasks/{aid}").text
-check("audit-flagged task starts as Audit pending", "Audit pending" in body)
+# The rule the user asked for: nothing is auditable until the employee has
+# said it is done. A freshly created task therefore waits — it must NOT be
+# sitting on an auditor's list while the work is still in progress.
+check("audit-flagged task waits for the doer to finish",
+      "Audit after it&#39;s done" in body or "Audit after it's done" in body)
+with _sess() as _d:
+    check("and its audit state is waiting, not pending",
+          _d.get(_TaskM, aid).audit_state.value == "waiting")
+check("it is not on the audit-pending list yet",
+      f'/tasks/{aid}"' not in mgr.get("/tasks?scope=all&status=audit_pending").text)
 
 r = mgr.post("/tasks/new", data={
     "title": "SMOKE: no-audit task", "details": "d", "doer_id": "6",
@@ -686,6 +697,19 @@ nid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 check("unflagged task starts as Not required",
       "Not required" in mgr.get(f"/tasks/{nid}").text)
 
+check("an unfinished task cannot be marked audited",
+      mgr.post(f"/tasks/{aid}/audit-state",
+               data={"state": "completed",
+                     "remark": "looks fine"}).status_code == 400)
+check("nor pulled onto the auditor's list early",
+      mgr.post(f"/tasks/{aid}/audit-state",
+               data={"state": "pending", "remark": ""}).status_code == 400)
+
+# The doer finishes it. Only now does it become the auditor's problem.
+submit(doer, aid, completion_note="done")
+with _sess() as _d:
+    check("finishing it moves the audit to pending",
+          _d.get(_TaskM, aid).audit_state.value == "pending")
 check("audit cannot be completed without a remark",
       mgr.post(f"/tasks/{aid}/audit-state",
                data={"state": "completed", "remark": "  "}).status_code == 400)
@@ -699,19 +723,31 @@ body = mgr.get(f"/tasks/{aid}").text
 check("audit remark is captured", "Checked the register, tallies." in body)
 check("status now shows Audit completed", "Audit completed" in body)
 check("the change is logged as a note", "Audit: Audit pending" in body)
+
+# A task nobody flagged for audit can still be pulled in — but only after
+# its doer has finished it, same rule for everyone.
+check("an unflagged, unfinished task cannot be pulled in for audit",
+      mgr.post(f"/tasks/{nid}/audit-state",
+               data={"state": "pending", "remark": ""}).status_code == 400)
+submit(doer, nid, completion_note="done")
 r = mgr.post(f"/tasks/{nid}/audit-state", data={"state": "pending", "remark": ""})
-check("a task can be pulled in for audit later",
+check("a finished task can be pulled in for audit later",
       "Audit pending" in mgr.get(f"/tasks/{nid}").text)
 check("audit-pending filter finds it",
-      f'/tasks/{nid}#audit' in mgr.get("/tasks?scope=all&status=audit_pending").text)
+      f'/tasks/{nid}' in mgr.get("/tasks?scope=all&status=audit_pending").text)
 check("audit column is on the task list", "Audit</th>" in mgr.get("/tasks?scope=all&status=all").text)
 check("bad audit state refused",
       mgr.post(f"/tasks/{nid}/audit-state", data={"state": "nonsense"}).status_code == 400)
 
 print("\n== paste attachments ==")
+# A task the doer has NOT finished yet — the paste panel only exists while
+# there is still something to submit.
+_pr = mgr.post("/tasks/new", data={
+    "title": f"SMOKE: paste panel {RUN}", "details": "d", "doer_id": "6",
+    "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
+pid = int(re.findall(r"/tasks/(\d+)/comment", _pr.text)[0])
 body = doer.get("/").text
-r = doer.get(f"/tasks/{aid}")
-body = doer.get(f"/tasks/{aid}").text
+body = doer.get(f"/tasks/{pid}").text
 check("the doer's panel offers paste", "paste-zone" in body and "Ctrl" in body)
 check("the file picker is still there", "Tap to choose a file" in body)
 import io
@@ -2081,9 +2117,13 @@ with _SLP() as _d:
 # Step 3 is a month after STEP 1's date, not a month from now — that is the
 # whole point of tying it. Step 1 was due ~2 days out, so this lands near
 # a month and two days from now, not a month from now.
+# A month after step 1's date — give or take the shift off a closed day. If a
+# month later lands on a Sunday the deadline comes back to the Saturday, so
+# the check allows for that rather than demanding the exact date.
+_want3 = _ck.add_months(_due1, 1).date()
 check("step 3 counts its month from step 1's date, not from today",
-      _ck.add_months(_due1, 1).date() == _due3.date(),
-      f"step1 {_due1.date()} +1m = {_ck.add_months(_due1,1).date()} but got {_due3.date()}")
+      0 <= (_want3 - _due3.date()).days <= 3,
+      f"step1 {_due1.date()} +1m = {_want3} but got {_due3.date()}")
 check("which is later than a month from now",
       _due3 > _ck.add_months(_ck.now(), 1) - __import__("datetime").timedelta(days=1))
 
@@ -2620,9 +2660,9 @@ check("it now appears under Completed", f'/tasks/{_cid}"' in _done, "still missi
 check("the page explains what Completed covers",
       "still sitting with an auditor" in _done)
 check("its row says where the audit stands", "Audit pending" in _done)
-check("it is still under With auditor",
+check("the old With-auditor link still lands on Audit pending",
       f'/tasks/{_cid}"' in doer.get("/tasks?scope=mine&status=audit").text)
-check("and still under Audit pending",
+check("and it is under Audit pending",
       f'/tasks/{_cid}"' in doer.get("/tasks?scope=mine&status=audit_pending").text)
 check("no Mark complete button on it any more",
       f'data-mark="{_cid}"' not in _done)
@@ -2647,8 +2687,8 @@ check("and appears under Audit completed",
 
 print("\n== Audit completed and False marking have tabs of their own ==")
 _tabs = doer.get("/tasks?scope=mine&status=open").text
-for _lbl in ("Completed", "With auditor", "Audit pending", "Audit completed",
-             "False marking"):
+for _lbl in ("Pending", "Overdue", "Coming up", "Completed", "Audit pending",
+             "Audit completed", "False marking", "All"):
     check(f"the tab row offers {_lbl}", f">{_lbl}</a>" in _tabs or _lbl in _tabs)
 
 # A flagged task must be findable by the flag, and say so on its row.
@@ -3222,6 +3262,25 @@ if _upeng.dialect.name == "postgresql":
     check("the live enum knows every status the code uses",
           {st.name for st in _TSH} <= _labels,
           sorted({st.name for st in _TSH} - _labels))
+
+    # Every native enum the code writes to, not just taskstatus. A member
+    # added in Python but missing from the live type is a 500 on first use,
+    # and that is exactly how ON_HOLD nearly shipped.
+    from app.models import (AuditState as _AEc, Recurrence as _REc,
+                            TaskStatus as _TEc)
+    for _tn, _pyenum in (("auditstate", _AEc), ("recurrence", _REc),
+                         ("taskstatus", _TEc)):
+        with _upeng.connect() as _cn:
+            _live = {r[0] for r in _cn.execute(_uptext(
+                "SELECT e.enumlabel FROM pg_type t JOIN pg_enum e "
+                "ON e.enumtypid = t.oid WHERE t.typname = :n"),
+                {"n": _tn}).all()}
+        _want = {m.name for m in _pyenum}
+        check(f"the live {_tn} type knows every value the code uses",
+              _want <= _live, sorted(_want - _live))
+        _listed = set(_upmig.ENUM_VALUES.get(_tn, []))
+        check(f"and the migrator can add {_tn} values to an older database",
+              _listed <= _want, sorted(_listed - _want))
 
     # Rewind a throwaway copy of the type to how the live database had it,
     # then prove the migrator puts it right.
@@ -3868,6 +3927,187 @@ check("a spreadsheet saying weekdays is still accepted", _wdrow.ok, _wdrow.error
 check("and stored as weekly Monday to Friday",
       _wdrow.ok and _wdrow.data["schedule_label"] == "Every Monday to Friday",
       _wdrow.data.get("schedule_label") if _wdrow.ok else "")
+
+print("\n== every page's tags close ==")
+# One <div> left unclosed turned the whole dashboard into a flex row: the
+# greeting, the KPI cards and the task lists all sat side by side in a narrow
+# column. The page still rendered, still passed every other check, and looked
+# completely wrong. A browser silently repairs it, so only counting does.
+from html.parser import HTMLParser as _HP
+
+_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+         "meta", "param", "source", "track", "wbr"}
+
+class _Balance(_HP):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack, self.bad = [], []
+    def handle_starttag(self, tag, attrs):
+        if tag not in _VOID:
+            self.stack.append(tag)
+    def handle_startendtag(self, tag, attrs):
+        pass
+    def handle_endtag(self, tag):
+        if tag in _VOID:
+            return
+        if not self.stack:
+            self.bad.append(f"</{tag}> with nothing open")
+        elif self.stack[-1] == tag:
+            self.stack.pop()
+        elif tag in self.stack:
+            # something in between was never closed
+            while self.stack and self.stack[-1] != tag:
+                self.bad.append(f"<{self.stack.pop()}> never closed")
+            if self.stack:
+                self.stack.pop()
+        else:
+            self.bad.append(f"</{tag}> closes nothing")
+
+_PAGES = ["/", "/tasks?scope=mine&status=open", "/tasks?scope=all&status=all",
+          "/recurring", "/flows", "/followups", "/reports",
+          "/reports/tasks?source=delegation", "/reports/audit",
+          "/reports/score", "/reports/followups", "/stats", "/outbox",
+          "/admin/users", "/admin/branches", "/admin/departments",
+          "/admin/holidays", "/bulk", "/help", "/tasks/new", "/flows/new"]
+for _path in _PAGES:
+    _r = admin.get(_path)
+    if _r.status_code != 200:
+        check(f"{_path} opens", False, _r.status_code)
+        continue
+    _b = _Balance()
+    _b.feed(_r.text)
+    _left = [t for t in _b.stack if t not in ("html", "body")]
+    check(f"{_path}: every tag is closed", not _b.bad and not _left,
+          (_b.bad + [f"<{t}> never closed" for t in _left])[:4])
+
+# And the dashboard specifically: the cards must sit in a row, not a column.
+_dash = admin.get("/").text
+check("the dashboard heading block is closed before the first section",
+      _dash.index('class="sect"') > _dash.index('class="page-head"'))
+# The parser check above already proves the tags balance; this one just
+# pins the shape of the page so a stray edit cannot slide the heading into
+# the first section again.
+check("the greeting and the buttons are both inside it",
+      "page-head" in _dash and "Reports</a>" in _dash)
+
+print("\n== the task list's tabs and its three pickers ==")
+# The complaint was "so many filters which will confuse the team". What is
+# left is one row of states plus three plain dropdowns: employee, branch,
+# department.
+from app.db import SessionLocal as _sl3
+from app.models import (Task as _T3, User as _U3, Branch as _B3,
+                        Department as _D3)
+from app.routers.tasks import STATUS_TABS as _TABS
+
+_page = admin.get("/tasks?scope=all&status=pending").text
+for _k, _lbl in _TABS:
+    check(f"tab {_lbl!r} is on the page", f"status={_k}&" in _page)
+check("no tab was left over from the old set",
+      ">With auditor</a>" not in _page and ">Everything</a>" not in _page
+      and "status=audit&" not in _page)
+check("the open tab explains itself", "statusnote" in _page)
+check("Pending says it is overdue plus coming up",
+      "overdue work and work still coming up" in _page)
+
+check("there is an Employee picker", 'name="doer"' in _page)
+check("there is a Branch picker", 'name="branch"' in _page)
+check("there is a Department picker", 'name="dept"' in _page)
+
+with _sl3() as _d:
+    _amit3 = _d.query(_U3).filter(_U3.email == "amit@gcs.local").one()
+    _ravi3 = _d.query(_U3).filter(_U3.email == "ravi@gcs.local").one()
+    _amit_branch = _amit3.branch_id
+    _amit_dept = _amit3.department_id
+    _amit_open = _d.query(_T3).filter(_T3.doer_id == _amit3.id).count()
+    _ravi_open = _d.query(_T3).filter(_T3.doer_id == _ravi3.id).count()
+
+check("both people actually have tasks to tell apart",
+      _amit_open > 0 and _ravi_open > 0, f"{_amit_open}/{_ravi_open}")
+
+_one = admin.get(f"/tasks?scope=all&status=all&doer={_amit3.id}").text
+check("the employee filter keeps that person's work",
+      f"/tasks/" in _one and _amit3.name in _one)
+check("and drops everybody else's", f'doer={_ravi3.id}"' not in _one
+      and _ravi3.name not in _one.split('name="doer"')[1].split("</select>")[1])
+check("the picked employee stays selected",
+      f'value="{_amit3.id}" selected' in _one)
+
+if _amit_branch:
+    _bp = admin.get(f"/tasks?scope=all&status=all&branch={_amit_branch}").text
+    check("the branch filter stays selected",
+          f'value="{_amit_branch}" selected' in _bp)
+    with _sl3() as _d:
+        _want = _d.query(_T3).filter(_T3.branch_id == _amit_branch).count()
+    check("the branch filter returns that branch's tasks",
+          f"{_want} task(s)" in _bp, _bp.split("task(s)")[0][-40:])
+
+if _amit_dept:
+    _dp = admin.get(f"/tasks?scope=all&status=all&dept={_amit_dept}").text
+    check("the department filter stays selected",
+          f'value="{_amit_dept}" selected' in _dp)
+    with _sl3() as _d:
+        _ids = [u.id for u in _d.query(_U3)
+                .filter(_U3.department_id == _amit_dept).all()]
+        _want = _d.query(_T3).filter(_T3.doer_id.in_(_ids)).count()
+    check("the department filter counts everyone in it",
+          f"{_want} task(s)" in _dp, _dp.split("task(s)")[0][-40:])
+
+# The three pickers have to survive the Excel download too, or the file
+# would not match the list the person was looking at.
+_x = admin.get(f"/tasks?scope=all&status=all&doer={_amit3.id}&export=xlsx")
+check("the Excel download honours the pickers", _x.status_code == 200
+      and _x.headers["content-type"].startswith("application/"), _x.status_code)
+
+# Checklist and FMS are the same page with source= set, so the pickers and
+# the tab row must be there too. This is the "implement the same in
+# checklist and fms" half of the request.
+for _src in ("checklist", "fms", "delegation"):
+    _sp = admin.get(f"/tasks?scope=all&status=pending&source={_src}").text
+    check(f"{_src}: the three pickers are there",
+          'name="doer"' in _sp and 'name="branch"' in _sp and 'name="dept"' in _sp)
+    check(f"{_src}: the same status tabs are there",
+          all(f"status={k}&" in _sp for k, _ in _TABS))
+    check(f"{_src}: staying on that work type across tabs",
+          f"source={_src}" in _sp)
+
+# An unfinished task must never be offered to an auditor, from any door.
+print("\n== audit only after the employee marks it complete ==")
+_ar = mgr.post("/tasks/new", data={
+    "title": f"SMOKE audit gate {RUN}", "details": "",
+    "doer_id": "6", "branch_id": "", "priority": "medium",
+    "due_at": "2026-12-31T23:59", "requires_audit": "1"})
+_agid = int(re.findall(r"/tasks/(\d+)/comment", _ar.text)[0])
+_ap = admin.get("/tasks?scope=all&status=audit_pending").text
+check("an in-progress task is not on the audit list",
+      f'/tasks/{_agid}"' not in _ap)
+check("the audit tab says why", "not finished yet cannot be" in _ap)
+_detail = admin.get(f"/tasks/{_agid}").text
+check("its page does not offer the auditor a verdict yet",
+      'name="decision"' not in _detail)
+check("nor an Audit-pending / Audit-completed button",
+      'value="pending"' not in _detail and 'value="completed"' not in _detail)
+check("and it says why", "has not marked this complete yet" in _detail)
+check("turning the audit off is still allowed",
+      'value="not_required"' in _detail)
+_r = admin.post(f"/tasks/{_agid}/audit",
+                data={"decision": "approve", "score": "9", "remark": "x"})
+check("and the audit route refuses it", _r.status_code >= 400, _r.status_code)
+submit(doer, _agid, completion_note="done")
+_ap2 = admin.get("/tasks?scope=all&status=audit_pending").text
+check("once marked complete it appears for audit", f'/tasks/{_agid}' in _ap2)
+_detail2 = admin.get(f"/tasks/{_agid}").text
+check("the auditor now gets the three buttons",
+      "Approve" in _detail2 and "redo" in _detail2 and "False marking" in _detail2)
+check("false marking is offered once, not twice",
+      _detail2.count("Mark as false marking") == 0)
+check("and the audit-status buttons are back",
+      'value="pending"' in _detail2 and 'value="completed"' in _detail2)
+_r = admin.post(f"/tasks/{_agid}/false-mark",
+                data={"reason": "register was blank", "confirm": "yes"})
+check("the auditor can flag false marking", _r.status_code in (200, 303),
+      _r.status_code)
+check("and it shows under False marking",
+      f'/tasks/{_agid}' in admin.get("/tasks?scope=all&status=false_mark").text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
