@@ -890,12 +890,22 @@ def set_audit_state(task_id: int, request: Request, state: str = Form(...),
 
     if remark.strip():
         task.audit_remark = remark.strip()
+    closed_now = False
     if new_state == AuditState.COMPLETED:
         task.auditor_id = user.id
         task.audited_at = clock.now()
     elif new_state == AuditState.NOT_REQUIRED:
         task.auditor_id = None
         task.audited_at = None
+        if task.status == TaskStatus.SUBMITTED:
+            # The doer finished it and it turns out nothing needed checking.
+            # Close it the same way submitting an unaudited task would, or it
+            # sits in "submitted" for ever — never audited, because no audit
+            # is wanted, and never counted as done in anybody's score.
+            task.status = TaskStatus.COMPLETED
+            task.closed_at = task.submitted_at or clock.now()
+            close_help_ticket(db, task)
+            closed_now = True
 
     if was != new_state or remark.strip():
         db.add(TaskComment(
@@ -903,6 +913,10 @@ def set_audit_state(task_id: int, request: Request, state: str = Form(...),
             body=f"Audit: {AUDIT_LABELS[was]} → {AUDIT_LABELS[new_state]}."
                  + (f" Remark: {remark.strip()}" if remark.strip() else "")))
     db.commit()
+    if closed_now and task.flow_instance_id:
+        # A flow step that closes has to let the next step start, exactly as
+        # it would have done if it had never been flagged for audit.
+        flow_svc.advance_flow(db, task)
     flash.set(request, "audited", AUDIT_LABELS[new_state])
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)
 
@@ -934,7 +948,10 @@ def audit_task(task_id: int, request: Request, decision: str = Form(...),
             flow_svc.advance_flow(db, task)
     else:
         task.status = TaskStatus.REJECTED
-        task.audit_state = AuditState.PENDING     # it comes back for audit again
+        # It WILL need auditing again — but not yet. The work is back with the
+        # doer, so it waits rather than sitting on the auditor's list as
+        # though it were ready to be looked at.
+        task.audit_state = AuditState.WAITING
         task.submitted_at = None
         notify.queue(db, task.doer, "task_rejected", task,
                      title=task.title, remark=task.audit_remark or "—")

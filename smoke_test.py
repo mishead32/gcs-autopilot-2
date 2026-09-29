@@ -4106,6 +4106,8 @@ check("nor an Audit-pending / Audit-completed button",
 check("and it says why", "has not marked this complete yet" in _detail)
 check("turning the audit off is still allowed",
       'value="not_required"' in _detail)
+check("no second audit box on an unfinished task either",
+      "Audit status" not in _detail)
 _r = admin.post(f"/tasks/{_agid}/audit",
                 data={"decision": "approve", "score": "9", "remark": "x"})
 check("and the audit route refuses it", _r.status_code >= 400, _r.status_code)
@@ -4113,12 +4115,20 @@ submit(doer, _agid, completion_note="done")
 _ap2 = admin.get("/tasks?scope=all&status=audit_pending").text
 check("once marked complete it appears for audit", f'/tasks/{_agid}' in _ap2)
 _detail2 = admin.get(f"/tasks/{_agid}").text
-check("the auditor now gets the three buttons",
-      "Approve" in _detail2 and "redo" in _detail2 and "False marking" in _detail2)
+# One audit box, four outcomes. There used to be a second box above it that
+# only changed the label — no score, no verdict, the task stayed open — and
+# people clicked "Audit completed" in it believing they had audited something.
+check("the auditor now gets all four outcomes",
+      "Approve" in _detail2 and "Re-open task" in _detail2
+      and "False marking" in _detail2 and "Not required" in _detail2)
 check("false marking is offered once, not twice",
       _detail2.count("Mark as false marking") == 0)
-check("and the audit-status buttons are back",
-      'value="pending"' in _detail2 and 'value="completed"' in _detail2)
+check("there is only one audit box now",
+      _detail2.count("Audit status") == 0 and _detail2.count("id=\"audit\"") == 1,
+      _detail2.count("Audit status"))
+check("and no label-only buttons to click by mistake",
+      'value="pending"' not in _detail2 and 'value="completed"' not in _detail2)
+check("Not required is still reachable", 'value="not_required"' in _detail2)
 _r = admin.post(f"/tasks/{_agid}/false-mark",
                 data={"reason": "register was blank", "confirm": "yes"})
 check("the auditor can flag false marking", _r.status_code in (200, 303),
@@ -4680,6 +4690,108 @@ check("the old days= call still works",
       doer.get("/api/my-score?days=30").status_code == 200)
 check("'What I completed' follows the same dates",
       "date_from=" in doer.get("/?period=last_week").text)
+
+print("\n== the four audit outcomes ==")
+from app.db import SessionLocal as _sl9
+from app.models import (Task as _T9, TaskStatus as _ST9, AuditState as _AS9,
+                        HelpTicket as _H9)
+
+def _mk9(title, audit="1"):
+    r = mgr.post("/tasks/new", data={
+        "title": f"{title} {RUN}", "details": "", "doer_id": "6",
+        "branch_id": "", "priority": "medium",
+        "due_at": "2026-12-31T23:59", "requires_audit": audit})
+    return int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
+
+# 1 · Approve & close
+_a9 = _mk9("SMOKE audit approve")
+submit(doer, _a9, completion_note="done")
+admin.post(f"/tasks/{_a9}/audit",
+           data={"decision": "approve", "score": "9", "remark": "checked"})
+with _sl9() as _d:
+    _t = _d.get(_T9, _a9)
+    check("approve closes the task", _t.status == _ST9.COMPLETED, _t.status)
+    check("and marks the audit completed", _t.audit_state == _AS9.COMPLETED)
+    check("and records who and when", _t.auditor_id and _t.audited_at)
+    check("and keeps the score given", _t.audit_score == 9)
+
+# 2 · Re-open task — the bug: it used to land back on the auditor's list
+#     while the doer was still redoing it.
+_b9 = _mk9("SMOKE audit reopen")
+submit(doer, _b9, completion_note="done")
+admin.post(f"/tasks/{_b9}/audit",
+           data={"decision": "reject", "score": "3", "remark": "not enough"})
+with _sl9() as _d:
+    _t = _d.get(_T9, _b9)
+    check("re-open sends it back to the doer", _t.status == _ST9.REJECTED, _t.status)
+    check("and the audit WAITS rather than sitting on the auditor's list",
+          _t.audit_state == _AS9.WAITING, _t.audit_state)
+    check("the submission is cleared", _t.submitted_at is None)
+check("a re-opened task is off the audit-pending list",
+      f'/tasks/{_b9}"' not in admin.get("/tasks?scope=all&status=audit_pending").text)
+check("and the auditor is not offered a verdict on it",
+      'name="decision"' not in admin.get(f"/tasks/{_b9}").text)
+# Finish it again and it comes straight back.
+submit(doer, _b9, completion_note="redone")
+with _sl9() as _d:
+    check("finishing it again puts it back on the audit list",
+          _d.get(_T9, _b9).audit_state == _AS9.PENDING)
+
+# 3 · False marking
+_c9 = _mk9("SMOKE audit falsemark")
+submit(doer, _c9, completion_note="done")
+admin.post(f"/tasks/{_c9}/false-mark",
+           data={"reason": "register was blank", "confirm": "yes"})
+with _sl9() as _d:
+    _t = _d.get(_T9, _c9)
+    check("false marking flags the task", _t.false_marked)
+    check("and sends it back", _t.status == _ST9.REOPENED, _t.status)
+    check("and its audit waits too", _t.audit_state == _AS9.WAITING, _t.audit_state)
+
+# 4 · Not required — on a task the doer has ALREADY finished. This used to
+#     leave it stuck in "submitted" for ever: never audited, because no audit
+#     was wanted, and never counted as done in anybody's score.
+_d9 = _mk9("SMOKE audit not required")
+submit(doer, _d9, completion_note="done")
+with _sl9() as _d:
+    check("it is waiting on an auditor first",
+          _d.get(_T9, _d9).status == _ST9.SUBMITTED)
+_r9 = admin.post(f"/tasks/{_d9}/audit-state",
+                 data={"state": "not_required", "remark": ""})
+check("marking it not required is accepted", _r9.status_code == 200, _r9.status_code)
+with _sl9() as _d:
+    _t = _d.get(_T9, _d9)
+    check("it CLOSES rather than sitting in submitted for ever",
+          _t.status == _ST9.COMPLETED, _t.status)
+    check("with a completion time", _t.closed_at is not None)
+    check("the audit is marked not required",
+          _t.audit_state == _AS9.NOT_REQUIRED)
+    check("and it no longer asks to be audited", not _t.requires_audit)
+check("it shows under Completed",
+      f'/tasks/{_d9}"' in doer.get("/tasks?scope=mine&status=done").text)
+check("and not on the audit list",
+      f'/tasks/{_d9}"' not in admin.get("/tasks?scope=all&status=audit_pending").text)
+
+# Not required on a task nobody has finished just switches the audit off.
+_e9 = _mk9("SMOKE not required early")
+admin.post(f"/tasks/{_e9}/audit-state", data={"state": "not_required", "remark": ""})
+with _sl9() as _d:
+    _t = _d.get(_T9, _e9)
+    check("an unfinished task is not closed by it",
+          _t.status != _ST9.COMPLETED, _t.status)
+    check("but it stops asking for an audit", not _t.requires_audit)
+
+# The page itself offers exactly the four, in one box.
+_pg9 = admin.get(f"/tasks/{_a9}").text
+check("a closed task still shows who audited it and what they said",
+      "checked" in _pg9 and "scored 9" in _pg9)
+_open9 = _mk9("SMOKE audit box shape")
+submit(doer, _open9, completion_note="done")
+_box9 = admin.get(f"/tasks/{_open9}").text
+for _btn in ("Approve &amp; close", "Re-open task", "False marking", "Not required"):
+    check(f"the audit box offers '{_btn}'", _btn in _box9)
+check("and explains what each one does",
+      "takes 10 off their score" in _box9 and "stops asking for one" in _box9)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

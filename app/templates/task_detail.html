@@ -10,7 +10,7 @@
   <span class="chip">{{ task.source.value }}</span>
   {% if task.branch %}<span class="chip">{{ task.branch.name }}</span>{% endif %}
   <a class="chip audit_{{ task.audit_state.value }}" href="#audit"
-     title="Audit status — click to change">{{ task.audit_label }}</a>
+     title="Where the audit stands — click to jump to it">{{ task.audit_label }}</a>
   {% if task.false_marked %}<span class="chip falsemark">false marking −10</span>{% endif %}
   {% if task.reopen_count %}<span class="chip reopened">reopened ×{{ task.reopen_count }}</span>{% endif %}
 </p>
@@ -117,56 +117,51 @@
     </div>
     {% endif %}
 
+    {# ONE audit card, with the four things an auditor can actually decide:
+       approve, re-open, false marking, or "this never needed an audit".
+       There used to be a second box above this one that only changed the
+       LABEL — no score, no outcome, the task stayed open — and people were
+       clicking "Audit completed" in it believing they had audited something.
+       Two boxes, one of which quietly did nothing, was the confusion. #}
     <div class="card" id="audit">
-      <strong>Audit status</strong>
+      <strong>Audit</strong>
       <p class="sub" style="margin:8px 0 0">
         Currently <span class="chip audit_{{ task.audit_state.value }}">{{ task.audit_label }}</span>
-        {% if task.auditor %}— set by {{ task.auditor.name }}
+        {% if task.auditor %}— {{ task.auditor.name }}
           {% if task.audited_at %}on {{ task.audited_at|dt }}{% endif %}{% endif %}
+        {% if task.audit_score is not none %}· scored {{ task.audit_score }}/10{% endif %}
       </p>
       {% if task.audit_remark %}
-      <label>Audit remark</label>
+      <label>Auditor's remark</label>
       <p style="white-space:pre-wrap;margin:0">{{ task.audit_remark }}</p>
       {% endif %}
 
-      {% if can_set_audit and not task.doer_finished %}
+      {% if not can_set_audit %}
+      <p class="m" style="margin-top:10px">
+        Only someone with the audit right can decide this.
+      </p>
+
+      {% elif not task.doer_finished %}
       <p class="m" style="margin-top:10px">
         {{ task.doer.name }} has not marked this complete yet, so there is
         nothing to audit. It moves to <strong>Audit pending</strong> by itself
         the moment they do.
       </p>
-      {% endif %}
-
-      {% if can_set_audit %}
-      <form method="post" action="/tasks/{{ task.id }}/audit-state" style="margin-top:14px">
-        {% if task.doer_finished %}
-        <label>Audit remark {% if task.audit_state.value != 'completed' %}
-          <span class="m">(required to mark it completed)</span>{% endif %}</label>
-        <textarea name="remark" placeholder="What did you check, and what did you find?"
-                  >{{ task.audit_remark or '' }}</textarea>
-        {% endif %}
-        <div class="audit-pick">
-          {% for st in audit_states %}
-          <button class="btn {{ 'ghost' if st != task.audit_state }} sm"
-                  name="state" value="{{ st.value }}"
-                  {{ 'disabled' if st == task.audit_state }}>{{ audit_labels[st] }}</button>
-          {% endfor %}
-        </div>
+      {% if task.requires_audit %}
+      <form method="post" action="/tasks/{{ task.id }}/audit-state"
+            style="margin-top:12px">
+        <input type="hidden" name="remark" value="">
+        <button class="btn ghost sm" name="state" value="not_required"
+                title="This task does not need checking at all">
+          Not required</button>
       </form>
-      {% else %}
-      <p class="m" style="margin-top:10px">
-        Only someone with the audit right can change this.
-      </p>
       {% endif %}
-    </div>
 
-    {% if can_audit %}
-    <div class="card">
-      <strong>Audit this submission</strong>
-      <p class="sub" style="margin:8px 0 0">
+      {% else %}
+      <p class="sub" style="margin:10px 0 0">
         {{ task.doer.name }} marked this done
         {% if task.submitted_at %}on {{ task.submitted_at|dt }}{% endif %}.
-        Three ways to answer it.
+        Four ways to answer it.
       </p>
       <form method="post" action="/tasks/{{ task.id }}/audit" id="auditForm"
             style="margin-top:12px">
@@ -179,19 +174,35 @@
           <button class="btn yes" name="decision" value="approve">
             ✓ Approve &amp; close</button>
           <button class="btn warn" name="decision" value="reject">
-            ↩ Send back to redo</button>
+            ↩ Re-open task</button>
           {% if can_false_mark %}
           <button class="btn danger" type="button" id="fmOpen2">
             ✕ False marking −10</button>
           {% endif %}
+          <button class="btn ghost" type="button" id="nrOpen"
+                  title="This task did not need checking at all">
+            Not required</button>
         </div>
         <div class="m" style="margin-top:10px">
-          <strong>Approve</strong> closes it and it counts.
-          <strong>Send back</strong> returns it to {{ task.doer.name }} with your
-          remark; the original deadline still stands.
-          <strong>False marking</strong> is for work closed without being done —
-          it sends the task back <em>and</em> takes 10 off their score.
+          <strong>Approve &amp; close</strong> — the work is fine. The task
+          closes and counts towards {{ task.doer.name }}'s score.<br>
+          <strong>Re-open task</strong> — not good enough. It goes back to
+          {{ task.doer.name }} with your remark; the original deadline still
+          stands, so if it has passed the task counts as not done until it is
+          closed again.<br>
+          <strong>False marking</strong> — closed without the work being done.
+          It goes back <em>and</em> takes 10 off their score.<br>
+          <strong>Not required</strong> — this task never needed an audit. No
+          score, no penalty; it simply stops asking for one.
         </div>
+      </form>
+
+      {# "Not required" is a different route from the three verdicts above, so
+         it gets its own form rather than a fourth value on that one. #}
+      <form method="post" action="/tasks/{{ task.id }}/audit-state"
+            id="nrForm" hidden>
+        <input type="hidden" name="state" value="not_required">
+        <input type="hidden" name="remark" value="">
       </form>
 
       {% if can_false_mark %}
@@ -217,8 +228,8 @@
         </div>
       </dialog>
       {% endif %}
+      {% endif %}
     </div>
-    {% endif %}
 
     {% if can_reopen %}
     <div class="card">
@@ -371,5 +382,19 @@ wireConfirm('fmOpen','fmDialog','fmCancel','fmConfirm','fmForm');
 })();
 wireConfirm('fmOpen2','fmDialog2','fmCancel2','fmConfirm2','fmForm2');
 wireConfirm('delOpen','delDialog','delCancel','delConfirm','delForm');
+
+// "Not required" sits among the three verdicts but goes to a different route,
+// so it posts its own little form. It is reversible — anybody with the audit
+// right can pull the task back for audit later — so it asks once rather than
+// opening a dialog.
+(function(){
+  var o = document.getElementById('nrOpen'), f = document.getElementById('nrForm');
+  if(!o || !f) return;
+  o.addEventListener('click', function(){
+    if (confirm('Mark this task as not needing an audit?\n\n' +
+                'No score and no penalty — it simply stops asking to be ' +
+                'checked. You can put it back for audit later.')) f.submit();
+  });
+})();
 </script>
 {% endblock %}
