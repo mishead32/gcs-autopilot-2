@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
 from .. import flash
+from .. import lastview
 from .. import clock
 from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
@@ -644,7 +645,8 @@ def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
 
 
 @router.post("/tasks/{task_id}/delete")
-def delete_task(task_id: int, user: User = Depends(require_right(Right.DELETE_TASK)),
+def delete_task(task_id: int, request: Request,
+                user: User = Depends(require_right(Right.DELETE_TASK)),
                 db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
     if not task or task.org_id != user.org_id:
@@ -684,7 +686,10 @@ def delete_task(task_id: int, user: User = Depends(require_right(Right.DELETE_TA
 
     db.delete(task)
     db.commit()
-    return RedirectResponse("/tasks?scope=assigned&status=open", status_code=303)
+    # Back to the list they were working through, filters and all. It used to
+    # be a hard-coded /tasks?scope=assigned&status=open, which threw away
+    # whatever they had filtered to and sent a doer to somebody else's list.
+    return RedirectResponse(lastview.url(request, "/tasks"), status_code=303)
 
 
 # ------------------------------------------------------------- reopen ------
@@ -842,7 +847,8 @@ async def submit_task(task_id: int, request: Request,
     # tab and filter the person was reading, rather than dumping them on the
     # task page they were trying to avoid opening.
     return RedirectResponse(
-        _safe_return(form.get("return_to"), f"/tasks/{task_id}"),
+        _safe_return(form.get("return_to"),
+                     lastview.url(request, f"/tasks/{task_id}")),
         status_code=303)
 
 

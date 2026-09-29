@@ -21,6 +21,7 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       reports as reports_router)
 from .services import recurring
 from .templating import templates
+from . import lastview
 
 
 SPAWN_CHECK_SECONDS = 600      # look at the calendar every ten minutes
@@ -141,7 +142,44 @@ class HeadAsGet:
         await self.app(dict(scope, method="GET"), receive, send_without_body)
 
 
+
+class RememberTheList:
+    """Keep hold of whichever filtered list the person is looking at.
+
+    Done here rather than in each list route so it cannot be forgotten when
+    the next list page is added, and so it covers every filter on every list
+    without a line of code per filter.
+
+    Only a successful GET counts: a failed page is nowhere to go back to,
+    and a POST is an action rather than a place.
+
+    This must sit INSIDE SessionMiddleware. The session cookie is written as
+    the response travels back out through that middleware, so a change made
+    outside it is made after the cookie has already gone and is lost without
+    a word. Being inner means this sees http.response.start first, updates
+    the session, and only then hands the message on to be serialised.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "GET":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_remembering(message):
+            if message["type"] == "http.response.start" \
+                    and message["status"] == 200:
+                lastview.remember_scope(scope)
+            await send(message)
+
+        await self.app(scope, receive, send_remembering)
+
+
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
+# Added first, so it ends up innermost — see the class docstring.
+app.add_middleware(RememberTheList)
 app.add_middleware(HeadAsGet)
 app.add_middleware(
     SessionMiddleware,
@@ -151,6 +189,7 @@ app.add_middleware(
     same_site="lax",
 )
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "static")), name="static")
+
 
 
 @app.exception_handler(RedirectToLogin)

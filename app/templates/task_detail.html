@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% from "_uploader.html" import uploader, attachment_list %}
 {% block content %}
-<p class="sub"><a href="/tasks">&larr; All tasks</a></p>
+{# Back to the list they came from, with its filters still on it — not to
+   an unfiltered /tasks that throws away the three dropdowns they just set. #}
+<p class="sub"><a href="{{ back_url(request, '/tasks') }}">&larr;
+  Back to {{ back_label(request, 'all tasks') }}</a></p>
 <h1>{% if task.ref %}<span class="refid">{{ task.ref }}</span>{% endif %}{{ task.title }}</h1>
 <p class="sub">
   <span class="chip {{ task.priority.value }}"

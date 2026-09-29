@@ -75,3 +75,9 @@ templates.env.globals["counter"] = _Counter
 # literal in the template.
 from .models import Right as _Right
 templates.env.globals["AUDIT_RIGHT"] = _Right.AUDIT_TASK
+
+# "Back" means back to the filtered list they were actually on, not to an
+# unfiltered one. See app/lastview.py.
+from . import lastview as _lastview
+templates.env.globals["back_url"] = _lastview.url
+templates.env.globals["back_label"] = _lastview.label

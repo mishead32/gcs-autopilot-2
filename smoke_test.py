@@ -2560,8 +2560,19 @@ _nav2 = TestClient(app, follow_redirects=False)
 _nav2.cookies.update(doer.cookies)
 _evil = _nav2.post(f"/tasks/{_rid2}/submit",
                    data={"completion_note": "x", "return_to": "//evil.example.com/"})
+def _onsite(loc):
+    """A plain path on this site — not a full URL, not a scheme, not //host."""
+    return (isinstance(loc, str) and loc.startswith("/")
+            and not loc.startswith("//") and not loc.startswith("/\\")
+            and "\n" not in loc and "\r" not in loc
+            and "evil.example.com" not in loc and "javascript:" not in loc)
+
+# What matters is that the browser is never sent off this site — not which
+# on-site page it lands on. The fallback is now the filtered list the person
+# was working through, so pinning it to one exact path would be testing the
+# convenience rather than the protection.
 check("an off-site return_to is ignored",
-      _evil.headers.get("location") == f"/tasks/{_rid2}",
+      _onsite(_evil.headers.get("location")),
       _evil.headers.get("location"))
 
 for _bad in ("https://evil.example.com/", "/\\evil.example.com", "javascript:alert(1)"):
@@ -2575,7 +2586,7 @@ for _bad in ("https://evil.example.com/", "/\\evil.example.com", "javascript:ale
     _n3.cookies.update(doer.cookies)
     _rr = _n3.post(f"/tasks/{_b3}/submit", data={"completion_note": "x", "return_to": _bad})
     check(f"return_to {_bad[:22]!r} is refused",
-          _rr.headers.get("location") == f"/tasks/{_b3}",
+          _onsite(_rr.headers.get("location")),
           _rr.headers.get("location"))
 
 # 6 — the proof rule is the server's, not the button's. Disabling a button
@@ -4792,6 +4803,93 @@ for _btn in ("Approve &amp; close", "Re-open task", "False marking", "Not requir
     check(f"the audit box offers '{_btn}'", _btn in _box9)
 check("and explains what each one does",
       "takes 10 off their score" in _box9 and "stops asking for one" in _box9)
+
+print("\n== a filter survives opening a task ==")
+# The complaint: filter the list down to one employee, open a task, come
+# back, and the filter is gone. Thirty times in an afternoon is thirty
+# re-typings of the same three dropdowns.
+from app import lastview as _lv
+from app.db import SessionLocal as _slA
+from app.models import Task as _TA, User as _UA
+
+with _slA() as _d:
+    _amitA = _d.query(_UA).filter(_UA.email == "amit@gcs.local").one()
+    _oneA = _d.query(_TA).filter(_TA.doer_id == _amitA.id).first().id
+
+_filtered = (f"/tasks?scope=all&status=pending&source=delegation"
+             f"&doer={_amitA.id}&branch=&dept=")
+admin.get(_filtered)
+_task_page = admin.get(f"/tasks/{_oneA}").text
+check("the task page offers a way back", "Back to" in _task_page)
+check("and it points at the filtered list, not a bare /tasks",
+      f"doer={_amitA.id}" in _task_page and "status=pending" in _task_page,
+      _re.search(r'href="(/tasks[^"]*)"', _task_page).group(1)
+      if _re.search(r'href="(/tasks[^"]*)"', _task_page) else "none")
+check("and it says which list", "the task list" in _task_page)
+
+# Every kind of list, not just this one.
+for _url, _word in (
+        (f"/followups?desk=pc&show=pending&when=overdue", "Follow-ups"),
+        ("/reports/tasks?source=delegation&state=overdue", "the report"),
+        ("/reports/audit?state=completed", "the audit report"),
+        ("/recurring", "Checklist"),
+        ("/flows", "FMS"),
+        ("/help", "Help Desk"),
+        ("/?period=last_week", "the dashboard")):
+    admin.get(_url)
+    _tp = admin.get(f"/tasks/{_oneA}").text
+    _href = _re.search(r'Back to', _tp)
+    check(f"coming from {_url.split('?')[0]} goes back there",
+          _word in _tp, _tp[_tp.find("Back to") - 120:_tp.find("Back to") + 40])
+
+# Opening a task must NOT overwrite the memory — otherwise "back" would mean
+# "back to the task you are already looking at".
+admin.get(_filtered)
+admin.get(f"/tasks/{_oneA}")
+admin.get(f"/tasks/{_oneA}")
+_tp2 = admin.get(f"/tasks/{_oneA}").text
+check("opening a task does not become the place to go back to",
+      f"doer={_amitA.id}" in _tp2)
+
+# Nor does a page that is not a list.
+admin.get(_filtered)
+admin.get("/bulk")
+_tp3 = admin.get(f"/tasks/{_oneA}").text
+check("wandering off to a form does not lose the list",
+      f"doer={_amitA.id}" in _tp3)
+
+# Deleting a task used to dump everybody on a hard-coded unfiltered list.
+_delA = mgr.post("/tasks/new", data={
+    "title": f"SMOKE back after delete {RUN}", "details": "",
+    "doer_id": str(_amitA.id), "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_delid = int(_re.findall(r"/tasks/(\d+)/comment", _delA.text)[-1])
+admin.get(_filtered)
+_navA = TestClient(app, follow_redirects=False)
+_navA.cookies.update(admin.cookies)
+_rA = _navA.post(f"/tasks/{_delid}/delete")
+check("deleting returns to the filtered list",
+      f"doer={_amitA.id}" in (_rA.headers.get("location") or ""),
+      _rA.headers.get("location"))
+
+# And the memory has to be safe: it is a cookie, so it leaves the building.
+check("an off-site address could never be stored", not _lv.safe("//evil.example.com"))
+check("nor a scheme", not _lv.safe("https://evil.example.com"))
+check("nor a header split", not _lv.safe("/tasks\nLocation: /x"))
+check("nor a backslash host", not _lv.safe("/\\evil.example.com"))
+check("a plain path is fine", _lv.safe("/tasks?scope=all"))
+check("only exact list paths are remembered",
+      _lv.label_for("/tasks") and not _lv.label_for("/tasks/41")
+      and not _lv.label_for("/tasks/new"))
+
+# A tampered cookie must not become a redirect.
+class _Fake:
+    def __init__(self, v): self.session = {"lastview": v}
+for _junk in ("//evil.example.com", "https://evil.example.com",
+              {"url": "//evil.example.com"}, "not a dict", 42, None):
+    check(f"a tampered memory {str(_junk)[:24]!r} is thrown away",
+          _lv.url(_Fake(_junk), "/tasks") == "/tasks",
+          _lv.url(_Fake(_junk), "/tasks"))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
