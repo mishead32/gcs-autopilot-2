@@ -2,6 +2,18 @@
 {% from "_task_table.html" import task_table with context %}
 {% from "_export.html" import excel_btn %}
 {% block content %}
+{# Sections number themselves, because the first two are left out
+   for an account that is never given work. #}
+{% set n = counter() %}
+{% if stray_own %}
+<div class="banner">
+  {{ stray_own }} task(s) are still assigned to this account personally.
+  It hands work out rather than receiving it, so there is no "my work"
+  section here —
+  <a href="/tasks?scope=all&status=pending&doer={{ user.id }}">open them</a>
+  to reassign or clear them.
+</div>
+{% endif %}
 <div class="page-head">
   <div>
     <h1>Good day, {{ user.name.split()[0] }}</h1>
@@ -15,10 +27,13 @@
   </div>
 </div>
 
-{# ================================================== 1 · MY WORK ======= #}
+{# ================================================== 1 · MY WORK =======
+   Left out entirely for an account that is never given work — see
+   has_own_work in the dashboard route. #}
+{% if has_own_work %}
 <div class="sect">
   <div class="sect-head">
-    <h2>1 · My work</h2>
+    <h2>{{ n.next() }} · My work</h2>
     <span class="count {{ 'bad' if buckets.overdue }}">{{ open_total }} open</span>
     <span class="sp"></span>
     <a href="/tasks?scope=mine&status=open">See all my tasks →</a>
@@ -74,11 +89,13 @@
 </div>
 {{ task_table(submitted, false) }}
 {% endif %}
+{% endif %}
 
 {# ================================================== 2 · MY SCORE ====== #}
+{% if has_own_work %}
 <div class="sect">
   <div class="sect-head">
-    <h2>2 · My EM score — last 30 days</h2>
+    <h2>{{ n.next() }} · My EM score — last 30 days</h2>
     <span class="count {{ 'bad' if card.band == 'bad' else ('warn' if card.band == 'warn' else '') }}">
       {{ card.score }} / 100</span>
     <span class="sp"></span>
@@ -157,12 +174,13 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 {# ================================================== 3 · MY TEAM ======= #}
 {% if team %}
 <div class="sect">
   <div class="sect-head">
-    <h2>3 · My team — {{ team.window }}</h2>
+    <h2>{{ n.next() }} · My team — {{ team.window }}</h2>
     <span class="count">{{ team.headcount }} employee(s)</span>
     <span class="sp"></span>
     <a href="/reports/score">Full EM score report →</a>

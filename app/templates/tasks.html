@@ -23,17 +23,16 @@
   </div>
 </div>
 
-{# 1 · WHOSE work — the only question that changes what the page is about #}
+{# 1 · WHOSE work — the only question that changes what the page is about.
+   "Assigned to me" is left out for an account that never receives work. #}
+{% if scopes|length > 1 %}
 <div class="tabs">
-  <a class="{{ 'active' if scope=='mine' }}"
-     href="/tasks?scope=mine&status={{ status }}&source={{ source }}">Assigned to me</a>
-  <a class="{{ 'active' if scope=='assigned' }}"
-     href="/tasks?scope=assigned&status={{ status }}&source={{ source }}">Delegation I gave out</a>
-  {% if user.can_manage %}
-  <a class="{{ 'active' if scope=='all' }}"
-     href="/tasks?scope=all&status={{ status }}&source={{ source }}">Everyone</a>
-  {% endif %}
+  {% for k, label in scopes %}
+  <a class="{{ 'active' if scope==k }}"
+     href="/tasks?scope={{ k }}&status={{ status }}&source={{ source }}">{{ label }}</a>
+  {% endfor %}
 </div>
+{% endif %}
 
 {# 2 · WHICH KIND of work #}
 <div class="tabs worktype">
@@ -44,7 +43,7 @@
   {% for k, c in source_tabs.items() %}
   <a class="{{ 'active' if source==k }}"
      href="/tasks?scope={{ scope }}&status={{ status }}&source={{ k }}&doer={{ doer_id or '' }}&branch={{ branch_id or '' }}&dept={{ dept_id or '' }}"
-     title="{{ c.blurb }}">{{ c.label }} <b>{{ counts[k] }}</b></a>
+     title="{{ c.blurb }}">{{ c.label }} <b>{{ counts[k] }}</b></a>{% if k == 'delegation' %}<span class="of">of which</span>{% endif %}
   {% endfor %}
 </div>
 
@@ -55,6 +54,15 @@
      href="/tasks?scope={{ scope }}&status={{ s }}&source={{ source }}&doer={{ doer_id or '' }}&branch={{ branch_id or '' }}&dept={{ dept_id or '' }}">{{ label }}</a>
   {% endfor %}
 </div>
+
+{% if own_open %}
+<p class="sub statusnote">
+  {{ own_open }} task(s) are still assigned to you personally. This account
+  hands work out rather than receiving it, so it has no list of its own —
+  <a href="/tasks?scope=all&status=pending&doer={{ user.id }}">open them here</a>
+  to reassign or clear them.
+</p>
+{% endif %}
 
 {% if status_note %}
 <p class="sub statusnote">{{ status_note }}</p>

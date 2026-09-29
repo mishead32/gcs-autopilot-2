@@ -19,10 +19,21 @@
     {# 1 · Dashboard — and the two things every single person uses daily #}
     <a class="{{ 'active' if p == '/' }}" href="/" title="Dashboard">
       <span class="ic">▤</span><span class="lb">Dashboard</span></a>
-    <a class="{{ 'active' if p == '/tasks' }}" href="/tasks?scope=mine&status=open" title="My Tasks">
-      <span class="ic">✓</span><span class="lb">My Tasks</span></a>
+    {# The admin account hands work out and is never given any, so its own
+       task list is permanently empty. It goes straight to the work it
+       delegated instead. #}
+    <a class="{{ 'active' if p == '/tasks' }}"
+       href="/tasks?scope={{ 'mine' if user.receives_work else 'assigned' }}&status=pending"
+       title="{{ 'My Tasks' if user.receives_work else 'Work you delegated' }}">
+      <span class="ic">✓</span>
+      <span class="lb">{{ 'My Tasks' if user.receives_work else 'All Tasks' }}</span></a>
     <a class="{{ 'active' if p.startswith('/help') }}" href="/help" title="Help Desk">
       <span class="ic">☏</span><span class="lb">Help Desk</span></a>
+    {# Help Desk work is delegation and is scored as delegation, but anybody
+       can raise it, so it is worth being able to look at on its own. #}
+    <a href="/tasks?scope={{ 'all' if user.can_manage else 'mine' }}&status=pending&source=helpdesk"
+       title="Tasks that started as a Help Desk request">
+      <span class="ic">⌁</span><span class="lb">Help Desk tasks</span></a>
 
     {# 2 · Operations — running the work #}
     {% if user.can_manage or user.can_follow_up %}
@@ -32,14 +43,18 @@
         <span class="ic">☎</span><span class="lb">Follow-ups</span></a>
       {% endif %}
       {% if user.can_manage %}
-      <a href="/tasks?scope=assigned&status=open" title="Work you delegated to other people">
+      <a href="/tasks?scope=assigned&status=pending&source=delegation"
+         title="Work you delegated to other people">
         <span class="ic">➜</span><span class="lb">Delegation</span></a>
       <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
         <span class="ic">⇉</span><span class="lb">FMS</span></a>
       <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
         <span class="ic">☑</span><span class="lb">Checklist</span></a>
+      {# Only somebody who can actually decide an audit is shown the queue. #}
+      {% if user.has(AUDIT_RIGHT) %}
       <a href="/tasks?scope=all&status=audit_pending" title="Work finished and waiting to be audited">
         <span class="ic">⚖</span><span class="lb">Audit process</span></a>
+      {% endif %}
       <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
         <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
       {% endif %}

@@ -51,3 +51,27 @@ templates.env.globals["PRIORITY_WEIGHT"] = _PW
 
 from . import flash as _flash                       # noqa: E402
 templates.env.globals["pop_flash"] = _flash.pop
+
+
+class _Counter:
+    """1, 2, 3 … handed out as a page renders.
+
+    Section numbers on the dashboard have to count the sections that are
+    really there: an account that is never given work does not get "My work"
+    or "My score", and a hard-coded 3 on the only remaining section reads as
+    though two are missing.
+    """
+    def __init__(self):
+        self._n = 0
+
+    def next(self) -> int:
+        self._n += 1
+        return self._n
+
+
+templates.env.globals["counter"] = _Counter
+
+# So the menu can ask "may this person decide an audit?" without a role
+# literal in the template.
+from .models import Right as _Right
+templates.env.globals["AUDIT_RIGHT"] = _Right.AUDIT_TASK

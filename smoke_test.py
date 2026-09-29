@@ -1453,13 +1453,21 @@ check("and drops everybody else",
       "an employee from another branch is still listed")
 
 print("\n== the dashboard is organised into sections ==")
-_dash = admin.get("/").text
-for _sec in ["1 · My work", "2 · My EM score", "3 · My team"]:
+# Read as a doer: the admin account hands work out and is never given any, so
+# its dashboard has no "my work" or "my score" at all — that is checked
+# separately further down.
+_dash = doer.get("/").text
+for _sec in ["1 · My work", "2 · My EM score"]:
     check(f"the dashboard has '{_sec}'", _sec in _dash)
 check("it groups my work by type of work", "By type of work" in _dash)
-check("it shows the team average", "Average EM score" in _dash)
-check("with the bifurcation behind it", "Score bifurcation" in _dash)
-check("and a branch-wise roll-up", "Branch-wise" in _dash)
+_mdash = mgr.get("/").text
+check("a manager's dashboard still has the team section", "My team" in _mdash)
+check("and its sections are numbered in order",
+      "1 · My work" in _mdash and "2 · My EM score" in _mdash
+      and "3 · My team" in _mdash)
+check("it shows the team average", "Average EM score" in _mdash)
+check("with the bifurcation behind it", "Score bifurcation" in _mdash)
+check("and a branch-wise roll-up", "Branch-wise" in _mdash)
 
 _ddash = doer.get("/").text
 check("a doer gets the same score sections",
@@ -1753,13 +1761,19 @@ for _k in ("delegation", "checklist", "fms"):
 import re as _re
 _row = _all.text.split("Work type", 1)[1].split("</div>", 1)[0]
 _nums = [int(n) for n in _re.findall(r"<b>(\d+)</b>", _row)]
-check("the tab counts add up", _nums and _nums[0] == sum(_nums[1:]),
+# Five numbers now: All work, Delegation, Help desk, Checklist, FMS. Help
+# desk is a SLICE of delegation, not a fourth kind, so it must not be added
+# into the total — the score counts it as delegation and so does this row.
+check("the row shows all five counts", len(_nums) == 5, _nums)
+check("the tab counts add up",
+      len(_nums) == 5 and _nums[0] == _nums[1] + _nums[3] + _nums[4],
       f"all={_nums[:1]} parts={_nums[1:]}")
 check("and match the database",
-      len(_nums) == 4 and _nums[1:] == [len(_want["delegation"]),
-                                        len(_want["checklist"]),
-                                        len(_want["fms"])],
+      len(_nums) == 5 and [_nums[1], _nums[3], _nums[4]] ==
+      [len(_want["delegation"]), len(_want["checklist"]), len(_want["fms"])],
       f"page {_nums[1:]} vs db {[len(_want[k]) for k in ('delegation','checklist','fms')]}")
+check("help desk never exceeds the delegation it is part of",
+      len(_nums) == 5 and _nums[2] <= _nums[1], _nums)
 
 print("\n== and sorts high priority first ==")
 check("the page says how it is sorted",
@@ -2687,9 +2701,12 @@ check("and appears under Audit completed",
 
 print("\n== Audit completed and False marking have tabs of their own ==")
 _tabs = doer.get("/tasks?scope=mine&status=open").text
-for _lbl in ("Pending", "Overdue", "Coming up", "Completed", "Audit pending",
+# A doer is not offered the auditor's queue — it is a list of decisions they
+# are not allowed to make. What they do get is the result of the audit.
+for _lbl in ("Pending", "Overdue", "Coming up", "Completed",
              "Audit completed", "False marking", "All"):
     check(f"the tab row offers {_lbl}", f">{_lbl}</a>" in _tabs or _lbl in _tabs)
+check("but not the auditor's queue", "status=audit_pending" not in _tabs)
 
 # A flagged task must be findable by the flag, and say so on its row.
 _fm = mgr.post("/tasks/new", data={
@@ -4321,6 +4338,92 @@ with _sl5() as _d:
           {t.id: t.ref for t in _d.query(_T5).all()} == _now5)
 check("and it reports nothing to do",
       not any("numbered" in a for a in _again5), _again5[-3:])
+
+print("\n== the admin assigns work and is never given any ==")
+# One assigner in this company: the admin account. Its own task list and its
+# own score are therefore permanently empty, and an empty section at the top
+# of the page is the first thing it sees every morning.
+_ap = admin.get("/tasks?scope=all&status=pending").text
+check("the admin is not offered an Assigned-to-me tab",
+      ">Assigned to me</a>" not in _ap)
+check("a doer still is",
+      ">Assigned to me</a>" in doer.get("/tasks?scope=mine&status=pending").text)
+check("the admin asking for it anyway lands somewhere useful",
+      "Assigned to me" not in admin.get("/tasks?scope=mine&status=pending").text)
+_dash_admin = admin.get("/").text
+check("the admin dashboard has no My work section", "My work" not in _dash_admin)
+check("nor a My EM score section", "My EM score" not in _dash_admin)
+check("and it does not open at section 3",
+      "3 · " not in _dash_admin.split("MY TEAM")[0])
+check("the doer's dashboard still has both",
+      "My work" in doer.get("/").text and "My EM score" in doer.get("/").text)
+check("the admin's menu does not say My Tasks", ">My Tasks<" not in _dash_admin)
+check("the doer's menu does", ">My Tasks<" in doer.get("/").text)
+
+print("\n== a doer sees the audit result, not the auditor's queue ==")
+_dt = doer.get("/tasks?scope=mine&status=pending").text
+check("no Audit pending tab for a doer", "status=audit_pending" not in _dt)
+check("Audit completed is there", "status=audit_done" in _dt)
+check("False marking is there", "status=false_mark" in _dt)
+check("no Audit process in the doer's menu", ">Audit process<" not in _dt)
+check("the admin keeps the queue",
+      "status=audit_pending" in _ap and ">Audit process<" in _ap)
+check("an auditor who is not an admin keeps it too",
+      "status=audit_pending" in mgr.get("/tasks?scope=all&status=pending").text)
+# An old bookmark to the queue must not dump a doer on an empty page.
+_bm = doer.get("/tasks?scope=mine&status=audit_pending")
+check("a doer following an old audit link is redirected, not shown nothing",
+      _bm.status_code == 200 and "status=audit_done" in _bm.text)
+check("and lands on Completed", ">Completed</a>" in _bm.text
+      and 'class="active"' in _bm.text)
+# The whole point of Audit completed for a doer: the remark.
+_ac = doer.get("/tasks?scope=mine&status=audit_done").text
+check("the Audit completed tab opens for a doer", "Audit completed" in _ac)
+
+print("\n== Help Desk work is delegation, shown on its own ==")
+from app.db import SessionLocal as _sl6
+from app.models import (Task as _T6, TaskSource as _S6, HelpTicket as _H6)
+
+_hr = doer.post("/help/new", data={
+    "subject": f"SMOKE helpdesk tab {RUN}", "details": "please help",
+    "helper_id": "7", "priority": "medium", "needed_by": "2026-12-30T17:00"})
+check("anyone can raise a Help Desk request", _hr.status_code == 200, _hr.status_code)
+with _sl6() as _d:
+    _tk = _d.query(_H6).filter(_H6.subject == f"SMOKE helpdesk tab {RUN}").one()
+    check("it created a task", _tk.task_id is not None)
+    _ht = _d.get(_T6, _tk.task_id)
+    check("and that task is delegation, so it scores as delegation",
+          _ht.source == _S6.DELEGATION, _ht.source)
+    check("it gets a DEL- reference like any other delegation task",
+          _ht.ref.startswith("DEL-"), _ht.ref)
+    _hid = _ht.id
+
+_hd = admin.get("/tasks?scope=all&status=pending&source=helpdesk").text
+check("the Help desk tab exists", "Help desk" in _hd)
+check("and holds the help-desk task", f'/tasks/{_hid}"' in _hd)
+_dg = admin.get("/tasks?scope=all&status=pending&source=delegation").text
+check("the same task is still under Delegation", f'/tasks/{_hid}"' in _dg)
+
+# A plain delegated task must NOT appear under Help desk.
+_pr6 = mgr.post("/tasks/new", data={
+    "title": f"SMOKE not helpdesk {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-30T23:59"})
+_pid6 = int(re.findall(r"/tasks/(\d+)/comment", _pr6.text)[0])
+check("ordinary delegation is under Delegation",
+      f'/tasks/{_pid6}"' in admin.get(
+          "/tasks?scope=all&status=pending&source=delegation").text)
+check("but not under Help desk",
+      f'/tasks/{_pid6}"' not in admin.get(
+          "/tasks?scope=all&status=pending&source=helpdesk").text)
+check("checklist work is not under Help desk either",
+      "CL-" not in admin.get(
+          "/tasks?scope=all&status=all&source=helpdesk").text)
+check("anybody can reach the Help desk list from the menu",
+      "source=helpdesk" in doer.get("/").text
+      and "source=helpdesk" in admin.get("/").text)
+_hx = admin.get("/tasks?scope=all&status=all&source=helpdesk&export=xlsx")
+check("the Help desk list downloads as Excel", _hx.status_code == 200,
+      _hx.status_code)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

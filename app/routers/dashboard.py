@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -76,6 +76,15 @@ def home(request: Request, user: User = Depends(current_user), db: Session = Dep
         "user": user,
         "buckets": buckets,
         "by_source": by_source,
+        # The admin account assigns work; it is never given any. Sections
+        # about "my work" and "my score" are then four zeroes and a chart of
+        # nothing, sitting above the numbers they actually opened the page
+        # for. Driven by whether they have EVER been a doer rather than by
+        # the role alone, so a manager who does carry work still sees theirs.
+        "has_own_work": user.receives_work,
+        # Work still sitting on an account that is not supposed to have any.
+        # The sections are gone, but the number is not swallowed.
+        "stray_own": 0 if user.receives_work else len(mine),
         "open_total": len(mine),
         "submitted": submitted,
         "card": card,

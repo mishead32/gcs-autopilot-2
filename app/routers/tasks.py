@@ -103,12 +103,28 @@ PRIORITY_RANK = case(
 SOURCE_TABS = {
     "delegation": {"src": TaskSource.DELEGATION, "label": "Delegation",
                    "blurb": "one-off work somebody assigned you"},
+    "helpdesk": {"src": TaskSource.DELEGATION, "label": "Help desk",
+                 "help": True,
+                 "blurb": "work that started as a Help Desk request — "
+                          "delegation, and scored as delegation, but raised "
+                          "by whoever needed the help rather than by a manager"},
     "checklist": {"src": TaskSource.RECURRING, "label": "Checklist",
                   "blurb": "your repeating daily and weekly jobs"},
     "fms": {"src": TaskSource.FLOW, "label": "FMS",
             "blurb": "steps inside a running flow"},
 }
-SOURCE_KEY = {v["src"]: k for k, v in SOURCE_TABS.items()}
+# Only the three real sources map back from a stored value. Help desk is a
+# slice of Delegation, not a fourth kind, because the score has to keep
+# counting it as delegation — a person who gets asked for help all day is
+# still doing delegated work.
+SOURCE_KEY = {TaskSource.DELEGATION: "delegation",
+              TaskSource.RECURRING: "checklist",
+              TaskSource.FLOW: "fms"}
+
+
+def _help_desk_ids():
+    """Every task that exists because somebody raised a Help Desk request."""
+    return select(HelpTicket.task_id).where(HelpTicket.task_id.is_not(None))
 
 # The tabs, in the order they are shown, and what each one is called.
 #
@@ -143,6 +159,43 @@ STATUS_ALIASES = {"open": "pending", "audit": "audit_pending"}
 # One plain sentence per tab, so nobody has to guess what a tab counts.
 # "Pending" is deliberately spelled out as overdue + still to come, because
 # that is the number people quote in a meeting.
+def visible_status_tabs(user) -> list[tuple[str, str]]:
+    """The state tabs this person should be offered.
+
+    Audit pending is an auditor's queue — a list of other people's work
+    waiting on a decision they are not allowed to make. Showing it to a doer
+    gives them a tab that is either empty or full of things they can only
+    look at. What a doer does need is the other side of the audit: what came
+    back approved, and what was flagged as false marking, both of which carry
+    the auditor's remark.
+    """
+    if user.has(Right.AUDIT_TASK):
+        return list(STATUS_TABS)
+    return [(k, lbl) for k, lbl in STATUS_TABS if k != "audit_pending"]
+
+
+def visible_scopes(user) -> list[tuple[str, str]]:
+    """Whose work this person can look at.
+
+    "Assigned to me" is dropped for an admin or owner. There is one assigner
+    in this company and it is the admin account; nobody hands work to it, so
+    that tab is permanently empty, and an empty tab in the first position is
+    the first thing they see every morning.
+
+    If such an account does still hold work — left over from before, or a
+    checklist rule pointed at it — the tab is still gone, but the page says
+    so and links to it, because silently hiding somebody's own overdue work
+    would be worse than the empty tab this removes.
+    """
+    tabs = []
+    if user.receives_work:
+        tabs.append(("mine", "Assigned to me"))
+    tabs.append(("assigned", "Delegation I gave out"))
+    if user.can_manage:
+        tabs.append(("all", "Everyone"))
+    return tabs
+
+
 STATUS_NOTES = {
     "pending": "Everything still to be done — overdue work and work still "
                "coming up, together.",
@@ -178,6 +231,23 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     status = STATUS_ALIASES.get(status, status)
     if status not in STATUS_LABELS:
         status = "pending"
+
+    status_tabs = visible_status_tabs(user)
+    if status not in dict(status_tabs):
+        # A tab this person is not offered — an auditor's queue reached from
+        # an old link or a bookmark. Send them to the nearest thing they can
+        # actually use rather than showing a list they cannot act on.
+        status = "done" if status == "audit_pending" else "pending"
+
+    scopes = visible_scopes(user)
+    if scope not in dict(scopes):
+        scope = scopes[0][0]
+    # Left-over work on an account that is not supposed to have any. Counted
+    # only for those accounts, so nobody else pays for the query.
+    own_open = 0 if user.receives_work else (db.scalar(
+        select(func.count()).select_from(Task)
+        .where(Task.org_id == user.org_id, Task.doer_id == user.id,
+               Task.status.in_(OPEN_STATES))) or 0)
 
     if scope == "mine":
         q = q.where(Task.doer_id == user.id)
@@ -247,6 +317,9 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     # to find out where your day has gone.
     counts = {k: 0 for k in SOURCE_TABS}
     _sub = q.subquery()
+    counts["helpdesk"] = db.scalar(
+        select(func.count()).select_from(_sub)
+        .where(_sub.c.id.in_(_help_desk_ids()))) or 0
     for src, n in db.execute(select(_sub.c.source, func.count())
                              .select_from(_sub).group_by(_sub.c.source)).all():
         # A subquery column hands back the raw stored value on some backends
@@ -257,13 +330,17 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
                   or m.name == str(src).upper()), None))
         if key:
             counts[key] = n
-    counts["all"] = sum(counts[k] for k in SOURCE_TABS)
+    # Help desk tasks are already inside the delegation count, so adding them
+    # again would show a total larger than the list it heads.
+    counts["all"] = sum(counts[k] for k in SOURCE_TABS if k != "helpdesk")
 
     # Which kind of work. A doer's three kinds land in one list, and until now
     # the only way to tell them apart was to read the Source column row by row.
     source = source if source in SOURCE_TABS else ""
     if source:
         q = q.where(Task.source == SOURCE_TABS[source]["src"])
+        if SOURCE_TABS[source].get("help"):
+            q = q.where(Task.id.in_(_help_desk_ids()))
 
     if col_name in ("finished_at", "audited_at", "false_marked_at"):
         order = (col.desc(),)                     # newest first
@@ -306,7 +383,8 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         "user": user, "tasks": tasks, "status": status, "scope": scope,
         "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
         "ref_q": ref.strip(),
-        "status_tabs": STATUS_TABS, "status_labels": STATUS_LABELS,
+        "status_tabs": status_tabs, "scopes": scopes, "own_open": own_open,
+        "status_labels": STATUS_LABELS,
         "status_note": STATUS_NOTES.get(status, ""),
         "sort_label": sort_label,
         "people": people, "branches": branches, "depts": depts,

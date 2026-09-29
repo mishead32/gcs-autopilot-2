@@ -725,3 +725,9 @@ tr.held td{background:#fffdf5}
   font-variant-numeric:tabular-nums;color:var(--muted)}
 .refid:hover{color:var(--ink)}
 h1 .refid{font-size:14px;margin-right:8px}
+
+/* "Delegation 165 — of which — Help desk 12": the Help desk tab is a slice
+   of the delegation count, not a fourth kind of work, and the row has to
+   say so or the numbers look as though they do not add up. */
+.tabs.worktype .of{font-size:10px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);margin:0 2px;opacity:.75}

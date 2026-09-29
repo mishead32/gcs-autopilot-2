@@ -392,6 +392,21 @@ class User(Base):
 
     # --- shorthands the templates use, so views stay free of role literals ---
     @property
+    def receives_work(self) -> bool:
+        """Whether this account is ever on the receiving end of a task.
+
+        There is one assigner in this company and it is the admin account.
+        Owner and admin hand work out; nobody hands work to them. Their
+        "Assigned to me" list and their own EM score are therefore
+        permanently empty, and an empty section at the top of the page is
+        the first thing they see every morning.
+
+        Pages that can afford a query check the tasks table as well, so an
+        admin who genuinely has been given something still sees it.
+        """
+        return self.role not in (Role.OWNER, Role.ADMIN)
+
+    @property
     def can_manage(self) -> bool:
         """Sees the Operations / Insight sections of the menu."""
         return self.role in (Role.OWNER, Role.ADMIN, Role.MANAGER)
