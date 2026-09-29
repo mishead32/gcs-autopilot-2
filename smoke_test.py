@@ -4541,5 +4541,145 @@ check("the range view still works without the filters",
       "day by day" in _pc.get(
           f"/followups?desk=pc&date_from=2026-09-01&date_to={_today7}").text)
 
+print("\n== the EM score can be put in a window ==")
+from datetime import date as _dt8, datetime as _dtt8, timedelta as _td8
+from app.services import scoring as _sc8
+from app import clock as _ck8
+from app.db import SessionLocal as _sl8
+from app.models import (Task as _T8, TaskStatus as _ST8, User as _U8)
+
+check("there are five windows to choose from", len(_sc8.PERIODS) == 5,
+      [k for k, _ in _sc8.PERIODS])
+for _k in ("this_week", "last_week", "days30", "all", "custom"):
+    check(f"'{_k}' is one of them", _k in _sc8.PERIOD_LABELS)
+
+# The week maths, walked over a whole year rather than spot-checked. A week
+# here is Monday to Saturday, because Sunday is the weekly off.
+_bad8 = []
+_d8 = _dt8(2026, 1, 1)
+while _d8 < _dt8(2027, 1, 1):
+    _mon, _sat = _sc8.week_bounds(_d8)
+    if _mon.weekday() != 0 or _sat.weekday() != 5:
+        _bad8.append(("not Mon-Sat", _d8, _mon, _sat))
+    if not (_mon <= _d8 <= _sat + _td8(days=1)):
+        _bad8.append(("day outside its own week", _d8, _mon, _sat))
+    if (_sat - _mon).days != 5:
+        _bad8.append(("week is not 6 days", _d8, (_sat - _mon).days))
+    _d8 += _td8(days=1)
+check("every day of 2026 lands in a Monday-to-Saturday week", not _bad8,
+      _bad8[:3])
+check("a Sunday belongs to the week that just ended",
+      _sc8.week_bounds(_dt8(2026, 10, 4))[0] == _dt8(2026, 9, 28),
+      _sc8.week_bounds(_dt8(2026, 10, 4)))
+
+_today8 = _ck8.today()
+_tw = _sc8.named_window("this_week")
+_lw = _sc8.named_window("last_week")
+check("this week starts on a Monday", _tw[0].weekday() == 0, _tw[0])
+check("last week starts on a Monday", _lw[0].weekday() == 0, _lw[0])
+check("last week ends on a Saturday", _lw[1].weekday() == 5, _lw[1])
+check("last week is the week before this one",
+      (_tw[0].date() - _lw[0].date()).days == 7,
+      (_tw[0].date(), _lw[0].date()))
+check("the two weeks do not overlap", _lw[1] < _tw[0], (_lw[1], _tw[0]))
+check("last week is a full six days",
+      (_lw[1].date() - _lw[0].date()).days == 5)
+
+# The important one: a part-finished week must not be scored as a whole one.
+check("this week never counts past the end of today",
+      _tw[1].date() <= _today8, (_tw[1].date(), _today8))
+if _today8.weekday() < 5:
+    check("and it says so, rather than quietly scoring half a week",
+          "not counted until it is due" in _tw[3], _tw[3])
+
+check("no window runs into the future",
+      all(_sc8.named_window(_k)[1].date() <= _today8
+          for _k, _ in _sc8.PERIODS), "a window ends after today")
+
+# Overall must start at the person's own first task, not an invented date.
+with _sl8() as _d:
+    _amit8 = _d.query(_U8).filter(_U8.email == "amit@gcs.local").one()
+    _first8 = min(t.due_at for t in _d.query(_T8)
+                  .filter(_T8.doer_id == _amit8.id).all())
+_ov = _sc8.named_window("all", earliest=_first8.date())
+check("Overall starts at that person's first task",
+      _ov[0].date() == _first8.date(), (_ov[0].date(), _first8.date()))
+check("and runs to today", _ov[1].date() == _today8)
+
+_cu = _sc8.named_window("custom", "2026-09-01", "2026-09-15")
+check("a picked range is used exactly",
+      (_cu[0].date(), _cu[1].date()) == (_dt8(2026, 9, 1), _dt8(2026, 9, 15)),
+      (_cu[0].date(), _cu[1].date()))
+check("a backwards range is turned the right way round",
+      _sc8.named_window("custom", "2026-09-15", "2026-09-01")[0].date()
+      == _dt8(2026, 9, 1))
+check("a picked range cannot reach into the future",
+      _sc8.named_window("custom", "2026-09-01", "2030-01-01")[1].date() == _today8)
+
+# The scores themselves have to differ by window, and match a hand count.
+def _hand_score(uid, start, end):
+    """Work out 'planned' and 'closed' the long way, straight off the rows.
+
+    Counted in SCORE WEIGHT, not in tasks — high priority is worth 5, medium
+    2, low 1 — because that is what the scorecard measures. Counting rows
+    here instead is how you write a test that agrees with itself and not
+    with the software.
+    """
+    from app.models import PARKED_STATES as _PK8
+    with _sl8() as _d:
+        rows = _d.query(_T8).filter(_T8.doer_id == uid).all()
+        planned = sum(t.weight for t in rows
+                      if start <= t.due_at <= end and t.status not in _PK8)
+        closed = sum(t.weight for t in rows
+                     if t.closed_at and start <= t.closed_at <= end)
+    return planned, closed
+
+with _sl8() as _d:
+    _card_all = _sc8.user_scorecard(_d, _amit8, start=_ov[0], end=_ov[1])
+    _card_lw = _sc8.user_scorecard(_d, _amit8, start=_lw[0], end=_lw[1])
+_p_all, _c_all = _hand_score(_amit8.id, _ov[0], _ov[1])
+_p_lw, _c_lw = _hand_score(_amit8.id, _lw[0], _lw[1])
+check("Overall counts every task that person was ever given",
+      _card_all.planned == _p_all, (_card_all.planned, _p_all))
+check("last week counts only that week's",
+      _card_lw.planned == _p_lw, (_card_lw.planned, _p_lw))
+check("and the two really are different windows", _p_all >= _p_lw)
+check("a score is always between 0 and 100",
+      all(0 <= c.score <= 100 for c in (_card_all, _card_lw)),
+      (_card_all.score, _card_lw.score))
+
+# Now the page itself.
+for _k, _label in _sc8.PERIODS:
+    _pg8 = doer.get(f"/?period={_k}")
+    check(f"the dashboard opens on '{_label}'", _pg8.status_code == 200, _pg8.status_code)
+    check(f"and its heading says so", _label.lower() in _pg8.text.lower(), _label)
+_base8 = doer.get("/").text
+for _k, _label in _sc8.PERIODS:
+    check(f"the '{_label}' button is on the page", f"/?period={_k}" in _base8)
+check("the default window is the last 30 days", "last 30 days" in _base8.lower())
+check("the window is spelled out under the heading",
+      "31 Aug" in _base8 or "to 29 Sep" in _base8 or "Everything up to" in _base8
+      or _re.search(r"\d\d [A-Z][a-z]{2}", _base8) is not None)
+
+_cust8 = doer.get("/?period=custom&date_from=2026-09-01&date_to=2026-09-15")
+check("picking dates works from the page", _cust8.status_code == 200)
+check("and the page offers the two date boxes",
+      'name="date_from"' in _cust8.text and 'name="date_to"' in _cust8.text)
+check("a nonsense period falls back rather than erroring",
+      doer.get("/?period=banana").status_code == 200)
+
+# The live refresh must follow the same window as the heading.
+check("the live refresh asks for the window on screen",
+      "period=this_week" in doer.get("/?period=this_week").text)
+_api8 = doer.get("/api/my-score?period=last_week")
+check("the score API takes a period", _api8.status_code == 200, _api8.status_code)
+check("and returns that window's score",
+      abs(_api8.json()["score"] - _card_lw.score) < 0.05,
+      (_api8.json()["score"], _card_lw.score))
+check("the old days= call still works",
+      doer.get("/api/my-score?days=30").status_code == 200)
+check("'What I completed' follows the same dates",
+      "date_from=" in doer.get("/?period=last_week").text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -95,12 +95,31 @@
 {% if has_own_work %}
 <div class="sect">
   <div class="sect-head">
-    <h2>{{ n.next() }} · My EM score — last 30 days</h2>
+    <h2>{{ n.next() }} · My EM score — {{ period_label|lower }}</h2>
     <span class="count {{ 'bad' if card.band == 'bad' else ('warn' if card.band == 'warn' else '') }}">
       {{ card.score }} / 100</span>
     <span class="sp"></span>
-    <a href="/tasks?scope=mine&status=done">What I completed →</a>
+    <a href="/tasks?scope=mine&status=done&date_from={{ score_from }}&date_to={{ score_to }}">What I completed →</a>
   </div>
+
+  {# The window the score is measured over. A week here is Monday to
+     Saturday, because Sunday is the weekly off. #}
+  <div class="tabs scoreperiod">
+    {% for k, label in periods %}
+    <a class="{{ 'active' if period == k }}" href="/?period={{ k }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  {% if period == 'custom' %}
+  <form method="get" action="/" class="card daterange" style="margin-bottom:12px">
+    <input type="hidden" name="period" value="custom">
+    <div><label>From</label>
+      <input type="date" name="date_from" value="{{ score_from }}"></div>
+    <div><label>To</label>
+      <input type="date" name="date_to" value="{{ score_to }}"></div>
+    <div class="acts"><button class="btn">Show score</button></div>
+  </form>
+  {% endif %}
+  <p class="sub" style="margin:-4px 0 10px">{{ period_note }}</p>
   <p class="sect-note">
     Each kind of work can only cost you as much as its own benchmark.
     High priority counts 5×, medium 2×, low 1×.
@@ -301,7 +320,11 @@
 (function(){
   function set(sel, v){ var e = document.querySelector(sel); if (e) e.textContent = v; }
   setInterval(function(){
-    fetch('/api/my-score?days=30').then(function(r){ return r.ok ? r.json() : null; })
+    // Refresh the SAME window the page is showing. Asking for 30 days here
+    // would make the panel flick back to a different score every few
+    // seconds while the heading still said "this week".
+    fetch('/api/my-score?period={{ period }}&date_from={{ score_from }}&date_to={{ score_to }}')
+      .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
         if (!d) return;
         (d.sources || []).forEach(function(s){

@@ -49,7 +49,7 @@ Then, once for the whole scorecard:
   gap           = net score - 100                          e.g. -55
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -84,6 +84,81 @@ def resolve_window(date_from: str | None, date_to: str | None,
     end = clock.now().replace(hour=23, minute=59, second=59)
     start = (end - timedelta(days=d - 1)).replace(hour=0, minute=0, second=0)
     return start, end
+
+
+# The named windows a person can put their own score in. The working week
+# here is Monday to Saturday — Sunday is the weekly off almost everywhere in
+# the group — so a "week" means Mon–Sat, not Mon–Sun.
+PERIODS = [
+    ("this_week", "This week"),
+    ("last_week", "Last week"),
+    ("days30", "Last 30 days"),
+    ("all", "Overall"),
+    ("custom", "Pick dates"),
+]
+PERIOD_LABELS = dict(PERIODS)
+WEEK_START = 0        # Monday, as date.weekday() counts
+WEEK_END = 5          # Saturday
+
+
+def week_bounds(on: date) -> tuple[date, date]:
+    """The Monday and the Saturday of the week `on` falls in."""
+    monday = on - timedelta(days=on.weekday())
+    return monday, monday + timedelta(days=WEEK_END)
+
+
+def named_window(period: str, date_from: str = "", date_to: str = "",
+                 earliest: date | None = None) -> tuple[datetime, datetime, str, str]:
+    """Turn a period name into a window, plus how to describe it.
+
+    Returns (start, end, label, note). The note says anything the person
+    needs to know about the window that the dates alone do not show.
+
+    A window is never allowed to run past the end of today. That matters most
+    for "this week": on a Tuesday, work due on Friday has not been missed —
+    counting it as not done would hand everybody a terrible score at the
+    start of every week and a good one by Saturday, which measures the day
+    of the week rather than the person.
+    """
+    today = clock.today()
+    day_end = datetime.combine(today, datetime.max.time())
+
+    if period == "custom":
+        if date_from or date_to:
+            start, end = resolve_window(date_from or date_to, date_to or date_from)
+        else:
+            # Clicking "Pick dates" before picking any. The boxes open on the
+            # last 30 days so there is something sensible to adjust, rather
+            # than two empty fields and a score that quietly came from
+            # somewhere else.
+            start, end = resolve_window(None, None, 30)
+        end = min(end, day_end)
+        return start, end, "Pick dates", f"{start:%d %b %Y} to {end:%d %b %Y}"
+
+    if period == "last_week":
+        mon, sat = week_bounds(today - timedelta(days=7))
+        return (datetime.combine(mon, datetime.min.time()),
+                datetime.combine(sat, datetime.max.time()),
+                "Last week", f"Mon {mon:%d %b} to Sat {sat:%d %b}")
+
+    if period == "this_week":
+        mon, sat = week_bounds(today)
+        end = min(datetime.combine(sat, datetime.max.time()), day_end)
+        note = f"Mon {mon:%d %b} to Sat {sat:%d %b}"
+        if end < datetime.combine(sat, datetime.max.time()):
+            # Say it plainly rather than quietly scoring half a week as if it
+            # were a whole one.
+            note = (f"Mon {mon:%d %b} to today — the rest of the week is not "
+                    f"counted until it is due")
+        return datetime.combine(mon, datetime.min.time()), end, "This week", note
+
+    if period == "all":
+        start = datetime.combine(earliest or date(2020, 1, 1),
+                                 datetime.min.time())
+        return start, day_end, "Overall", f"Everything up to {today:%d %b %Y}"
+
+    start, end = resolve_window(None, None, 30)
+    return start, end, "Last 30 days", f"{start:%d %b} to {end:%d %b %Y}"
 
 
 def _neg(x: float) -> float:

@@ -28,7 +28,9 @@ SOURCE_TABS = [
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def home(request: Request, period: str = "days30",
+         date_from: str = "", date_to: str = "",
+         user: User = Depends(current_user), db: Session = Depends(get_db)):
     """The dashboard, in three clear parts.
 
       1. My work        — what is on my plate, split by urgency and by type
@@ -66,7 +68,17 @@ def home(request: Request, user: User = Depends(current_user), db: Session = Dep
         "report": f"/tasks?scope=mine&status=open&source={key}",
     } for (src, label), key in zip(SOURCE_TABS, ("delegation", "checklist", "fms"))]
 
-    card = scoring.user_scorecard(db, user, days=30)
+    # The score, in whichever window the person picked. "Overall" needs to
+    # know how far back their own work goes, so the window starts at their
+    # first task rather than at an invented date.
+    if period not in scoring.PERIOD_LABELS:
+        period = "days30"
+    earliest = db.scalar(
+        select(func.min(Task.due_at)).where(Task.doer_id == user.id))
+    s_start, s_end, s_label, s_note = scoring.named_window(
+        period, date_from, date_to,
+        earliest.date() if earliest else None)
+    card = scoring.user_scorecard(db, user, start=s_start, end=s_end)
 
     team = None
     if user.role in (Role.OWNER, Role.ADMIN, Role.MANAGER):
@@ -88,6 +100,10 @@ def home(request: Request, user: User = Depends(current_user), db: Session = Dep
         "open_total": len(mine),
         "submitted": submitted,
         "card": card,
+        "period": period, "periods": scoring.PERIODS,
+        "period_label": s_label, "period_note": s_note,
+        "score_from": s_start.date().isoformat(),
+        "score_to": s_end.date().isoformat(),
         "team": team,
     })
 
@@ -236,9 +252,16 @@ def stats_api(date_from: str = "", date_to: str = "", branch: str = "",
 
 
 @router.get("/api/my-score")
-def my_score_api(days: int = 30, user: User = Depends(current_user),
+def my_score_api(days: int = 30, period: str = "", date_from: str = "",
+                 date_to: str = "", user: User = Depends(current_user),
                  db: Session = Depends(get_db)):
     """Live refresh for the doer's own score panel."""
+    if period:
+        earliest = db.scalar(
+            select(func.min(Task.due_at)).where(Task.doer_id == user.id))
+        start, end, _, _ = scoring.named_window(
+            period, date_from, date_to, earliest.date() if earliest else None)
+        return _pack(scoring.user_scorecard(db, user, start=start, end=end))
     return _pack(scoring.user_scorecard(db, user, days=days))
 
 

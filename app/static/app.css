@@ -748,3 +748,6 @@ h1 .refid{font-size:14px;margin-right:8px}
 .tabs.fu-when a.active b{background:rgba(255,255,255,.22);color:#fff}
 .tabs.fu-when .clearf{border:0;background:none;color:var(--muted);
   text-decoration:underline;padding-left:6px}
+
+/* Which window the EM score is measured over. */
+.tabs.scoreperiod{margin:10px 0 6px}
