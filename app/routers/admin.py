@@ -10,7 +10,10 @@ from ..models import (
     User, Role, Branch, Department, Right, RIGHT_LABELS, DEFAULT_RIGHTS,
     Task, TaskComment, Attachment, RecurringRule, Flow, FlowStep, FlowInstance,
     OutboundMessage, HelpTicket, Holiday, Followup,
+    TaskSource, TaskStatus, AuditState, REF_PREFIX,
 )
+from .. import flash
+from .tasks import OPEN_STATES
 from ..security import hash_password
 from ..services import xlsx
 from ..templating import templates
@@ -647,3 +650,103 @@ def _rights_text(u: User) -> str:
         return "All rights"
     held = [RIGHT_LABELS[r] for r in Right if r.value in u.right_set]
     return ", ".join(held) if held else "Execute only"
+
+
+# =========================================================== master delete ==
+# Clearing out a whole kind of work in one go. There is no undo, and the
+# software will not ask twice — so the page shows exactly what is about to
+# disappear and the person has to type the words before the button does
+# anything.
+PURGE_KINDS = {
+    "delegation": {
+        "src": TaskSource.DELEGATION, "label": "Delegation",
+        "phrase": "DELETE ALL DELEGATION",
+        "note": "One-off work somebody assigned to a person. Checklist and "
+                "FMS tasks are not touched.",
+    },
+}
+
+
+def _purge_stats(db: Session, org_id: int, src: TaskSource) -> dict:
+    """What the delete is about to take, counted before it takes it."""
+    ids = select(Task.id).where(Task.org_id == org_id, Task.source == src)
+    n = db.scalar(select(func.count()).select_from(
+        select(Task.id).where(Task.org_id == org_id,
+                              Task.source == src).subquery())) or 0
+    return {
+        "tasks": n,
+        "audit_pending": db.scalar(select(func.count()).where(
+            Task.org_id == org_id, Task.source == src,
+            Task.audit_state == AuditState.PENDING).select_from(Task)) or 0,
+        "audit_done": db.scalar(select(func.count()).where(
+            Task.org_id == org_id, Task.source == src,
+            Task.audit_state == AuditState.COMPLETED).select_from(Task)) or 0,
+        "open": db.scalar(select(func.count()).where(
+            Task.org_id == org_id, Task.source == src,
+            Task.status.in_(OPEN_STATES)).select_from(Task)) or 0,
+        "notes": db.scalar(select(func.count()).select_from(TaskComment)
+                           .where(TaskComment.task_id.in_(ids))) or 0,
+        "files": db.scalar(select(func.count()).select_from(Attachment)
+                           .where(Attachment.task_id.in_(ids))) or 0,
+        "followups": db.scalar(select(func.count()).select_from(Followup)
+                               .where(Followup.task_id.in_(ids))) or 0,
+        "tickets": db.scalar(select(func.count()).select_from(HelpTicket)
+                             .where(HelpTicket.task_id.in_(ids))) or 0,
+    }
+
+
+@router.get("/purge/{kind}", response_class=HTMLResponse)
+def purge_form(kind: str, request: Request,
+               user: User = Depends(require_right(Right.DELETE_TASK)),
+               db: Session = Depends(get_db)):
+    cfg = PURGE_KINDS.get(kind)
+    if not cfg:
+        raise HTTPException(404, "Nothing of that kind to clear")
+    if not user.has_manage_user:
+        raise HTTPException(
+            403, "Clearing out every task of one kind is an admin job.")
+    return templates.TemplateResponse(request, "admin_purge.html", {
+        "user": user, "kind": kind, "cfg": cfg,
+        "stats": _purge_stats(db, user.org_id, cfg["src"]),
+    })
+
+
+@router.post("/purge/{kind}")
+def purge(kind: str, request: Request, confirm: str = Form(""),
+          user: User = Depends(require_right(Right.DELETE_TASK)),
+          db: Session = Depends(get_db)):
+    cfg = PURGE_KINDS.get(kind)
+    if not cfg:
+        raise HTTPException(404, "Nothing of that kind to clear")
+    if not user.has_manage_user:
+        raise HTTPException(
+            403, "Clearing out every task of one kind is an admin job.")
+    if confirm.strip().upper() != cfg["phrase"]:
+        raise HTTPException(
+            400, f"Type {cfg['phrase']} exactly to confirm. Nothing was deleted.")
+
+    ids = [r[0] for r in db.execute(
+        select(Task.id).where(Task.org_id == user.org_id,
+                              Task.source == cfg["src"])).all()]
+    if not ids:
+        flash.set(request, "info", f"There were no {cfg['label']} tasks to clear.")
+        return RedirectResponse("/admin/users", status_code=303)
+
+    # Same five tables as deleting one task, done in bulk. The order matters:
+    # everything pointing AT a task goes first, or the database refuses.
+    db.execute(update(OutboundMessage)
+               .where(OutboundMessage.task_id.in_(ids)).values(task_id=None))
+    db.execute(delete(HelpTicket).where(HelpTicket.task_id.in_(ids)))
+    db.execute(delete(Followup).where(Followup.task_id.in_(ids)))
+    db.execute(delete(Attachment).where(Attachment.task_id.in_(ids)))
+    db.execute(delete(TaskComment).where(TaskComment.task_id.in_(ids)))
+    db.execute(delete(Task).where(Task.id.in_(ids)))
+    db.commit()
+
+    # The numbering follows what is left, so with every delegation task gone
+    # the next one assigned is DEL-01 again — which is the point of doing
+    # this rather than deleting them one by one.
+    flash.set(request, "deleted",
+              f"{len(ids)} {cfg['label']} task(s) cleared. "
+              f"The next one will be {REF_PREFIX[cfg['src']]}-01.")
+    return RedirectResponse("/admin/users", status_code=303)

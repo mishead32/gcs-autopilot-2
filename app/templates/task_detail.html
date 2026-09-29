@@ -2,7 +2,7 @@
 {% from "_uploader.html" import uploader, attachment_list %}
 {% block content %}
 <p class="sub"><a href="/tasks">&larr; All tasks</a></p>
-<h1>{{ task.title }}</h1>
+<h1>{% if task.ref %}<span class="refid">{{ task.ref }}</span>{% endif %}{{ task.title }}</h1>
 <p class="sub">
   <span class="chip {{ task.priority.value }}"
         title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>

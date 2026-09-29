@@ -15,7 +15,7 @@ from ..deps import current_user, manager_up, can_view_task, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
-    HelpTicket, HelpStatus,
+    HelpTicket, HelpStatus, REF_PREFIX,
     Followup
 )
 from ..services import notify, flows as flow_svc, storage, holidays, xlsx
@@ -170,7 +170,7 @@ def _parse_day(raw: str):
 @router.get("/tasks", response_class=HTMLResponse)
 def task_list(request: Request, status: str = "pending", scope: str = "mine",
               date_from: str = "", date_to: str = "", source: str = "",
-              doer: str = "", branch: str = "", dept: str = "",
+              doer: str = "", branch: str = "", dept: str = "", ref: str = "",
               export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _visible_tasks_query(user)
@@ -202,6 +202,17 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         # a bug the first time somebody moves between departments.
         q = q.where(Task.doer_id.in_(
             select(User.id).where(User.department_id == dept_id)))
+
+    # Looking one up by the reference people quote to each other. Typing the
+    # number alone is enough ("14" finds DEL-14 on the Delegation tab), and
+    # a reference overrides the status tab, because somebody searching for
+    # DEL-14 wants DEL-14 whichever state it turned out to be in.
+    ref_q = ref.strip().upper().replace(" ", "")
+    if ref_q:
+        if ref_q.isdigit() and source in SOURCE_TABS:
+            ref_q = f"{REF_PREFIX[SOURCE_TABS[source]['src']]}-{int(ref_q):02d}"
+        q = q.where(func.upper(Task.ref) == ref_q)
+        status = "all"
 
     if status == "pending":
         q = q.where(Task.status.in_(OPEN_STATES))
@@ -294,6 +305,7 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,
         "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
+        "ref_q": ref.strip(),
         "status_tabs": STATUS_TABS, "status_labels": STATUS_LABELS,
         "status_note": STATUS_NOTES.get(status, ""),
         "sort_label": sort_label,

@@ -38,6 +38,9 @@ ADDITIONS = {
         ("decision", "VARCHAR(10)"),
         ("held_from", "VARCHAR(20)"),
         ("covers_day", "DATE"),
+        # The human reference: DEL-01, CL-01, FMS-01. Backfilled below.
+        ("ref", "VARCHAR(20)"),
+        ("ref_n", "INTEGER"),
     ],
     "recurring_rules": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),
@@ -305,4 +308,52 @@ def run() -> list[str]:
                 "UPDATE tasks SET status = 'IN_PROGRESS', "
                 "started_at = COALESCE(started_at, created_at) "
                 "WHERE status = 'PENDING'"))
+
+        # A fresh inspector: the ALTERs above ran on this same
+        # connection, and the one made at the top of run() was
+        # taken before them, so it still believes ref does not
+        # exist and the backfill would quietly do nothing.
+        applied += _backfill_refs(conn, inspect(conn), existing_tables)
     return applied
+
+
+def _backfill_refs(conn, insp, existing_tables: set) -> list[str]:
+    """Give every task that predates the reference column its number.
+
+    Numbered per company and per kind of work, oldest first, so the reference
+    order matches the order the work actually appeared. Runs on every boot
+    and does nothing once every row has one, which also means a task created
+    by some path that bypassed the session listener still gets numbered on
+    the next restart rather than staying blank for ever.
+    """
+    if "tasks" not in existing_tables:
+        return []
+    cols = {c["name"] for c in insp.get_columns("tasks")}
+    if "ref" not in cols or "ref_n" not in cols:
+        return []
+
+    prefixes = {src.name: pref for src, pref in _models.REF_PREFIX.items()}
+    done = []
+    rows = conn.execute(text(
+        "SELECT DISTINCT org_id, CAST(source AS VARCHAR) FROM tasks")).all()
+    for org_id, src_raw in rows:
+        # SQLite stores the member name, PostgreSQL the same; be forgiving
+        # about case either way rather than silently skipping a whole series.
+        key = (src_raw or "DELEGATION").upper()
+        prefix = prefixes.get(key) or prefixes.get(key.replace("-", "_")) or "TSK"
+        used = conn.execute(text(
+            "SELECT COALESCE(MAX(ref_n), 0) FROM tasks "
+            "WHERE org_id = :o AND CAST(source AS VARCHAR) = :s"),
+            {"o": org_id, "s": src_raw}).scalar() or 0
+        blank = conn.execute(text(
+            "SELECT id FROM tasks WHERE org_id = :o "
+            "AND CAST(source AS VARCHAR) = :s AND ref IS NULL "
+            "ORDER BY created_at, id"), {"o": org_id, "s": src_raw}).all()
+        for (task_id,) in blank:
+            used += 1
+            conn.execute(text(
+                "UPDATE tasks SET ref = :r, ref_n = :n WHERE id = :i"),
+                {"r": _models.ref_text(prefix, used), "n": used, "i": task_id})
+        if blank:
+            done.append(f"{len(blank)} task(s) numbered {prefix}-…")
+    return done

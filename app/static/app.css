@@ -716,3 +716,12 @@ tr.held td{background:#fffdf5}
 
 /* The one-line explanation of whichever task tab is open. */
 .statusnote{margin:-2px 0 12px;max-width:74ch}
+
+/* The task's reference — DEL-01, CL-01, FMS-01. Fixed width and tabular
+   figures so a column of them lines up and stays readable at a glance. */
+.refcell{white-space:nowrap;width:1%}
+.refid{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;font-weight:700;letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;color:var(--muted)}
+.refid:hover{color:var(--ink)}
+h1 .refid{font-size:14px;margin-right:8px}

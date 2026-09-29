@@ -3,6 +3,7 @@
 <div class="table-wrap">
 <table>
   <tr>
+    <th>ID</th>
     <th>Task</th>
     {% if show_doer %}<th>Doer</th>{% endif %}
     <th>Priority</th><th>Status</th><th>Audit</th><th>Planned</th>
@@ -10,6 +11,8 @@
   </tr>
   {% for t in tasks %}
   <tr>
+    <td class="refcell"><a href="/tasks/{{ t.id }}" class="refid"
+        title="This task's reference — quote it when you ask about it">{{ t.ref or '—' }}</a></td>
     <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
       {% if t.branch %}<div class="m" style="color:var(--muted);font-size:12px">{{ t.branch.name }}</div>{% endif %}
     </td>

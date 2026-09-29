@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Clear all {{ cfg.label }} tasks · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Clear every {{ cfg.label }} task</h1>
+    <p class="sub">{{ cfg.note }}</p>
+  </div>
+  <div><a class="btn ghost" href="/admin/users">← Back</a></div>
+</div>
+
+{% if stats.tasks %}
+<div class="danger-box">
+  <strong>This cannot be undone.</strong>
+  There is no recycle bin and no restore. Everything listed below is removed
+  from the database and from every report.
+</div>
+
+<div class="card">
+  <strong>What will be deleted</strong>
+  <div class="table-wrap" style="margin-top:12px">
+  <table>
+    <tr><th>What</th><th>How many</th></tr>
+    <tr><td><strong>{{ cfg.label }} tasks</strong></td>
+        <td><strong>{{ stats.tasks }}</strong></td></tr>
+    <tr><td class="m">— still open or in progress</td><td>{{ stats.open }}</td></tr>
+    <tr><td class="m">— waiting on an auditor</td><td>{{ stats.audit_pending }}</td></tr>
+    <tr><td class="m">— already audited</td><td>{{ stats.audit_done }}</td></tr>
+    <tr><td>Notes written on them</td><td>{{ stats.notes }}</td></tr>
+    <tr><td>Files attached to them</td><td>{{ stats.files }}</td></tr>
+    <tr><td>Follow-up ticks against them</td><td>{{ stats.followups }}</td></tr>
+    <tr><td>Help Desk requests that created them</td><td>{{ stats.tickets }}</td></tr>
+  </table>
+  </div>
+  <p class="sub" style="margin-top:12px">
+    Checklist and FMS tasks, every rule and flow that makes them, and every
+    person, branch and department stay exactly as they are. Sent notifications
+    are kept as a record and simply stop pointing at a task.
+  </p>
+</div>
+
+<div class="card">
+  <strong>Confirm</strong>
+  <p class="sub" style="margin:8px 0 0">
+    Type <code>{{ cfg.phrase }}</code> in the box to switch the button on.
+    Once this is done, the next {{ cfg.label|lower }} task you assign will be
+    numbered <strong>{{ cfg.label[:3]|upper if cfg.label != 'Delegation' else 'DEL' }}-01</strong> again.
+  </p>
+  <form method="post" action="/admin/purge/{{ kind }}" style="margin-top:12px"
+        id="purgeForm">
+    <label>Type the words exactly</label>
+    <input name="confirm" id="purgeWord" autocomplete="off" spellcheck="false"
+           placeholder="{{ cfg.phrase }}">
+    <div style="margin-top:14px">
+      <button class="btn danger" id="purgeGo" disabled>
+        Delete all {{ stats.tasks }} {{ cfg.label|lower }} task(s)</button>
+      <a class="btn ghost" href="/admin/users">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+// The button stays off until the words match, so it cannot be hit by accident
+// on the way past. The server checks the same thing again — this is only to
+// stop the mistake, not to enforce the rule.
+(function(){
+  var want = {{ cfg.phrase|tojson }},
+      box = document.getElementById('purgeWord'),
+      go  = document.getElementById('purgeGo');
+  if (!box || !go) return;
+  function check(){ go.disabled = box.value.trim().toUpperCase() !== want; }
+  box.addEventListener('input', check);
+  check();
+})();
+</script>
+{% else %}
+<div class="empty">
+  There are no {{ cfg.label|lower }} tasks to clear. Nothing to do here.
+</div>
+{% endif %}
+{% endblock %}

@@ -10,9 +10,10 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     String, Integer, DateTime, Date, Boolean, ForeignKey, Text, Float, Enum,
-    LargeBinary, UniqueConstraint, event
+    LargeBinary, UniqueConstraint, event, select, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Session as SASession
 
 from . import clock
 from .db import Base
@@ -183,6 +184,22 @@ class TaskSource(str, enum.Enum):
     DELEGATION = "delegation"   # one-off task assigned by a person
     RECURRING = "recurring"     # spawned by a recurrence rule
     FLOW = "flow"               # a step inside a running flow instance
+
+
+# The short name a person says out loud: "DEL-14 is still open", "who has
+# CL-07". Each kind of work counts on its own, so the numbers stay small and
+# the prefix already tells you where to look for it.
+REF_PREFIX = {
+    TaskSource.DELEGATION: "DEL",
+    TaskSource.RECURRING: "CL",
+    TaskSource.FLOW: "FMS",
+}
+
+
+def ref_text(prefix: str, n: int) -> str:
+    """DEL-01 … DEL-99, then DEL-100. Two digits is what people expect to
+    read; past ninety-nine it simply grows rather than wrapping."""
+    return f"{prefix}-{n:02d}"
 
 
 class Recurrence(str, enum.Enum):
@@ -676,6 +693,15 @@ class Task(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
 
+    # The human reference — DEL-01, CL-01, FMS-01. Numbered per company and
+    # per kind of work, so the three series never interleave. Nullable only
+    # so an older database can be upgraded in place; every task gets one.
+    ref: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # The same number as an integer. Kept because "DEL-9" and "DEL-10" sort
+    # the wrong way round as text, and because finding the next number is a
+    # MAX() on this column rather than a string parse.
+    ref_n: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     title: Mapped[str] = mapped_column(String(250))
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -814,6 +840,40 @@ def _on_task_created(mapper, connection, target: "Task") -> None:
     if target.status in (None, TaskStatus.PENDING):
         target.status = TaskStatus.IN_PROGRESS
         target.started_at = target.started_at or clock.now()
+
+
+@event.listens_for(SASession, "before_flush")
+def _number_new_tasks(session: SASession, flush_context, instances) -> None:
+    """Give every new task its DEL-/CL-/FMS- number.
+
+    Done on the session rather than at each creation site because there are
+    five of them — the delegate form, the bulk importer, the checklist
+    spawner, the FMS spawner and the seed — and a task without a reference
+    is a task nobody can quote in a WhatsApp message.
+
+    The next number is MAX(ref_n) + 1 for that company and that kind of work.
+    A batch created together (a 300-row bulk import) is numbered in one pass
+    here, in the order the rows were read, so the spreadsheet's order is the
+    order of the references.
+    """
+    fresh = [o for o in session.new
+             if isinstance(o, Task) and not o.ref and o.org_id]
+    if not fresh:
+        return
+
+    groups: dict[tuple[int, TaskSource], list[Task]] = {}
+    for t in fresh:
+        groups.setdefault((t.org_id, t.source or TaskSource.DELEGATION), []).append(t)
+
+    for (org_id, src), items in groups.items():
+        nxt = (session.execute(
+            select(func.max(Task.ref_n))
+            .where(Task.org_id == org_id, Task.source == src)).scalar() or 0) + 1
+        prefix = REF_PREFIX.get(src, "TSK")
+        for t in items:
+            t.ref_n = nxt
+            t.ref = ref_text(prefix, nxt)
+            nxt += 1
 
 
 class TaskComment(Base):

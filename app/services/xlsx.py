@@ -168,6 +168,7 @@ def wants(value: str) -> bool:
 # report and the Audit report can be read side by side.
 def task_columns(show_doer: bool = True):
     cols = [
+        ("Task ID", lambda t: t.ref or ""),
         ("Task", lambda t: t.title),
         ("Branch", lambda t: t.branch.name if t.branch else ""),
     ]

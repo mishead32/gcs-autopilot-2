@@ -4109,5 +4109,218 @@ check("the auditor can flag false marking", _r.status_code in (200, 303),
 check("and it shows under False marking",
       f'/tasks/{_agid}' in admin.get("/tasks?scope=all&status=false_mark").text)
 
+print("\n== every task carries an ID: DEL-01, CL-01, FMS-01 ==")
+from app.db import SessionLocal as _sl4
+from app.models import (Task as _T4, TaskSource as _S4, REF_PREFIX as _RP4,
+                        ref_text as _rt4, User as _U4)
+
+with _sl4() as _d:
+    _all = _d.query(_T4).all()
+    check("no task is left without a reference",
+          all(t.ref for t in _all),
+          [t.id for t in _all if not t.ref][:5])
+    for _src, _pref in _RP4.items():
+        _rows = sorted([t for t in _all if t.source == _src],
+                       key=lambda t: t.ref_n)
+        if not _rows:
+            continue
+        check(f"{_pref} numbering starts at 1", _rows[0].ref_n == 1,
+              _rows[0].ref)
+        check(f"{_pref} numbering has no gaps and no repeats",
+              [t.ref_n for t in _rows] == list(range(1, len(_rows) + 1)),
+              [t.ref_n for t in _rows][:12])
+        check(f"{_pref} is spelled the way it reads",
+              all(t.ref == _rt4(_pref, t.ref_n) for t in _rows),
+              [t.ref for t in _rows][:3])
+    # The three series must not borrow each other's numbers.
+    _by_pref = {}
+    for t in _all:
+        _by_pref.setdefault(t.ref.split("-")[0], set()).add(t.ref)
+    check("the three series are numbered independently",
+          all(len(v) == len([t for t in _all if t.ref.startswith(k + "-")])
+              for k, v in _by_pref.items()))
+    check("delegation uses DEL", any(r.startswith("DEL-") for r in
+                                     [t.ref for t in _all]))
+    check("checklist uses CL", any(r.startswith("CL-") for r in
+                                   [t.ref for t in _all]))
+    check("FMS uses FMS", any(r.startswith("FMS-") for r in
+                              [t.ref for t in _all]))
+
+# A brand-new task continues the series rather than repeating a number.
+with _sl4() as _d:
+    _before = _d.query(_T4).filter(_T4.source == _S4.DELEGATION).count()
+_nr = mgr.post("/tasks/new", data={
+    "title": f"SMOKE ref continues {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-31T23:59"})
+_nid2 = int(re.findall(r"/tasks/(\d+)/comment", _nr.text)[0])
+with _sl4() as _d:
+    _t = _d.get(_T4, _nid2)
+    check("a new delegation task takes the next number",
+          _t.ref == _rt4("DEL", _before + 1), _t.ref)
+
+check("the ID shows on the task's own page",
+      _t.ref in admin.get(f"/tasks/{_nid2}").text)
+check("and there is an ID column on the list",
+      "<th>ID</th>" in admin.get("/tasks?scope=all&status=all").text)
+check("the list row carries it",
+      _t.ref in admin.get("/tasks?scope=all&status=all").text)
+
+# Looking one up by its reference.
+_found = admin.get(f"/tasks?scope=all&status=pending&ref={_t.ref}").text
+check("searching the ID finds that task", f'/tasks/{_nid2}"' in _found)
+check("and only that task", _found.count('class="refid"') == 1,
+      _found.count('class="refid"'))
+check("the number alone works on a work-type tab",
+      f'/tasks/{_nid2}"' in admin.get(
+          f"/tasks?scope=all&status=pending&source=delegation"
+          f"&ref={_t.ref_n}").text)
+check("a reference that does not exist finds nothing, not everything",
+      admin.get("/tasks?scope=all&status=all&ref=DEL-999999").text.count(
+          'class="refid"') == 0)
+check("an ID found in one state is not hidden by the tab it was searched from",
+      f'/tasks/{_nid2}"' in admin.get(
+          f"/tasks?scope=all&status=audit_done&ref={_t.ref}").text)
+
+# The Excel download has to carry it too, or the file cannot be matched back
+# to the screen it came from.
+import io as _io4
+try:
+    from openpyxl import load_workbook as _lw4
+    _xr = admin.get("/tasks?scope=all&status=all&export=xlsx")
+    _wb4 = _lw4(_io4.BytesIO(_xr.content))
+    _ws4 = _wb4[_wb4.sheetnames[0]]
+    _hdr = [c.value for c in next(_ws4.iter_rows(min_row=1, max_row=8))
+            if c.value]
+    _hdrs = []
+    for _row in _ws4.iter_rows(min_row=1, max_row=8):
+        _vals = [c.value for c in _row if c.value]
+        if "Task" in _vals:
+            _hdrs = _vals
+            break
+    check("the Excel download has a Task ID column", "Task ID" in _hdrs, _hdrs[:6])
+except ImportError:
+    check("openpyxl available to check the export", False)
+
+print("\n== clearing out every delegation task ==")
+with _sl4() as _d:
+    _del_before = _d.query(_T4).filter(_T4.source == _S4.DELEGATION).count()
+    _cl_before = _d.query(_T4).filter(_T4.source == _S4.RECURRING).count()
+    _fms_before = _d.query(_T4).filter(_T4.source == _S4.FLOW).count()
+check("there are delegation tasks to clear", _del_before > 0, _del_before)
+
+_pp = admin.get("/admin/purge/delegation")
+check("the danger page opens", _pp.status_code == 200, _pp.status_code)
+check("it says how many will go", str(_del_before) in _pp.text)
+check("it says there is no undo", "cannot be undone" in _pp.text)
+check("a doer cannot open it", doer.get("/admin/purge/delegation").status_code == 403)
+check("nor post to it",
+      doer.post("/admin/purge/delegation",
+                data={"confirm": "DELETE ALL DELEGATION"}).status_code == 403)
+check("the wrong words delete nothing",
+      admin.post("/admin/purge/delegation",
+                 data={"confirm": "delete everything"}).status_code == 400)
+with _sl4() as _d:
+    check("and really nothing was deleted",
+          _d.query(_T4).filter(_T4.source == _S4.DELEGATION).count()
+          == _del_before)
+
+_r = admin.post("/admin/purge/delegation",
+                data={"confirm": "DELETE ALL DELEGATION"})
+check("the master delete runs", _r.status_code in (200, 303), _r.status_code)
+with _sl4() as _d:
+    check("every delegation task is gone",
+          _d.query(_T4).filter(_T4.source == _S4.DELEGATION).count() == 0)
+    check("checklist tasks are untouched",
+          _d.query(_T4).filter(_T4.source == _S4.RECURRING).count() == _cl_before)
+    check("FMS tasks are untouched",
+          _d.query(_T4).filter(_T4.source == _S4.FLOW).count() == _fms_before)
+    # Nothing may be left pointing at a task that no longer exists.
+    from app.models import (TaskComment as _TC4, Attachment as _A4,
+                            Followup as _F4, HelpTicket as _H4,
+                            OutboundMessage as _O4)
+    _live = {t.id for t in _d.query(_T4).all()}
+    for _name, _model in (("notes", _TC4), ("files", _A4),
+                          ("follow-ups", _F4), ("help tickets", _H4)):
+        _orphans = [r.id for r in _d.query(_model).all()
+                    if r.task_id is not None and r.task_id not in _live]
+        check(f"no {_name} left pointing at a deleted task",
+              not _orphans, _orphans[:5])
+    _msg_orphans = [m.id for m in _d.query(_O4).all()
+                    if m.task_id is not None and m.task_id not in _live]
+    check("sent notifications are kept but unhooked", not _msg_orphans,
+          _msg_orphans[:5])
+
+check("with the list empty the page says there is nothing to clear",
+      "no delegation tasks to clear"
+      in admin.get("/admin/purge/delegation").text)
+
+# And the whole point: numbering starts again.
+_r = mgr.post("/tasks/new", data={
+    "title": f"SMOKE after the purge {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-31T23:59"})
+_aid4 = int(re.findall(r"/tasks/(\d+)/comment", _r.text)[0])
+with _sl4() as _d:
+    check("the next delegation task is DEL-01 again",
+          _d.get(_T4, _aid4).ref == "DEL-01", _d.get(_T4, _aid4).ref)
+check("the pages still open afterwards",
+      admin.get("/tasks?scope=all&status=all").status_code == 200
+      and admin.get("/").status_code == 200
+      and admin.get("/reports/audit").status_code == 200)
+check("once a task exists again the page offers the delete once more",
+      "DELETE ALL DELEGATION" in admin.get("/admin/purge/delegation").text)
+
+print("\n== upgrading a database that has tasks but no IDs yet ==")
+# The live database on Render is full of work and has never heard of a
+# reference column. This rehearses exactly that: take the columns away, run
+# the migrator the way a deploy does, and check every existing task comes out
+# numbered, oldest first, with nothing repeated.
+from sqlalchemy import text as _uptx5, inspect as _upin5
+from app.db import engine as _upeng5, SessionLocal as _sl5
+from app import migrate as _upmig5
+from app.models import Task as _T5, TaskSource as _S5
+
+with _sl5() as _d:
+    _was = {t.id: t.ref for t in _d.query(_T5).all()}
+
+if _upeng5.dialect.name == "postgresql":
+    with _upeng5.begin() as _c:
+        _c.execute(_uptx5("ALTER TABLE tasks DROP COLUMN IF EXISTS ref"))
+        _c.execute(_uptx5("ALTER TABLE tasks DROP COLUMN IF EXISTS ref_n"))
+else:
+    with _upeng5.begin() as _c:
+        _c.execute(_uptx5("UPDATE tasks SET ref = NULL, ref_n = NULL"))
+
+_applied5 = _upmig5.run()
+check("the migrator reports what it numbered",
+      any("numbered" in a for a in _applied5), _applied5[-4:])
+
+with _sl5() as _d:
+    _rows5 = _d.query(_T5).all()
+    check("no task is left without an ID after the upgrade",
+          all(t.ref for t in _rows5),
+          [t.id for t in _rows5 if not t.ref][:5])
+    for _src5 in _S5:
+        _got5 = sorted([t for t in _rows5 if t.source == _src5],
+                       key=lambda t: t.ref_n)
+        if not _got5:
+            continue
+        check(f"upgraded {_src5.value} IDs run 1..{len(_got5)} with no gaps",
+              [t.ref_n for t in _got5] == list(range(1, len(_got5) + 1)),
+              [t.ref_n for t in _got5][:12])
+        _age5 = sorted(_got5, key=lambda t: (t.created_at, t.id))
+        check(f"the oldest {_src5.value} task holds the lowest number",
+              [t.id for t in _age5] == [t.id for t in _got5])
+    _now5 = {t.id: t.ref for t in _rows5}
+
+check("every task that had an ID kept the same one", _now5 == _was,
+      [k for k in _now5 if _was.get(k) != _now5[k]][:5])
+
+_again5 = _upmig5.run()
+with _sl5() as _d:
+    check("running the upgrade a second time renumbers nothing",
+          {t.id: t.ref for t in _d.query(_T5).all()} == _now5)
+check("and it reports nothing to do",
+      not any("numbered" in a for a in _again5), _again5[-3:])
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

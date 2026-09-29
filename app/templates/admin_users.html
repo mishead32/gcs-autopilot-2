@@ -116,6 +116,21 @@
   </form>
 </div>
 
+{% if user.has_manage_user %}
+<div class="card" style="border-color:#f3c6c6">
+  <strong>Danger zone</strong>
+  <p class="sub" style="margin:8px 0 0">
+    Starting the delegation list again from scratch. This removes every
+    delegation task ever created, along with its notes, files and follow-up
+    ticks — and then numbering starts again at DEL-01. Checklist and FMS are
+    not touched. There is no undo.
+  </p>
+  <div style="margin-top:12px">
+    <a class="btn ghost" href="/admin/purge/delegation">Clear all delegation tasks…</a>
+  </div>
+</div>
+{% endif %}
+
 <script>
 (function(){
   var DEF = {{ default_rights|tojson }};

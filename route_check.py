@@ -83,10 +83,22 @@ def scan() -> list[tuple[str, str, int]]:
                     continue
                 if url in known:
                     continue
-                # a wildcard in the template may line up with a literal route
-                # segment (e.g. /tasks/* against /tasks/new) — accept that too
+                # A * may appear on either side, and both count as a match.
+                #
+                # Template wildcard against a literal route: /tasks/* lines up
+                # with /tasks/new, because the id in the template could be
+                # anything.
+                #
+                # Literal template against a route parameter: the link
+                # /admin/purge/delegation is served by /admin/purge/{kind},
+                # whose shape here is /admin/purge/*. Without this second
+                # direction any hard-coded link to a parameterised route is
+                # called broken when it works perfectly.
                 pattern = "^" + re.escape(url).replace(r"\*", "[^/]+") + "$"
                 if any(re.match(pattern, k) for k in known):
+                    continue
+                if any(re.match("^" + re.escape(k).replace(r"\*", "[^/]+") + "$",
+                                url) for k in known):
                     continue
                 bad.append((tpl.name, raw, lineno))
     return bad

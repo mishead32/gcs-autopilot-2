@@ -4,7 +4,7 @@
 {% set q = 'scope=' ~ scope ~ '&status=' ~ status ~ '&source=' ~ source ~
            '&date_from=' ~ date_from ~ '&date_to=' ~ date_to ~
            '&doer=' ~ (doer_id or '') ~ '&branch=' ~ (branch_id or '') ~
-           '&dept=' ~ (dept_id or '') %}
+           '&dept=' ~ (dept_id or '') ~ '&ref=' ~ ref_q %}
 {% macro tablink(over) %}{{ '/tasks?' ~ q }}{% endmacro %}
 {% block content %}
 <div class="page-head">
@@ -66,6 +66,12 @@
   <input type="hidden" name="status" value="{{ status }}">
   <input type="hidden" name="source" value="{{ source }}">
   <div>
+    <label>Task ID</label>
+    <input name="ref" value="{{ ref_q }}" autocomplete="off" spellcheck="false"
+           placeholder="{{ 'DEL-01' if source == 'delegation' else ('CL-01' if source == 'checklist' else ('FMS-01' if source == 'fms' else 'DEL-01')) }}"
+           title="Type a task's reference to jump straight to it">
+  </div>
+  <div>
     <label>Employee</label>
     <select name="doer"><option value="">Everyone</option>
       {% for p in people %}
@@ -103,7 +109,7 @@
   </div>
   <div class="acts">
     <button class="btn">Apply</button>
-    {% if filtered or doer_id or branch_id or dept_id %}
+    {% if filtered or doer_id or branch_id or dept_id or ref_q %}
     <a class="btn ghost" href="/tasks?scope={{ scope }}&status={{ status }}&source={{ source }}">Clear</a>
     {% endif %}
   </div>
