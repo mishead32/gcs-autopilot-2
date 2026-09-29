@@ -4425,5 +4425,121 @@ _hx = admin.get("/tasks?scope=all&status=all&source=helpdesk&export=xlsx")
 check("the Help desk list downloads as Excel", _hx.status_code == 200,
       _hx.status_code)
 
+print("\n== the follow-up desk filters itself ==")
+# The complaint: 154 open tasks in one flat list, and the PC has to scroll
+# past everything already ticked to reach what is not. The three numbers are
+# now the filter, with an overdue / coming-up split under them.
+from app.db import SessionLocal as _sl7
+from app.models import (Task as _T7, Followup as _F7, TaskStatus as _ST7,
+                        TaskSource as _S7, User as _U7)
+from app import clock as _ck7
+from datetime import timedelta as _td7
+
+_today7 = _ck7.today().isoformat()
+_pc = login("pc@gcs.local")
+_base7 = f"/followups?desk=pc&date_from={_today7}&date_to={_today7}"
+
+_p0 = _pc.get(_base7)
+check("the follow-up desk opens", _p0.status_code == 200, _p0.status_code)
+_b0 = _p0.text
+check("it offers a Total follow-ups filter", "Total follow-ups" in _b0)
+check("a Followed up filter", "show=done" in _b0)
+check("a Still to chase filter", "show=pending" in _b0)
+check("and an overdue / coming-up split", "when=overdue" in _b0 and "when=coming" in _b0)
+
+def _rows7(html):
+    return {int(i) for i in _re.findall(r'/tasks/(\d+)"', html)}
+
+with _sl7() as _d:
+    _pcu = _d.query(_U7).filter(_U7.email == "pc@gcs.local").one()
+    _desk = [t for t in _d.query(_T7).filter(
+        _T7.source.in_((_S7.RECURRING, _S7.FLOW)),
+        _T7.status.in_((_ST7.PENDING, _ST7.IN_PROGRESS, _ST7.REJECTED,
+                        _ST7.REOPENED)),
+        _T7.due_at <= _ck7.now().replace(hour=23, minute=59, second=59)).all()]
+    _desk_ids = {t.id for t in _desk}
+    _late_ids = {t.id for t in _desk if t.due_at < _ck7.now()}
+    _soon_ids = _desk_ids - _late_ids
+
+_all7 = _rows7(_pc.get(_base7 + "&show=all&when=all").text)
+check("the desk has work on it today", len(_all7) > 0, len(_all7))
+check("Total follow-ups shows the whole desk", _all7 == _desk_ids,
+      f"page {len(_all7)} vs db {len(_desk_ids)}")
+
+_ov7 = _rows7(_pc.get(_base7 + "&show=all&when=overdue").text)
+_cm7 = _rows7(_pc.get(_base7 + "&show=all&when=coming").text)
+check("Overdue shows only work past its deadline", _ov7 == _late_ids,
+      f"page {len(_ov7)} vs db {len(_late_ids)}")
+check("Coming up shows only work still inside it", _cm7 == _soon_ids,
+      f"page {len(_cm7)} vs db {len(_soon_ids)}")
+check("and the two halves are the whole", _ov7 | _cm7 == _all7)
+check("with nothing in both", not (_ov7 & _cm7))
+
+# Nothing chased yet, so "still to chase" is the whole desk and
+# "followed up" is empty.
+check("nothing is chased to begin with",
+      not _rows7(_pc.get(_base7 + "&show=done").text))
+check("so everything is still to chase",
+      _rows7(_pc.get(_base7 + "&show=pending").text) == _desk_ids)
+
+# Tick one, from the Still-to-chase tab, and watch it leave that list.
+_one = sorted(_desk_ids)[0]
+_tk = _pc.post(f"/followups/{_one}/tick",
+               data={"day": _today7, "desk": "pc",
+                     "show": "pending", "when": "all"})
+check("ticking from the filtered list works", _tk.status_code == 200, _tk.status_code)
+check("and comes back to the same filter", "show=pending" in str(_tk.url),
+      str(_tk.url))
+_pending7 = _rows7(_pc.get(_base7 + "&show=pending").text)
+_done7 = _rows7(_pc.get(_base7 + "&show=done").text)
+check("the ticked task leaves Still to chase", _one not in _pending7)
+check("and appears under Followed up", _done7 == {_one}, sorted(_done7)[:4])
+check("it is still on Total follow-ups",
+      _one in _rows7(_pc.get(_base7 + "&show=all").text))
+check("the list is one shorter", len(_pending7) == len(_desk_ids) - 1)
+
+# The counts on the cards have to move with it.
+_b1 = _pc.get(_base7).text
+check("the Followed up count reads 1",
+      _re.search(r'show=done[^>]*>\s*<div class="n">1</div>', _b1) is not None
+      or '<div class="n">1</div>' in _b1)
+check("the split under each card is shown",
+      "overdue ·" in _b1 and "coming up" in _b1)
+
+# Untick, and everything goes back.
+_pc.post(f"/followups/{_one}/tick",
+         data={"day": _today7, "desk": "pc", "show": "pending", "when": "all"})
+check("unticking puts it back",
+      _rows7(_pc.get(_base7 + "&show=pending").text) == _desk_ids)
+
+# Combining the two filters.
+_po = _rows7(_pc.get(_base7 + "&show=pending&when=overdue").text)
+check("Still to chase + Overdue is the overlap", _po == _late_ids,
+      f"{len(_po)} vs {len(_late_ids)}")
+
+# The Excel download must be the list on screen, not the whole desk.
+_fx = _pc.get(_base7 + "&show=pending&when=overdue&export=xlsx")
+check("the download honours the filter", _fx.status_code == 200, _fx.status_code)
+try:
+    from openpyxl import load_workbook as _lw7
+    _ws7 = _lw7(_io4.BytesIO(_fx.content)).worksheets[0]
+    # Find the header row, then count what sits under it — the sheet also
+    # carries a title and a note line above the table.
+    _hrow = next((r[0].row for r in _ws7.iter_rows(max_col=1)
+                  if str(r[0].value).strip() == "Task"), None)
+    check("the download has a Task column", _hrow is not None)
+    _n7 = sum(1 for r in _ws7.iter_rows(min_row=(_hrow or 1) + 1, max_col=1)
+              if r[0].value and str(r[0].value).strip())
+    check("and holds exactly the filtered rows", _n7 == len(_late_ids),
+          f"{_n7} rows for {len(_late_ids)} tasks")
+except ImportError:
+    pass
+
+check("a nonsense filter falls back to the whole desk",
+      _rows7(_pc.get(_base7 + "&show=banana&when=grape").text) == _desk_ids)
+check("the range view still works without the filters",
+      "day by day" in _pc.get(
+          f"/followups?desk=pc&date_from=2026-09-01&date_to={_today7}").text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

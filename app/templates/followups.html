@@ -8,8 +8,9 @@
   </div>
   <div>
     {{ excel_btn('/followups?desk=' ~ desk ~ '&date_from=' ~ date_from ~
-                 '&date_to=' ~ date_to ~ '&export=xlsx',
-                 title='Download this tick list as an Excel file') }}
+                 '&date_to=' ~ date_to ~ '&show=' ~ show ~ '&when=' ~ when ~
+                 '&export=xlsx',
+                 title='Download exactly this list as an Excel file') }}
     <a class="btn ghost" href="/reports/followups">Management report</a>
   </div>
 </div>
@@ -17,7 +18,7 @@
 <div class="tabs">
   {% for k, c in desks.items() %}
   <a class="{{ 'active' if k == desk }}"
-     href="/followups?desk={{ k }}&date_from={{ date_from }}&date_to={{ date_to }}">{{ c.label }}</a>
+     href="/followups?desk={{ k }}&date_from={{ date_from }}&date_to={{ date_to }}&show={{ show }}&when={{ when }}">{{ c.label }}</a>
   {% endfor %}
 </div>
 
@@ -48,13 +49,44 @@
   </div>
 </form>
 
+{% if span > 1 %}
 <div class="grid g3">
   <div class="kpi"><div class="n">{{ due }}</div>
-    <div class="l">{{ 'Follow-ups due' if span > 1 else 'Open tasks' }}</div></div>
+    <div class="l">Follow-ups due</div></div>
   <div class="kpi ok"><div class="n">{{ done }}</div><div class="l">Followed up</div></div>
   <div class="kpi {{ 'bad' if missed else 'ok' }}"><div class="n">{{ missed }}</div>
     <div class="l">Not followed up</div></div>
 </div>
+{% else %}
+{# The three numbers ARE the filter. Clicking one narrows the list below it,
+   so ticking off "still to chase" means the list shrinks as you work rather
+   than scrolling past everything already done to find what is not. #}
+{% set base = '/followups?desk=' ~ desk ~ '&date_from=' ~ date_from ~
+              '&date_to=' ~ date_to %}
+<div class="grid g3 fu-pick">
+  <a class="kpi {{ 'on' if show == 'all' }}" href="{{ base }}&show=all&when={{ when }}">
+    <div class="n">{{ n.all }}</div><div class="l">Total follow-ups</div>
+    <div class="m">{{ n.overdue }} overdue · {{ n.coming }} coming up</div></a>
+  <a class="kpi ok {{ 'on' if show == 'done' }}" href="{{ base }}&show=done&when={{ when }}">
+    <div class="n">{{ n.done }}</div><div class="l">Followed up</div>
+    <div class="m">{{ n.done_overdue }} overdue · {{ n.done_coming }} coming up</div></a>
+  <a class="kpi {{ 'bad' if n.pending else 'ok' }} {{ 'on' if show == 'pending' }}"
+     href="{{ base }}&show=pending&when={{ when }}">
+    <div class="n">{{ n.pending }}</div><div class="l">Still to chase</div>
+    <div class="m">{{ n.pending_overdue }} overdue · {{ n.pending_coming }} coming up</div></a>
+</div>
+
+<div class="tabs fu-when">
+  <span class="m">Due</span>
+  {% for k, label in when_tabs %}
+  <a class="{{ 'active' if when == k }}" href="{{ base }}&show={{ show }}&when={{ k }}">
+    {{ label }} <b>{% if k == 'all' %}{{ n[show] }}{% elif show == 'all' %}{{ n[k] }}{% else %}{{ n[show ~ '_' ~ k] }}{% endif %}</b></a>
+  {% endfor %}
+  {% if show != 'all' or when != 'all' %}
+  <a class="clearf" href="{{ base }}">Clear</a>
+  {% endif %}
+</div>
+{% endif %}
 
 {% if not can_tick %}
 <div class="proof need" style="margin-top:16px">
@@ -89,7 +121,13 @@
 {% else %}
 <div class="sect">
   <div class="sect-head"><h2>{{ cfg.label }} — {{ day.strftime('%d %b %Y') }}</h2>
-    <span class="count {{ 'bad' if missed }}">{{ tasks|length }} open</span></div>
+    <span class="count {{ 'bad' if show == 'pending' and tasks }}">
+      {{ tasks|length }}{% if tasks|length != total %} of {{ total }}{% endif %}</span>
+    {% if show != 'all' or when != 'all' %}
+    <span class="m">{{ show_tabs|selectattr('0','equalto',show)|map(attribute='1')|first|lower }}{% if when != 'all' %},
+      {{ when_tabs|selectattr('0','equalto',when)|map(attribute='1')|first|lower }}{% endif %}</span>
+    {% endif %}
+  </div>
 </div>
 
 {% if tasks %}
@@ -105,6 +143,8 @@
       <form method="post" action="/followups/{{ t.id }}/tick">
         <input type="hidden" name="day" value="{{ day_str }}">
         <input type="hidden" name="desk" value="{{ desk }}">
+        <input type="hidden" name="show" value="{{ show }}">
+        <input type="hidden" name="when" value="{{ when }}">
         <button class="tickbox {{ 'on' if f }}"
                 title="{{ 'Ticked — click to undo' if f else 'Mark followed up' }}">
           {{ '✓' if f else '' }}</button>
@@ -125,7 +165,16 @@
   {% endfor %}
 </table></div>
 {% else %}
-<div class="empty">Nothing was open on this desk that day. Nothing to chase.</div>
+<div class="empty">
+  {% if show == 'pending' and n.all %}
+    Nothing left to chase{% if when != 'all' %} in this group{% endif %}.
+    All {{ n.all if when == 'all' else n[when] }} were followed up.
+  {% elif show != 'all' or when != 'all' %}
+    Nothing here. <a href="{{ base }}">Show the whole desk</a>.
+  {% else %}
+    Nothing was open on this desk that day. Nothing to chase.
+  {% endif %}
+</div>
 {% endif %}
 {% endif %}
 {% endblock %}

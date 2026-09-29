@@ -114,6 +114,64 @@ def _open_tasks(db: Session, user: User, sources, day: date,
     return rows
 
 
+# What the person is looking at, and when it was due. Two small questions
+# rather than one long list of combinations.
+#
+# The reason these exist: the desk is one flat list of every open task, and
+# on a busy day that is 150 rows. Somebody ticking them off has to scroll
+# past everything already ticked to reach the ones that are not. Narrowing
+# to "still to chase" makes the list shrink as they work, which is the
+# shape the job actually has.
+SHOW_TABS = [("all", "Total follow-ups"),
+             ("done", "Followed up"),
+             ("pending", "Still to chase")]
+WHEN_TABS = [("all", "All"), ("overdue", "Overdue"), ("coming", "Coming up")]
+
+
+def _is_overdue(task: Task, day: date) -> bool:
+    """Past its deadline as at the end of the day being looked at.
+
+    Measured against the day on the page, not against right now, so
+    yesterday's list does not re-sort itself overnight.
+    """
+    # On today's list the moment that matters is now — a task due at 11:59pm
+    # tonight has not been missed yet, and calling it overdue at 10am would
+    # send the PC chasing work that is not late. On any earlier day the
+    # moment that matters is the end of that day, so an old list still reads
+    # the way it read then.
+    ref = clock.now() if day >= clock.today() \
+        else datetime.combine(day, datetime.max.time())
+    return task.due_at < ref
+
+
+def _split(tasks: list[Task], ticks: dict, day: date) -> dict:
+    """Count every bucket the tabs can show, from one pass over the list."""
+    n = {k: 0 for k in ("all", "done", "pending",
+                        "overdue", "coming",
+                        "done_overdue", "done_coming",
+                        "pending_overdue", "pending_coming")}
+    for t in tasks:
+        late = _is_overdue(t, day)
+        chased = t.id in ticks
+        n["all"] += 1
+        n["overdue" if late else "coming"] += 1
+        n["done" if chased else "pending"] += 1
+        n[("done_" if chased else "pending_") + ("overdue" if late else "coming")] += 1
+    return n
+
+
+def _keep(task: Task, ticks: dict, day: date, show: str, when: str) -> bool:
+    if show == "done" and task.id not in ticks:
+        return False
+    if show == "pending" and task.id in ticks:
+        return False
+    if when == "overdue" and not _is_overdue(task, day):
+        return False
+    if when == "coming" and _is_overdue(task, day):
+        return False
+    return True
+
+
 def _ticks(db: Session, task_ids: list[int], day: date) -> dict[int, Followup]:
     if not task_ids:
         return {}
@@ -126,6 +184,7 @@ def _ticks(db: Session, task_ids: list[int], day: date) -> dict[int, Followup]:
 @router.get("/followups", response_class=HTMLResponse)
 def followups(request: Request, desk: str = "", day: str = "",
               date_from: str = "", date_to: str = "", export: str = "",
+              show: str = "all", when: str = "all",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     """The desk itself, plus a from/to range view over it.
 
@@ -147,10 +206,14 @@ def followups(request: Request, desk: str = "", day: str = "",
 
     can_tick = user.has(cfg["right"])
     span = (end - start).days + 1
+    show = show if show in dict(SHOW_TABS) else "all"
+    when = when if when in dict(WHEN_TABS) else "all"
 
     ctx = {
         "user": user, "desk": desk, "cfg": cfg, "desks": DESKS,
         "can_tick": can_tick, "span": span,
+        "show": show, "when": when,
+        "show_tabs": SHOW_TABS, "when_tabs": WHEN_TABS,
         "date_from": start.isoformat(), "date_to": end.isoformat(),
     }
 
@@ -183,16 +246,20 @@ def followups(request: Request, desk: str = "", day: str = "",
         return templates.TemplateResponse(request, "followups.html", ctx)
 
     on = start
-    tasks = _open_tasks(db, user, cfg["sources"], on, cfg["right"])
-    ticks = _ticks(db, [t.id for t in tasks], on)
+    every = _open_tasks(db, user, cfg["sources"], on, cfg["right"])
+    ticks = _ticks(db, [t.id for t in every], on)
+    # Counted over the WHOLE desk, before the filter narrows it. A tab has to
+    # go on saying how many it holds once you are standing on another one.
+    n = _split(every, ticks, on)
+    tasks = [t for t in every if _keep(t, ticks, on, show, when)]
     ctx.update({
         "range_rows": None,
         "day": on, "day_str": on.isoformat(),
         "prev_day": (on - timedelta(days=1)).isoformat(),
         "next_day": (on + timedelta(days=1)).isoformat(),
         "is_today": on == clock.today(),
-        "tasks": tasks, "ticks": ticks,
-        "due": len(tasks), "done": len(ticks), "missed": len(tasks) - len(ticks),
+        "tasks": tasks, "ticks": ticks, "n": n, "total": len(every),
+        "due": n["all"], "done": n["done"], "missed": n["pending"],
     })
     if xlsx.wants(export):
         # One row per task on the desk that day, with the tick and who made
@@ -210,13 +277,16 @@ def followups(request: Request, desk: str = "", day: str = "",
             ("Chased by", lambda t: (ticks[t.id].by.name
                                      if t.id in ticks and ticks[t.id].by else "")),
             ("Remark", lambda t: getattr(ticks.get(t.id), "remark", "") or ""),
-        ], tasks, f"{len(ticks)} of {len(tasks)} chased")
+        ], tasks, f"{dict(SHOW_TABS)[show]}"
+                  + (f" · {dict(WHEN_TABS)[when].lower()}" if when != "all" else "")
+                  + f" · {n['done']} of {n['all']} chased")
     return templates.TemplateResponse(request, "followups.html", ctx)
 
 
 @router.post("/followups/{task_id}/tick")
 def tick(task_id: int, request: Request, day: str = Form(""),
          desk: str = Form("ea"),
+         show: str = Form("all"), when: str = Form("all"),
          remark: str = Form(""),
          user: User = Depends(current_user), db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -245,8 +315,12 @@ def tick(task_id: int, request: Request, day: str = Form(""),
                         by_id=user.id, remark=remark.strip() or None))
         flash.set(request, "followed", task.title)
     db.commit()
-    return RedirectResponse(f"/followups?desk={desk}&day={on.isoformat()}",
-                            status_code=303)
+    # Straight back to the tab they were on. Ticking from "Still to chase"
+    # then takes the row off the list, which is what makes the list shrink
+    # as the work is done rather than making them hunt for the next one.
+    return RedirectResponse(
+        f"/followups?desk={desk}&day={on.isoformat()}&show={show}&when={when}",
+        status_code=303)
 
 
 # --------------------------------------------------------------- report ----
