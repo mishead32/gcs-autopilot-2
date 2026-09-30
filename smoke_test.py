@@ -2650,7 +2650,10 @@ check("Rejected, chosen in the pop-up, sends the bill back to step 1",
       _ppos2 == 1, str(_ppos2))
 
 # 9 — the table still holds together: one header cell per column.
-_hdr = _list.split("<table>", 1)[1].split("</tr>", 1)[0].count("<th>")
+# Count every <th, not just a bare "<th>": the action column carries a class
+# now, and counting only the plain ones reports a table that is one column
+# short when it is perfectly balanced.
+_hdr = _list.split("<table>", 1)[1].split("</tr>", 1)[0].count("<th")
 _firstrow = _list.split("</tr>", 2)[1]
 check("the new column has a header of its own", _hdr == _firstrow.count("<td"),
       f"{_hdr} headers vs {_firstrow.count('<td')} cells")
@@ -5121,6 +5124,88 @@ for _mins, _want in ((0, "just now"), (5, "5m ago"), (90, "1h ago"),
 check("a missing time says nothing rather than lying", _ago(None) == "")
 check("a clock a little ahead does not print a negative age",
       _ago(_nowC + _tdC(minutes=5)) == "just now")
+
+print("\n== moving a deadline from the row ==")
+# Opening a task, scrolling to Manage, changing one field and saving is four
+# steps for something done twenty times a morning.
+from app.db import SessionLocal as _slD
+from app.models import Task as _TD, TaskComment as _TCD, Right as _RD
+
+_dd = mgr.post("/tasks/new", data={
+    "title": f"SMOKE move the deadline {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-01T18:00"})
+_ddid = int(_re.findall(r"/tasks/(\d+)/comment", _dd.text)[0])
+
+_listD = admin.get("/tasks?scope=all&status=pending&source=delegation").text
+check("the row offers a date picker to someone who may move deadlines",
+      "duepick" in _listD)
+check("pointing at the right place",
+      f'action="/tasks/{_ddid}/due"' in _listD or "/due\"" in _listD)
+
+_rD = admin.post(f"/tasks/{_ddid}/due", data={"due_at": "2027-03-15T16:30"})
+check("saving from the row works", _rD.status_code == 200, _rD.status_code)
+with _slD() as _d:
+    _t = _d.get(_TD, _ddid)
+    check("the deadline really moved",
+          _t.due_at.strftime("%Y-%m-%dT%H:%M") == "2027-03-15T16:30",
+          str(_t.due_at))
+    _notes = [c.body for c in _d.query(_TCD)
+              .filter(_TCD.task_id == _ddid).all()]
+    check("and it is written into the task's history",
+          any("Planned date moved" in n for n in _notes), _notes[:3])
+    check("the note says both dates",
+          any("01 Dec 2026" in n and "15 Mar 2027" in n for n in _notes), _notes)
+
+# It must come back to the filtered list, not to the task.
+_navD = TestClient(app, follow_redirects=False)
+_navD.cookies.update(admin.cookies)
+_filtD = "/tasks?scope=all&status=pending&source=delegation&doer=6"
+admin.get(_filtD)
+_navD.cookies.update(admin.cookies)
+_rD2 = _navD.post(f"/tasks/{_ddid}/due",
+                  data={"due_at": "2027-04-01T10:00", "return_to": _filtD})
+check("and lands back on the list it was changed from",
+      _rD2.headers.get("location") == _filtD, _rD2.headers.get("location"))
+_rD3 = _navD.post(f"/tasks/{_ddid}/due",
+                  data={"due_at": "2027-04-02T10:00",
+                        "return_to": "//evil.example.com/"})
+check("an off-site return is refused here too",
+      _onsite(_rD3.headers.get("location")), _rD3.headers.get("location"))
+
+# The right is the control, not the absence of a button.
+check("a doer is not shown the picker",
+      "duepick" not in doer.get("/tasks?scope=mine&status=pending").text)
+check("and cannot move a deadline by posting anyway",
+      doer.post(f"/tasks/{_ddid}/due",
+                data={"due_at": "2028-01-01T10:00"}).status_code == 403)
+with _slD() as _d:
+    check("so the deadline is untouched",
+          _d.get(_TD, _ddid).due_at.year == 2027,
+          str(_d.get(_TD, _ddid).due_at))
+check("nonsense is refused rather than stored",
+      admin.post(f"/tasks/{_ddid}/due",
+                 data={"due_at": "not a date"}).status_code == 400)
+
+print("\n== the task row fits on the screen ==")
+# The Mark complete button had fallen off the right-hand edge, where a
+# scrollbar that only appears mid-scroll is no help at all.
+check("the ID column already says which kind of work it is",
+      "DEL-" in _listD or "CL-" in _listD or "FMS-" in _listD)
+check("so Source is no longer a column of its own",
+      "<th>Source</th>" not in _listD)
+check("but it is still on the row, under the title",
+      "rowsub" in _listD and "delegation" in _listD.lower())
+check("the action column is pinned so the button cannot be cut off",
+      "stickycol" in _listD)
+_hdrD2 = _listD.split("<table>", 1)[1].split("</tr>", 1)[0]
+check("one header per column still",
+      _hdrD2.count("<th") == _listD.split("</tr>", 2)[1].count("<td"),
+      (_hdrD2.count("<th"), _listD.split("</tr>", 2)[1].count("<td")))
+check("the three dates are still in order",
+      _listD.index("<th>Assigned</th>") < _listD.index("<th>Planned</th>")
+      < _listD.index("<th>Completed</th>"))
+check("the Excel download still names the work type",
+      admin.get("/tasks?scope=all&status=all&export=xlsx").status_code == 200)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

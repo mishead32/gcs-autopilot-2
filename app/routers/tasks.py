@@ -614,6 +614,46 @@ def _safe_return(raw: str, fallback: str) -> str:
 
 
 # ------------------------------------------------------- edit / delete -----
+@router.post("/tasks/{task_id}/due")
+def move_due(task_id: int, request: Request, due_at: str = Form(...),
+             return_to: str = Form(""),
+             user: User = Depends(require_right(Right.CHANGE_DUE_DATE)),
+             db: Session = Depends(get_db)):
+    """Move one deadline, from wherever the person is standing.
+
+    Opening a task, scrolling to Manage, changing one field and saving is
+    four steps for a thing that is done twenty times a morning. This is the
+    same change from the row itself.
+
+    It is its own route rather than a flag on the edit form because moving a
+    deadline decides whether work counts as late — half of that person's
+    score for that kind of work — so it needs its own right, its own note in
+    the task's history, and no way to arrive by accident while editing a
+    title.
+    """
+    task = db.get(Task, task_id)
+    if not task or task.org_id != user.org_id or not can_view_task(user, task):
+        raise HTTPException(404, "Task not found")
+    try:
+        new_due = datetime.fromisoformat(due_at)
+    except ValueError:
+        raise HTTPException(400, "That is not a date and time the software can read.")
+
+    was = task.due_at
+    if was != new_due:
+        task.due_at = new_due
+        db.add(TaskComment(
+            task_id=task.id, author_id=user.id,
+            body=f"Planned date moved: {was:%d %b %Y, %I:%M %p} → "
+                 f"{new_due:%d %b %Y, %I:%M %p}."))
+        db.commit()
+        flash.set(request, "saved",
+                  f"{task.ref or task.title} — now due {new_due:%d %b, %I:%M %p}")
+    return RedirectResponse(
+        _safe_return(return_to, lastview.url(request, f"/tasks/{task_id}")),
+        status_code=303)
+
+
 @router.post("/tasks/{task_id}/edit")
 def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
               doer_id: int = Form(...), priority: str = Form("medium"),

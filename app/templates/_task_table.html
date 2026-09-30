@@ -8,14 +8,15 @@
     {% if show_doer %}<th>Doer</th>{% endif %}
     <th>Priority</th><th>Status</th><th>Audit</th>
     <th>Assigned</th><th>Planned</th>
-    <th>Completed</th><th>Source</th><th></th>
+    <th>Completed</th><th class="stickycol"></th>
   </tr>
   {% for t in tasks %}
   <tr>
     <td class="refcell"><a href="/tasks/{{ t.id }}" class="refid"
         title="This task's reference — quote it when you ask about it">{{ t.ref or '—' }}</a></td>
     <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
-      {% if t.branch %}<div class="m" style="color:var(--muted);font-size:12px">{{ t.branch.name }}</div>{% endif %}
+      <div class="m rowsub">{{ t.source.value }}{% if t.branch %} ·
+        {{ t.branch.name }}{% endif %}</div>
     </td>
     {% if show_doer %}<td>{{ t.doer.name }}</td>{% endif %}
     <td><span class="chip {{ t.priority.value }}" title="Counts as {{ t.weight }} tasks in the score">{{ t.priority.value }} {{ t.weight_label }}</span></td>
@@ -32,8 +33,24 @@
        given, due, done. #}
     <td class="whencell">{{ t.created_at|dt('%d %b, %I:%M %p') }}<br>
       <span style="font-size:11px" class="m">{{ t.created_at|ago }}</span></td>
-    <td class="{{ 'overdue' if t.is_overdue }}">{{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
-      <span style="font-size:11px">{{ t.due_at|due }}</span></td>
+    <td class="whencell {{ 'overdue' if t.is_overdue }}">
+      {% if user and user.has(MOVE_DUE_RIGHT) %}
+      <details class="duepick">
+        <summary title="Click to move this deadline">
+          {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
+          <span style="font-size:11px">{{ t.due_at|due }}</span></summary>
+        <form method="post" action="/tasks/{{ t.id }}/due">
+          <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+          <input type="datetime-local" name="due_at" required
+                 value="{{ t.due_at.strftime('%Y-%m-%dT%H:%M') }}">
+          <button class="btn sm">Save</button>
+        </form>
+      </details>
+      {% else %}
+      {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
+      <span style="font-size:11px">{{ t.due_at|due }}</span>
+      {% endif %}
+    </td>
     {# Closed, or finished and waiting on an auditor — both are "the doer has
        done it", and a dash here made the second look like nothing happened. #}
     <td>{% if t.closed_at or t.submitted_at %}{{ (t.closed_at or t.submitted_at)|dt('%d %b, %I:%M %p') }}
@@ -41,11 +58,11 @@
           class="{{ '' if t.was_on_time else 'overdue' }}">{{ 'on time' if t.was_on_time else 'late' }}</span>{% endif %}
         {% if not t.closed_at %}<br><span class="m" style="font-size:11px">sent for audit</span>{% endif %}
         {% else %}<span class="m">—</span>{% endif %}</td>
-    <td><span class="chip">{{ t.source.value }}</span></td>
+
     {# Close it from here. Only the person doing it, only while it is still
        open — and the same button for Delegation, Checklist and FMS, because
        from the doer's side they are all just work they owe. #}
-    <td class="markcell">
+    <td class="markcell stickycol">
       {% if user and t.doer_id == user.id
             and t.status.value in ['pending','in_progress','rejected','reopened'] %}
       <button type="button" class="btn sm markbtn" data-mark="{{ t.id }}"

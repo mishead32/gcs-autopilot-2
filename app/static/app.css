@@ -769,3 +769,33 @@ h1 .refid{font-size:14px;margin-right:8px}
 /* The assigned / planned / completed trio: kept on one line each so the
    three dates line up down the table and can be read as a sequence. */
 .whencell{white-space:nowrap}
+
+/* ---- the task table, made to fit ----------------------------------------
+   The row had grown a column at a time until the Mark complete button fell
+   off the right edge, where a scrollbar that only appears mid-scroll is no
+   help at all. Three changes, in order of how much they buy:
+
+   1. Source became a word under the task title. The ID already says DEL-,
+      CL- or FMS-, so the column was saying it twice.
+   2. The action column is pinned to the right, so the button is reachable
+      whatever the width.
+   3. Tighter padding and nowrap dates, so the columns that carry one short
+      value stop claiming the width of the ones that carry a sentence.       */
+table th.stickycol, table td.stickycol{position:sticky;right:0;
+  background:var(--card);box-shadow:-8px 0 8px -8px rgba(15,35,60,.18)}
+table tr:hover td.stickycol{background:var(--card)}
+.rowsub{color:var(--muted);font-size:11px;text-transform:uppercase;
+  letter-spacing:.4px;margin-top:3px}
+.table-wrap table td, .table-wrap table th{padding-left:10px;padding-right:10px}
+.table-wrap table td:first-child, .table-wrap table th:first-child{padding-left:14px}
+
+/* Move a deadline without opening the task. Closed it is just the date; open
+   it is a date box and a Save button. */
+.duepick summary{cursor:pointer;list-style:none}
+.duepick summary::-webkit-details-marker{display:none}
+.duepick summary:hover{text-decoration:underline dotted;text-underline-offset:3px}
+.duepick[open] summary{opacity:.55}
+.duepick form{display:flex;gap:6px;align-items:center;margin-top:6px;
+  white-space:nowrap}
+.duepick input[type=datetime-local]{padding:5px 7px;font-size:12px;width:auto;
+  margin:0}
