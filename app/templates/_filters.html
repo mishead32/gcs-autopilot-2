@@ -20,12 +20,24 @@
 {% endmacro %}
 
 
-{% macro filter_bar(f, basis='', show_branch=true, show_doer=true, show_priority=true) %}
+{% macro filter_bar(f, basis='', show_branch=true, show_doer=true,
+                    show_priority=true, show_search=true) %}
 <form method="get" action="{{ f.path }}" class="card filterbar">
   {% for k, v in f.hidden.items() %}
   <input type="hidden" name="{{ k }}" value="{{ v }}">
   {% endfor %}
   {% if f.state %}<input type="hidden" name="state" value="{{ f.state }}">{% endif %}
+
+  {% if show_search %}
+  <div class="fb-row">
+    <div class="fb-f fb-wide">
+      <label>Search</label>
+      <input name="q" value="{{ f.q }}" autocomplete="off" spellcheck="false"
+             placeholder="Words from the task, or its ID — e.g. vendor invoices, or DEL-01"
+             title="Searches the task's name, its details and its ID">
+    </div>
+  </div>
+  {% endif %}
 
   <div class="fb-row">
     <div class="fb-f">

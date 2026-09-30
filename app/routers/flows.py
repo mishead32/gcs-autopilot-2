@@ -3,7 +3,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import clock, flash
+from .. import clock, flash, search
 import json
 
 from ..db import get_db
@@ -46,10 +46,13 @@ def _read_start_form(form) -> str | None:
 
 
 @router.get("/flows", response_class=HTMLResponse)
-def flow_list(request: Request, export: str = "",
+def flow_list(request: Request, export: str = "", q: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
+    text_q = search.clean(q)
     flows = db.scalars(
-        select(Flow).where(Flow.org_id == user.org_id).order_by(Flow.name)
+        search.apply(select(Flow).where(Flow.org_id == user.org_id),
+                     [Flow.name, Flow.description], text_q)
+        .order_by(Flow.name)
     ).all()
     running = db.scalars(
         select(FlowInstance)
@@ -89,6 +92,7 @@ def flow_list(request: Request, export: str = "",
         ])
 
     return templates.TemplateResponse(request, "flows.html", {
+        "q": text_q,
         "user": user, "flows": flows, "running": running,
         "progress": {i.id: flow_svc.flow_progress(i) for i in running},
     })

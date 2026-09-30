@@ -17,7 +17,8 @@
 </div>
 
 {{ date_presets(f) }}
-{{ filter_bar(f, basis='the day the task was open') }}
+{# No task-text search here: this report counts days, not tasks. #}
+{{ filter_bar(f, basis='the day the task was open', show_search=false) }}
 
 <div class="grid g3">
   <div class="kpi"><div class="n">{{ grand.due }}</div>

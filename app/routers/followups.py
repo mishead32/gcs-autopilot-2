@@ -18,6 +18,7 @@ shares its filters with every other report.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -25,6 +26,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import search
 from .. import flash
 from ..db import get_db
 from ..deps import current_user
@@ -184,7 +186,7 @@ def _ticks(db: Session, task_ids: list[int], day: date) -> dict[int, Followup]:
 @router.get("/followups", response_class=HTMLResponse)
 def followups(request: Request, desk: str = "", day: str = "",
               date_from: str = "", date_to: str = "", export: str = "",
-              show: str = "all", when: str = "all",
+              show: str = "all", when: str = "all", q: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     """The desk itself, plus a from/to range view over it.
 
@@ -208,11 +210,12 @@ def followups(request: Request, desk: str = "", day: str = "",
     span = (end - start).days + 1
     show = show if show in dict(SHOW_TABS) else "all"
     when = when if when in dict(WHEN_TABS) else "all"
+    text_q = search.clean(q)
 
     ctx = {
         "user": user, "desk": desk, "cfg": cfg, "desks": DESKS,
         "can_tick": can_tick, "span": span,
-        "show": show, "when": when,
+        "show": show, "when": when, "q": text_q,
         "show_tabs": SHOW_TABS, "when_tabs": WHEN_TABS,
         "date_from": start.isoformat(), "date_to": end.isoformat(),
     }
@@ -247,6 +250,15 @@ def followups(request: Request, desk: str = "", day: str = "",
 
     on = start
     every = _open_tasks(db, user, cfg["sources"], on, cfg["right"])
+    if text_q:
+        # Counted AFTER the search, so the three cards describe the list the
+        # person is actually looking at rather than the whole desk.
+        looked_up = text_q.upper().replace(" ", "")
+        pat = search.clean(text_q).lower()
+        every = [t for t in every
+                 if (t.ref or "").upper() == looked_up
+                 or pat in (t.title or "").lower()
+                 or pat in (t.details or "").lower()]
     ticks = _ticks(db, [t.id for t in every], on)
     # Counted over the WHOLE desk, before the filter narrows it. A tab has to
     # go on saying how many it holds once you are standing on another one.
@@ -287,6 +299,7 @@ def followups(request: Request, desk: str = "", day: str = "",
 def tick(task_id: int, request: Request, day: str = Form(""),
          desk: str = Form("ea"),
          show: str = Form("all"), when: str = Form("all"),
+         q: str = Form(""),
          remark: str = Form(""),
          user: User = Depends(current_user), db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -319,7 +332,8 @@ def tick(task_id: int, request: Request, day: str = Form(""),
     # then takes the row off the list, which is what makes the list shrink
     # as the work is done rather than making them hunt for the next one.
     return RedirectResponse(
-        f"/followups?desk={desk}&day={on.isoformat()}&show={show}&when={when}",
+        f"/followups?desk={desk}&day={on.isoformat()}"
+        f"&show={show}&when={when}&q={quote_plus(search.clean(q))}",
         status_code=303)
 
 

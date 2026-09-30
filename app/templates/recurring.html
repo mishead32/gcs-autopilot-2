@@ -4,6 +4,22 @@
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px"><div><h1>Checklist</h1></div><div>{{ excel_btn('/recurring?export=xlsx') }}
 <a class="btn ghost" href="/bulk?kind=checklist">Bulk import</a></div></div>
 <p class="sub">Rules spawn a fresh task automatically on schedule — no one has to remember.</p>
+{# The same search box as everywhere else: words from the thing, or its ID. #}
+<form method="get" action="/recurring" class="card searchbar">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="Words from the checklist task">
+  </div>
+  <div class="acts">
+    <button class="btn">Search</button>
+    {% if q %}<a class="btn ghost" href="/recurring">Clear</a>{% endif %}
+  </div>
+</form>
+{% if q %}
+<p class="sub">Showing everything matching <strong>“{{ q }}”</strong>.</p>
+{% endif %}
+
 
 <div class="grid g2">
   <div>

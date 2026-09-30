@@ -751,3 +751,17 @@ h1 .refid{font-size:14px;margin-right:8px}
 
 /* Which window the EM score is measured over. */
 .tabs.scoreperiod{margin:10px 0 6px}
+
+/* The search box earns more room than a dropdown: people type sentences
+   into it, and a 190px field shows four words of a search they can no
+   longer read back. */
+.daterange>div.fb-wide{flex:1 1 320px}
+
+/* The search field on a report's filter bar, wide enough to read back. */
+.filterbar .fb-f.fb-wide{flex:1 1 100%;max-width:560px}
+
+/* The standalone search bar on Checklist, FMS and the Help Desk. */
+.searchbar{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;
+  margin-bottom:14px}
+.searchbar .fb-wide{flex:1 1 320px;max-width:560px}
+.searchbar .acts{display:flex;gap:8px}

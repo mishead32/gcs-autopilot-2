@@ -47,6 +47,22 @@
 
 <p><a class="btn" href="/help/new">Ask for help</a></p>
 
+{# The same search box as everywhere else. #}
+<form method="get" action="/help" class="card searchbar">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="Words from the request">
+  </div>
+  <div class="acts">
+    <button class="btn">Search</button>
+    {% if q %}<a class="btn ghost" href="/help">Clear</a>{% endif %}
+  </div>
+</form>
+{% if q %}
+<p class="sub">Showing everything matching <strong>“{{ q }}”</strong>.</p>
+{% endif %}
+
 <div class="card">
   <strong>People have asked you for</strong>
   <div style="margin-top:12px">

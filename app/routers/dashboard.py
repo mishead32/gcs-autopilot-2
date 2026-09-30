@@ -6,6 +6,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import search
 from ..db import get_db
 from ..deps import current_user, manager_up, admin_up
 from ..models import (
@@ -267,10 +268,13 @@ def my_score_api(days: int = 30, period: str = "", date_from: str = "",
 
 # ------------------------------------------------------- recurring rules ---
 @router.get("/recurring", response_class=HTMLResponse)
-def recurring_list(request: Request, export: str = "",
+def recurring_list(request: Request, export: str = "", q: str = "",
                    user: User = Depends(manager_up), db: Session = Depends(get_db)):
+    text_q = search.clean(q)
     rules = db.scalars(
-        select(RecurringRule).where(RecurringRule.org_id == user.org_id)
+        search.apply(
+            select(RecurringRule).where(RecurringRule.org_id == user.org_id),
+            [RecurringRule.title, RecurringRule.details], text_q)
         .order_by(RecurringRule.title)
     ).all()
     doers = db.scalars(
@@ -293,6 +297,7 @@ def recurring_list(request: Request, export: str = "",
         ], rules, "The rules that create checklist tasks each day.")
 
     return templates.TemplateResponse(request, "recurring.html", {
+        "q": text_q,
         "user": user, "rules": rules, "doers": doers, "branches": branches,
         "frequencies": FREQ_ORDER, "FREQ_LABELS": FREQ_LABELS,
         "today_iso": clock.today().isoformat(),

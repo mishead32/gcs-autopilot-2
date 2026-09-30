@@ -46,7 +46,8 @@
 </div>
 
 {{ date_presets(f) }}
-{{ filter_bar(f, basis='planned date', show_priority=false) }}
+{# No task-text search here: this report totals people, not tasks. #}
+{{ filter_bar(f, basis='planned date', show_priority=false, show_search=false) }}
 
 <div class="grid g3">
   <div class="kpi {{ 'ok' if avg >= 85 else ('warn' if avg >= 60 else 'bad') }}">

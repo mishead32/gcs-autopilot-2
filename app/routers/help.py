@@ -18,6 +18,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import search
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
@@ -39,13 +40,17 @@ def _visible(user: User):
 
 
 @router.get("/help", response_class=HTMLResponse)
-def help_list(request: Request, user: User = Depends(current_user),
+def help_list(request: Request, q: str = "",
+              user: User = Depends(current_user),
               db: Session = Depends(get_db)):
+    text_q = search.clean(q)
     tickets = db.scalars(
-        _visible(user).order_by(HelpTicket.created_at.desc()).limit(200)
+        search.apply(_visible(user),
+                     [HelpTicket.subject, HelpTicket.details], text_q)
+        .order_by(HelpTicket.created_at.desc()).limit(200)
     ).all()
     return templates.TemplateResponse(request, "help.html", {
-        "user": user,
+        "user": user, "q": text_q,
         "asked_of_me": [t for t in tickets if t.helper_id == user.id],
         "i_asked": [t for t in tickets if t.raiser_id == user.id],
         "others": [t for t in tickets

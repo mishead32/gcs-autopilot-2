@@ -4891,5 +4891,132 @@ for _junk in ("//evil.example.com", "https://evil.example.com",
           _lv.url(_Fake(_junk), "/tasks") == "/tasks",
           _lv.url(_Fake(_junk), "/tasks"))
 
+print("\n== searching by words, not just by ID ==")
+# Until now the only thing anyone could search for was the reference, which
+# is useful only if you already know it. What people actually remember is a
+# few words from the task.
+from app import search as _se
+from app.db import SessionLocal as _slB
+from app.models import Task as _TB, RecurringRule as _RB, Flow as _FB
+
+_wordy = mgr.post("/tasks/new", data={
+    "title": f"SMOKE chase the Maybach RC papers {RUN}",
+    "details": "Ring the dealership about the registration certificate",
+    "doer_id": "6", "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_wid = int(_re.findall(r"/tasks/(\d+)/comment", _wordy.text)[0])
+with _slB() as _d:
+    _wref = _d.get(_TB, _wid).ref
+
+def _hits(html):
+    return {int(i) for i in _re.findall(r'/tasks/(\d+)"', html)}
+
+# A word from the TITLE.
+check("a word from the task name finds it",
+      _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=Maybach").text))
+# A word from the DETAILS — the thing that was impossible before.
+check("a word from the details finds it too",
+      _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=dealership").text))
+check("case does not matter",
+      _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=MAYBACH").text)
+      and _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=maybach").text))
+check("several words in a row work",
+      _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=Maybach+RC").text))
+check("the ID still works", _wid in _hits(
+      admin.get(f"/tasks?scope=all&status=pending&q={_wref}").text))
+check("the old ref= link still works", _wid in _hits(
+      admin.get(f"/tasks?scope=all&status=pending&ref={_wref}").text))
+check("a word nobody wrote finds nothing",
+      not _hits(admin.get("/tasks?scope=all&status=pending&q=zzzqqqx").text))
+check("the page says what it searched for",
+      "Maybach" in admin.get("/tasks?scope=all&status=pending&q=Maybach").text)
+
+# A search must look in every tab, or "not found" would mean "not on this tab".
+submit(doer, _wid, completion_note="done")
+check("a finished task is still findable from the Pending tab",
+      _wid in _hits(admin.get("/tasks?scope=all&status=pending&q=Maybach").text),
+      "searching only the open tab")
+
+# % and _ are ordinary characters, not wildcards. Without escaping them a
+# search for "100%" matches every row, which reads as "search is broken".
+_pc = mgr.post("/tasks/new", data={
+    "title": f"SMOKE hit 100% attendance {RUN}", "details": "",
+    "doer_id": "6", "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_pcid = int(_re.findall(r"/tasks/(\d+)/comment", _pc.text)[0])
+_pc_hits = _hits(admin.get("/tasks?scope=all&status=all&q=100%25").text)
+check("a percent sign is searched for, not treated as a wildcard",
+      _pcid in _pc_hits and len(_pc_hits) < 20, len(_pc_hits))
+_us = _hits(admin.get("/tasks?scope=all&status=all&q=_").text)
+check("an underscore is not a wildcard either", len(_us) < 20, len(_us))
+check("a lone percent does not return the whole table",
+      len(_hits(admin.get("/tasks?scope=all&status=all&q=%25%25%25").text)) == 0)
+
+# It has to reach the Excel download as well, or the file and the screen
+# would disagree.
+_sx = admin.get("/tasks?scope=all&status=all&q=Maybach&export=xlsx")
+check("the download honours the search", _sx.status_code == 200, _sx.status_code)
+
+# Everywhere means everywhere.
+for _page, _param in (("/reports/tasks?source=delegation&state=all", "q"),
+                      ("/reports/audit?state=all", "q")):
+    _r = admin.get(f"{_page}&{_param}=Maybach")
+    check(f"{_page.split('?')[0]} has a search", _r.status_code == 200, _r.status_code)
+    check(f"{_page.split('?')[0]} finds it", _wid in _hits(_r.text),
+          sorted(_hits(_r.text))[:5])
+    check(f"{_page.split('?')[0]} narrows to it",
+          len(_hits(_r.text)) < 25, len(_hits(_r.text)))
+    check(f"{_page.split('?')[0]} shows the box",
+          'name="q"' in admin.get(_page).text)
+
+for _page in ("/recurring", "/flows", "/help", "/followups?desk=pc"):
+    _r = admin.get(_page)
+    check(f"{_page.split('?')[0]} has a search box", 'name="q"' in _r.text,
+          _r.status_code)
+
+# And each of those really filters.
+with _slB() as _d:
+    _rule = _d.query(_RB).first()
+    _rule_word = _rule.title.split()[0]
+    _rule_title = _rule.title
+    _flow = _d.query(_FB).first()
+    _flow_word = _flow.name.split()[0]
+_rr = admin.get(f"/recurring?q={_rule_word}").text
+# Compare against the ESCAPED title: a rule called "invalid member & face-ID"
+# reaches the page as "&amp;", and comparing raw text finds nothing while the
+# row is sitting right there.
+from html import escape as _esc
+check("the checklist search keeps matching rules",
+      _esc(_rule_title)[:30] in _rr, _rule_title[:40])
+check("and drops the rest",
+      admin.get("/recurring?q=zzzqqqx").text.count("<tr>")
+      < _rr.count("<tr>"), "nothing was filtered")
+_fr = admin.get(f"/flows?q={_flow_word}").text
+check("the FMS search works", _flow_word in _fr)
+check("and an unmatched flow search empties the list",
+      admin.get("/flows?q=zzzqqqx").text.count('href="/flows/') <
+      _fr.count('href="/flows/'))
+
+# The follow-up desk: the search must narrow the LIST and the three cards
+# together, or the numbers describe a different list from the one shown.
+_pcs = login("pc@gcs.local")
+_today_s = _clock.today().isoformat()
+_fu_all = _pcs.get(f"/followups?desk=pc&date_from={_today_s}&date_to={_today_s}").text
+_fu_none = _pcs.get(
+    f"/followups?desk=pc&date_from={_today_s}&date_to={_today_s}&q=zzzqqqx").text
+check("the follow-up search narrows the list",
+      len(_hits(_fu_none)) == 0 and len(_hits(_fu_all)) > 0,
+      (len(_hits(_fu_all)), len(_hits(_fu_none))))
+check("and the cards agree with it",
+      ">0</div>" in _fu_none, "the cards still count the whole desk")
+
+# Nothing typed means no search — the list is not silently emptied.
+check("an empty search changes nothing",
+      _hits(admin.get("/tasks?scope=all&status=all&q=").text)
+      == _hits(admin.get("/tasks?scope=all&status=all").text))
+check("spaces alone count as empty", _se.clean("   ") == "")
+check("a very long paste is cut short rather than refused",
+      len(_se.clean("x" * 500)) == _se.MAX_LEN)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

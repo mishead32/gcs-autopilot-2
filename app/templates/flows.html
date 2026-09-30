@@ -10,6 +10,22 @@
   </div>
 </div>
 
+{# The same search box as everywhere else: words from the thing, or its ID. #}
+<form method="get" action="/flows" class="card searchbar">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="Words from the flow&#39;s name or description">
+  </div>
+  <div class="acts">
+    <button class="btn">Search</button>
+    {% if q %}<a class="btn ghost" href="/flows">Clear</a>{% endif %}
+  </div>
+</form>
+{% if q %}
+<p class="sub">Showing everything matching <strong>“{{ q }}”</strong>.</p>
+{% endif %}
+
 <h2>Templates</h2>
 {% if flows %}
 <div class="table-wrap"><table>

@@ -25,6 +25,12 @@
 <form method="get" action="/followups" class="card filterbar">
   <input type="hidden" name="desk" value="{{ desk }}">
   <div class="fb-row">
+    <div class="fb-f fb-wide"><label>Search</label>
+      <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+             placeholder="Words from the task, or its ID"
+             title="Searches the task's name, its details and its ID"></div>
+  </div>
+  <div class="fb-row">
     <div class="fb-f"><label>From date</label>
       <input type="date" name="date_from" value="{{ date_from }}"></div>
     <div class="fb-f"><label>To date</label>
@@ -62,7 +68,7 @@
    so ticking off "still to chase" means the list shrinks as you work rather
    than scrolling past everything already done to find what is not. #}
 {% set base = '/followups?desk=' ~ desk ~ '&date_from=' ~ date_from ~
-              '&date_to=' ~ date_to %}
+              '&date_to=' ~ date_to ~ '&q=' ~ q|urlencode %}
 <div class="grid g3 fu-pick">
   <a class="kpi {{ 'on' if show == 'all' }}" href="{{ base }}&show=all&when={{ when }}">
     <div class="n">{{ n.all }}</div><div class="l">Total follow-ups</div>
@@ -145,6 +151,7 @@
         <input type="hidden" name="desk" value="{{ desk }}">
         <input type="hidden" name="show" value="{{ show }}">
         <input type="hidden" name="when" value="{{ when }}">
+        <input type="hidden" name="q" value="{{ q }}">
         <button class="tickbox {{ 'on' if f }}"
                 title="{{ 'Ticked — click to undo' if f else 'Mark followed up' }}">
           {{ '✓' if f else '' }}</button>

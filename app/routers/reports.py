@@ -31,6 +31,7 @@ from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import search
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
@@ -91,6 +92,7 @@ class Filters:
     doer_id: int | None = None
     priority: str = ""
     state: str = ""
+    q: str = ""            # free-text search over the task and its details
 
     branches: list = field(default_factory=list)
     doers: list = field(default_factory=list)
@@ -109,7 +111,7 @@ class Filters:
     @property
     def active(self) -> bool:
         return bool(self.date_from or self.date_to or self.branch_id
-                    or self.doer_id or self.priority)
+                    or self.doer_id or self.priority or self.q)
 
     @property
     def clear_url(self) -> str:
@@ -121,7 +123,8 @@ class Filters:
         q = dict(self.hidden)
         q.update({"date_from": self.f_from, "date_to": self.f_to,
                   "branch": self.branch_id or "", "doer": self.doer_id or "",
-                  "priority": self.priority, "state": self.state})
+                  "priority": self.priority, "state": self.state,
+                  "q": self.q})
         q.update(over)
         q = {k: v for k, v in q.items() if v not in ("", None)}
         return f"{self.path}?{urlencode(q)}"
@@ -161,12 +164,15 @@ class Filters:
                 bits.append(d.name)
         if self.priority:
             bits.append(f"{self.priority} priority")
+        if self.q:
+            bits.append(f'matching "{self.q}"')
         return " · ".join(bits)
 
 
 def build_filters(db: Session, user: User, path: str, date_from: str, date_to: str,
                   branch: str, doer: str, priority: str = "", state: str = "",
-                  hidden: dict | None = None, default_days: int | None = None) -> Filters:
+                  hidden: dict | None = None, default_days: int | None = None,
+                  q: str = "") -> Filters:
     """Validate the query string once, for every report.
 
     A branch the viewer cannot see, or an employee who is not in the branch
@@ -201,6 +207,7 @@ def build_filters(db: Session, user: User, path: str, date_from: str, date_to: s
 
     return Filters(date_from=start, date_to=end, branch_id=branch_id,
                    doer_id=doer_id, priority=pr, state=state.strip().lower(),
+                   q=search.clean(q),
                    branches=branches, doers=doers, path=path,
                    hidden=hidden or {})
 
@@ -234,6 +241,11 @@ def _apply_common(q, f: Filters):
         q = q.where(Task.doer_id == f.doer_id)
     if f.priority:
         q = q.where(Task.priority == Priority(f.priority))
+    if f.q:
+        # The same search as the task list: the reference exactly, or the
+        # words anywhere in the task's name or its details.
+        q = q.where(or_(func.upper(Task.ref) == f.q.upper().replace(" ", ""),
+                        search.clause([Task.title, Task.details], f.q)))
     return q
 
 
@@ -295,7 +307,7 @@ def index(request: Request, user: User = Depends(current_user)):
 def task_report(request: Request, source: str = "delegation",
                 date_from: str = "", date_to: str = "", branch: str = "",
                 doer: str = "", priority: str = "", state: str = "pending",
-                export: str = "",
+                q: str = "", export: str = "",
                 user: User = Depends(current_user), db: Session = Depends(get_db)):
     if source not in SOURCES:
         raise HTTPException(404, "Unknown report. Pick one from the Reports page.")
@@ -303,7 +315,7 @@ def task_report(request: Request, source: str = "delegation",
     src = cfg["src"]
 
     f = build_filters(db, user, "/reports/tasks", date_from, date_to, branch,
-                      doer, priority, state, hidden={"source": source})
+                      doer, priority, state, hidden={"source": source}, q=q)
     if f.state not in ("pending", "completed", "overdue", "audit_pending",
                        "audit_done", "false", "all"):
         f.state = "pending"
@@ -499,10 +511,10 @@ def followup_report(request: Request, date_from: str = "", date_to: str = "",
 @router.get("/reports/audit", response_class=HTMLResponse)
 def audit_report(request: Request, date_from: str = "", date_to: str = "",
                  branch: str = "", doer: str = "", priority: str = "",
-                 state: str = "pending", export: str = "",
+                 state: str = "pending", q: str = "", export: str = "",
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     f = build_filters(db, user, "/reports/audit", date_from, date_to, branch,
-                      doer, priority, state)
+                      doer, priority, state, q=q)
     if f.state not in ("pending", "completed", "waiting", "not_required", "all"):
         f.state = "pending"
 

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import UPLOAD_DIR
 from .. import flash
 from .. import lastview
+from .. import search
 from .. import clock
 from ..db import get_db
 from ..deps import current_user, manager_up, can_view_task, require_right
@@ -224,9 +225,14 @@ def _parse_day(raw: str):
 @router.get("/tasks", response_class=HTMLResponse)
 def task_list(request: Request, status: str = "pending", scope: str = "mine",
               date_from: str = "", date_to: str = "", source: str = "",
-              doer: str = "", branch: str = "", dept: str = "", ref: str = "",
-              export: str = "",
+              doer: str = "", branch: str = "", dept: str = "",
+              q: str = "", ref: str = "", export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
+    # Read the search text first: `q` is reused below as the query being
+    # built, and reading it afterwards would find a SELECT statement rather
+    # than what the person typed. `ref` is the old name for this box and is
+    # still accepted, so existing links and bookmarks keep working.
+    text_q = search.clean(q or ref)
     q = _visible_tasks_query(user)
     now = clock.now()
     status = STATUS_ALIASES.get(status, status)
@@ -274,15 +280,24 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         q = q.where(Task.doer_id.in_(
             select(User.id).where(User.department_id == dept_id)))
 
-    # Looking one up by the reference people quote to each other. Typing the
-    # number alone is enough ("14" finds DEL-14 on the Delegation tab), and
-    # a reference overrides the status tab, because somebody searching for
-    # DEL-14 wants DEL-14 whichever state it turned out to be in.
-    ref_q = ref.strip().upper().replace(" ", "")
-    if ref_q:
-        if ref_q.isdigit() and source in SOURCE_TABS:
-            ref_q = f"{REF_PREFIX[SOURCE_TABS[source]['src']]}-{int(ref_q):02d}"
-        q = q.where(func.upper(Task.ref) == ref_q)
+    # One box for both ways of looking something up: the reference people
+    # quote to each other ("DEL-14", or just "14" on the Delegation tab) and
+    # the words they actually remember from the task itself.
+    #
+    # A search overrides the status tab, because somebody looking for a task
+    # wants to find it whichever state it turned out to be in — being told
+    # "no results" when it is sitting one tab away is the opposite of a
+    # search.
+    if text_q:
+        looked_up = text_q.upper().replace(" ", "")
+        if looked_up.isdigit() and source in SOURCE_TABS:
+            looked_up = f"{REF_PREFIX[SOURCE_TABS[source]['src']]}-{int(looked_up):02d}"
+        # The reference matches exactly; the words match anywhere inside the
+        # title or the details.
+        q = q.where(or_(
+            func.upper(Task.ref) == looked_up,
+            search.clause([Task.title, Task.details], text_q),
+        ))
         status = "all"
 
     if status == "pending":
@@ -383,7 +398,7 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     return templates.TemplateResponse(request, "tasks.html", {
         "user": user, "tasks": tasks, "status": status, "scope": scope,
         "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
-        "ref_q": ref.strip(),
+        "ref_q": text_q, "q": text_q,
         "status_tabs": status_tabs, "scopes": scopes, "own_open": own_open,
         "status_labels": STATUS_LABELS,
         "status_note": STATUS_NOTES.get(status, ""),
