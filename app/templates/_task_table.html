@@ -6,7 +6,8 @@
     <th>ID</th>
     <th>Task</th>
     {% if show_doer %}<th>Doer</th>{% endif %}
-    <th>Priority</th><th>Status</th><th>Audit</th><th>Planned</th>
+    <th>Priority</th><th>Status</th><th>Audit</th>
+    <th>Assigned</th><th>Planned</th>
     <th>Completed</th><th>Source</th><th></th>
   </tr>
   {% for t in tasks %}
@@ -27,6 +28,10 @@
       <a class="chip falsemark" href="/tasks/{{ t.id }}#audit"
          title="{{ t.false_mark_reason or 'Closed without the work being done' }}">false marking −10</a>
       {% endif %}</td>
+    {# When it was handed over. Reads left to right with the two beside it:
+       given, due, done. #}
+    <td class="whencell">{{ t.created_at|dt('%d %b, %I:%M %p') }}<br>
+      <span style="font-size:11px" class="m">{{ t.created_at|ago }}</span></td>
     <td class="{{ 'overdue' if t.is_overdue }}">{{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
       <span style="font-size:11px">{{ t.due_at|due }}</span></td>
     {# Closed, or finished and waiting on an auditor — both are "the doer has

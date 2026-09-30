@@ -177,6 +177,7 @@ def task_columns(show_doer: bool = True):
                  ("Doer email", lambda t: t.doer.email if t.doer else "")]
     cols += [
         ("Assigned by", lambda t: t.assigner.name if t.assigner else ""),
+        ("Assigned on", lambda t: t.created_at),
         ("Work type", lambda t: SOURCE_NAMES.get(t.source.value, t.source.value)),
         ("Priority", lambda t: t.priority.value.title()),
         ("Weight", lambda t: t.weight),

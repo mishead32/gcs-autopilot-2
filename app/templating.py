@@ -33,6 +33,33 @@ def relative_due(value):
     return f"in {mins // 1440}d"
 
 
+def ago(value):
+    """How long ago something happened, in the plainest words.
+
+    Shown under an assigned date so "when was this given to me" can be
+    answered at a glance. A task assigned eleven days ago and still open
+    says something a date on its own does not.
+    """
+    if value is None:
+        return ""
+    mins = int((clock.now() - value).total_seconds() // 60)
+    if mins < 0:
+        return "just now"          # clock skew, or a date typed ahead
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{mins}m ago"
+    if mins < 1440:
+        return f"{mins // 60}h ago"
+    days = mins // 1440
+    if days < 30:
+        return f"{days}d ago"
+    if days < 365:
+        return f"{days // 30}mo ago"
+    return f"{days // 365}y ago"
+
+
+templates.env.filters["ago"] = ago
 templates.env.filters["dt"] = dt
 templates.env.filters["due"] = relative_due
 templates.env.globals["APP_NAME"] = APP_NAME

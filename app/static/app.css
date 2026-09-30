@@ -765,3 +765,7 @@ h1 .refid{font-size:14px;margin-right:8px}
   margin-bottom:14px}
 .searchbar .fb-wide{flex:1 1 320px;max-width:560px}
 .searchbar .acts{display:flex;gap:8px}
+
+/* The assigned / planned / completed trio: kept on one line each so the
+   three dates line up down the table and can be read as a sequence. */
+.whencell{white-space:nowrap}

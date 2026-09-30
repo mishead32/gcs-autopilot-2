@@ -36,7 +36,9 @@
         <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>
         <tr><th style="background:0">Due</th>
             <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})</td></tr>
-        <tr><th style="background:0">Created</th><td>{{ task.created_at|dt }}</td></tr>
+        <tr><th style="background:0">Assigned on</th>
+            <td>{{ task.created_at|dt }}
+              <span class="m">· {{ task.created_at|ago }}</span></td></tr>
         <tr><th style="background:0">Score weight</th>
             <td><strong>{{ task.weight_label }}</strong> — counts as {{ task.weight }}
                 task{{ '' if task.weight == 1 else 's' }} in {{ task.doer.name }}'s score</td></tr>

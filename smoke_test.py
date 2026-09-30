@@ -5018,5 +5018,109 @@ check("spaces alone count as empty", _se.clean("   ") == "")
 check("a very long paste is cut short rather than refused",
       len(_se.clean("x" * 500)) == _se.MAX_LEN)
 
+print("\n== when a task was assigned ==")
+from app.db import SessionLocal as _slC
+from app.models import Task as _TC2, TaskSource as _SC2
+from app.templating import ago as _ago
+from datetime import timedelta as _tdC
+
+# The moment a task was handed over already exists on every row — it is what
+# created_at has always meant. These checks are that it is TRUE for all three
+# kinds of work, and that it is now visible.
+with _slC() as _d:
+    _allC = _d.query(_TC2).all()
+    check("every task knows when it was assigned",
+          all(t.created_at is not None for t in _allC),
+          [t.id for t in _allC if t.created_at is None][:5])
+    for _src in _SC2:
+        _rows = [t for t in _allC if t.source == _src]
+        if not _rows:
+            continue
+        check(f"{_src.value} tasks have an assigned time",
+              all(t.created_at for t in _rows))
+        check(f"and no {_src.value} task claims to be assigned after it is due"
+              " by more than a day",
+              all(t.created_at <= t.due_at + _tdC(days=1) for t in _rows),
+              [(t.ref, str(t.created_at)[:16], str(t.due_at)[:16])
+               for t in _rows if t.created_at > t.due_at + _tdC(days=1)][:3])
+    _sample = next(t for t in _allC if t.source == _SC2.DELEGATION)
+    _sid, _sref = _sample.id, _sample.ref
+    _sstamp = _sample.created_at.strftime("%d %b, %I:%M %p")
+    _sfull = _sample.created_at.strftime("%d %b %Y, %I:%M %p")
+
+_listC = admin.get("/tasks?scope=all&status=all").text
+check("the task list has an Assigned column", "<th>Assigned</th>" in _listC)
+check("and it carries the real time", _sstamp in _listC, _sstamp)
+check("the three dates read as a sequence",
+      _listC.index("<th>Assigned</th>") < _listC.index("<th>Planned</th>")
+      < _listC.index("<th>Completed</th>"))
+
+_pageC = admin.get(f"/tasks/{_sid}").text
+check("the task's own page says Assigned on", "Assigned on" in _pageC)
+check("with the full date and time", _sfull in _pageC, _sfull)
+check("and no longer calls it 'Created'",
+      ">Created</th>" not in _pageC)
+
+# A newly delegated task is stamped at the moment it is handed over.
+_before = _clock.now()
+_nC = mgr.post("/tasks/new", data={
+    "title": f"SMOKE assigned stamp {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-31T23:59"})
+_ncid = int(_re.findall(r"/tasks/(\d+)/comment", _nC.text)[0])
+with _slC() as _d:
+    _t = _d.get(_TC2, _ncid)
+    check("a task assigned now is stamped now",
+          _before - _tdC(minutes=2) <= _t.created_at <= _clock.now() + _tdC(minutes=2),
+          str(_t.created_at))
+check("and the list shows it as just assigned",
+      "just now" in admin.get("/tasks?scope=all&status=all&q=assigned+stamp").text
+      or "m ago" in admin.get("/tasks?scope=all&status=all&q=assigned+stamp").text)
+
+# The follow-up desk, where "how long has this been sitting" is the question.
+_pcC = login("pc@gcs.local")
+_fuC = _pcC.get(f"/followups?desk=pc&date_from={_clock.today().isoformat()}"
+                f"&date_to={_clock.today().isoformat()}").text
+check("the follow-up desk has an Assigned column", "<th>Assigned</th>" in _fuC)
+
+# Both Excel downloads.
+try:
+    from openpyxl import load_workbook as _lwC
+    _xC = admin.get("/tasks?scope=all&status=all&export=xlsx")
+    _wsC = _lwC(_io4.BytesIO(_xC.content)).worksheets[0]
+    _hdrC = []
+    for _row in _wsC.iter_rows(min_row=1, max_row=8):
+        _vals = [c.value for c in _row if c.value]
+        if "Task" in _vals:
+            _hdrC = _vals
+            break
+    check("the task download has an Assigned on column",
+          "Assigned on" in _hdrC, _hdrC[:8])
+    check("next to who assigned it",
+          abs(_hdrC.index("Assigned on") - _hdrC.index("Assigned by")) == 1)
+    _fxC = _pcC.get(f"/followups?desk=pc&date_from={_clock.today().isoformat()}"
+                    f"&date_to={_clock.today().isoformat()}&export=xlsx")
+    _wsD = _lwC(_io4.BytesIO(_fxC.content)).worksheets[0]
+    _hdrD = []
+    for _row in _wsD.iter_rows(min_row=1, max_row=8):
+        _vals = [c.value for c in _row if c.value]
+        if "Task" in _vals:
+            _hdrD = _vals
+            break
+    check("the follow-up download has it too", "Assigned on" in _hdrD, _hdrD[:8])
+except ImportError:
+    pass
+
+# The "how long ago" wording, which is the bit people actually read.
+_nowC = _clock.now()
+for _mins, _want in ((0, "just now"), (5, "5m ago"), (90, "1h ago"),
+                     (60 * 26, "1d ago"), (60 * 24 * 45, "1mo ago"),
+                     (60 * 24 * 400, "1y ago")):
+    check(f"{_mins} minutes ago reads as {_want!r}",
+          _ago(_nowC - _tdC(minutes=_mins)) == _want,
+          _ago(_nowC - _tdC(minutes=_mins)))
+check("a missing time says nothing rather than lying", _ago(None) == "")
+check("a clock a little ahead does not print a negative age",
+      _ago(_nowC + _tdC(minutes=5)) == "just now")
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

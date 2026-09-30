@@ -140,7 +140,7 @@
 <div class="table-wrap">
 <table>
   <tr><th style="width:52px"></th><th>Task</th><th>Doer</th><th>Priority</th>
-      <th>Due</th><th>Status</th><th>Followed up by</th></tr>
+      <th>Assigned</th><th>Due</th><th>Status</th><th>Followed up by</th></tr>
   {% for t in tasks %}
   {% set f = ticks.get(t.id) %}
   <tr class="{{ 'fu-done' if f }}">
@@ -164,6 +164,10 @@
       {% if t.branch %}<div class="m" style="font-size:12px">{{ t.branch.name }}</div>{% endif %}</td>
     <td>{{ t.doer.name }}</td>
     <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }} {{ t.weight_label }}</span></td>
+    {# How long it has been sitting. The PC chasing a task assigned eleven
+       days ago is a different conversation from one assigned this morning. #}
+    <td class="whencell">{{ t.created_at|dt('%d %b, %I:%M %p') }}<br>
+      <span style="font-size:11px" class="m">{{ t.created_at|ago }}</span></td>
     <td class="{{ 'overdue' if t.due_at.date() < day }}">{{ t.due_at|dt('%d %b, %I:%M %p') }}</td>
     <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>
     <td>{% if f %}{{ f.by.name }}<div class="m" style="font-size:11px">{{ f.created_at|dt('%d %b, %I:%M %p') }}</div>
