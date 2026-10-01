@@ -41,3 +41,20 @@ TIMEZONE = "Asia/Kolkata"
 
 # A banner shown at the top of every page, e.g. "Demo — data resets"
 BANNER = os.getenv("MIDAP_BANNER", "")
+
+
+# ---------------------------------------------------------- Task Detective --
+# The AI second opinion on finished work. Off until a key is set, so the
+# software runs exactly as before on a machine that has none.
+#
+# The key is read from the environment and never written to the database, a
+# template or a log — same rule as every other secret here.
+AI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash").strip()
+AI_ENABLED = os.getenv("AI_AUDIT", "on").strip().lower() not in ("off", "0", "no")
+# How many attached files to show it, and how large a file to bother sending.
+# A phone photo is a couple of megabytes; six of them is a slow request and a
+# big one, and the seventh almost never changes the verdict.
+AI_MAX_FILES = int(os.getenv("AI_MAX_FILES", "6") or 6)
+AI_MAX_FILE_MB = float(os.getenv("AI_MAX_FILE_MB", "4") or 4)
+AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "45") or 45)

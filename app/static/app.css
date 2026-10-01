@@ -819,3 +819,16 @@ table tr:hover td.stickycol{background:var(--card)}
 .statecell{white-space:normal}
 .statecell .chip{display:block;width:fit-content;margin-bottom:3px}
 .statecell .chip:last-child{margin-bottom:0}
+
+/* Task Detective — the AI's verdict on a piece of proof. Coloured by how
+   much a person needs to look, not by how confident the machine is. */
+.chip.ai_ok{background:#dcfce7;color:#14532d}
+.chip.ai_weak{background:#fef3c7;color:#854d0e}
+.chip.ai_unrelated{background:#fee2e2;color:#991b1b;font-weight:800}
+.chip.ai_no_proof{background:#fee2e2;color:#991b1b;font-weight:800}
+.chip.ai_error{background:var(--chip);color:var(--muted)}
+.airemark{max-width:46ch;white-space:normal}
+.aibox{border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+  margin-top:12px;background:var(--bg)}
+.aibox .who{font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--muted);font-weight:700;margin-bottom:6px}

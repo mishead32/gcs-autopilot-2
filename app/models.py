@@ -1151,6 +1151,79 @@ class HelpTicket(Base):
     task: Mapped[Task | None] = relationship()
 
 
+class AiVerdict(str, enum.Enum):
+    """What the AI thought of the proof attached to a finished task."""
+    OK = "ok"                 # the proof shows the job described
+    WEAK = "weak"             # something was attached, but it proves little
+    UNRELATED = "unrelated"   # the proof is of something else entirely
+    NO_PROOF = "no_proof"     # nothing attached, or only the word "done"
+    ERROR = "error"           # could not be checked — not a judgement
+
+
+AI_VERDICT_LABELS = {
+    AiVerdict.OK: "Proof looks right",
+    AiVerdict.WEAK: "Proof is thin",
+    AiVerdict.UNRELATED: "Proof does not match",
+    AiVerdict.NO_PROOF: "No real proof",
+    AiVerdict.ERROR: "Could not check",
+}
+
+# The two that deserve a human's attention before the task is signed off.
+AI_SUSPECT = (AiVerdict.UNRELATED, AiVerdict.NO_PROOF)
+
+
+class AiAudit(Base):
+    """One AI reading of one finished task.
+
+    Advisory, and only advisory. Nothing here changes a task's state, closes
+    it, reopens it or moves anybody's score — it is a second pair of eyes
+    that writes down what it saw, and a person still decides. An AI quietly
+    costing somebody marks is how a scoring system loses the trust that
+    makes it worth having.
+
+    Kept as its own table rather than columns on the task so a task can be
+    re-checked later without losing what was said the first time, and so
+    turning the whole feature off leaves the tasks table untouched.
+    """
+    __tablename__ = "ai_audits"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+
+    verdict: Mapped[AiVerdict] = mapped_column(
+        Enum(AiVerdict), default=AiVerdict.ERROR, index=True)
+    # 0-100. The model's own reading of how sure it is, which is worth
+    # showing: "does not match, 55% sure" is a different instruction to a
+    # human from "does not match, 95% sure".
+    confidence: Mapped[int] = mapped_column(Integer, default=0)
+    remark: Mapped[str] = mapped_column(Text, default="")
+    # What it actually had in front of it, in plain words, so nobody has to
+    # wonder whether it saw the screenshot or only its file name.
+    looked_at: Mapped[str] = mapped_column(Text, default="")
+
+    files_seen: Mapped[int] = mapped_column(Integer, default=0)
+    images_seen: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(60), default="")
+    took_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now,
+                                                 index=True)
+
+    task: Mapped[Task] = relationship()
+
+    @property
+    def label(self) -> str:
+        return AI_VERDICT_LABELS.get(self.verdict, "Checked")
+
+    @property
+    def is_suspect(self) -> bool:
+        return self.verdict in AI_SUSPECT
+
+    @property
+    def is_judgement(self) -> bool:
+        """False when the check failed — an error is not an accusation."""
+        return self.verdict != AiVerdict.ERROR
+
+
 class Holiday(Base):
     """A day on which no work is expected.
 

@@ -141,6 +141,38 @@
       <p style="white-space:pre-wrap;margin:0">{{ task.audit_remark }}</p>
       {% endif %}
 
+      {# What the machine thought, kept visibly separate from what a person
+         decides. Above the buttons because it is meant to inform the
+         decision, labelled as a machine so nobody mistakes it for one. #}
+      {% if ai %}
+      <div class="aibox">
+        <div class="who">◎ Task Detective AI — advice only, decides nothing</div>
+        <span class="chip ai_{{ ai.verdict.value }}">{{ ai.label }}</span>
+        {% if ai.is_judgement %}<span class="m">{{ ai.confidence }}% sure</span>{% endif %}
+        <p style="margin:8px 0 0;white-space:pre-wrap">{{ ai.remark }}</p>
+        <div class="m" style="margin-top:6px;font-size:11px">
+          {% if ai.looked_at %}Looked at: {{ ai.looked_at }} · {% endif %}
+          {{ ai.files_seen }} file(s), {{ ai.images_seen }} opened as images
+          · {{ ai.created_at|ago }}
+        </div>
+        {% if can_set_audit %}
+        <form method="post" action="/detective/task/{{ task.id }}" style="margin-top:10px">
+          <button class="btn ghost sm">Look again</button>
+        </form>
+        {% endif %}
+      </div>
+      {% elif ai_on and task.doer_finished %}
+      <div class="aibox">
+        <div class="who">◎ Task Detective AI</div>
+        <p class="m" style="margin:0">Not checked yet.</p>
+        {% if can_set_audit %}
+        <form method="post" action="/detective/task/{{ task.id }}" style="margin-top:10px">
+          <button class="btn ghost sm">Check it now</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+
       {% if not can_set_audit %}
       <p class="m" style="margin-top:10px">
         Only someone with the audit right can decide this.

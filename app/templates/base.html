@@ -55,6 +55,11 @@
       <a href="/tasks?scope=all&status=audit_pending" title="Work finished and waiting to be audited">
         <span class="ic">⚖</span><span class="lb">Audit process</span></a>
       {% endif %}
+      {# The AI's reading of finished work. Its own menu item, next to the
+         manual audit rather than inside it, because it decides nothing. #}
+      <a class="{{ 'active' if p.startswith('/detective') }}" href="/detective"
+         title="An AI second opinion on the proof attached to finished work">
+        <span class="ic">◎</span><span class="lb">Task Detective AI</span></a>
       <a class="{{ 'active' if p.startswith('/bulk') }}" href="/bulk" title="Bulk import">
         <span class="ic">⇪</span><span class="lb">Bulk import</span></a>
       {% endif %}

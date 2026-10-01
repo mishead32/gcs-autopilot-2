@@ -5571,5 +5571,210 @@ check("one header per column still",
       _hdrF.count("<th") == _fitF.split("</tr>", 2)[1].count("<td"),
       (_hdrF.count("<th"), _fitF.split("</tr>", 2)[1].count("<td")))
 
+print("\n== Task Detective AI ==")
+# Driven against a FAKE Gemini, so every branch is exercised without a key
+# and without a byte leaving this machine.
+import json as _jsonG, httpx as _hxG
+from app import config as _cfgG
+from app.services import detective as _detG
+from app.db import SessionLocal as _slG
+from app.models import (AiAudit as _AAG, AiVerdict as _AVG, Task as _TG,
+                        Attachment as _ATG, TaskStatus as _STG)
+
+check("it is off until a key is given", not _detG.available())
+check("and says so in plain words",
+      "GEMINI_API_KEY" in _detG.why_not() and "nothing is sent" in _detG.why_not())
+check("the page still opens with no key",
+      admin.get("/detective").status_code == 200)
+check("and explains itself rather than looking broken",
+      "not running" in admin.get("/detective").text)
+check("a doer cannot see other people's AI remarks",
+      doer.get("/detective").status_code == 403)
+
+_PNGG = b"\x89PNG\r\n\x1a\x0a" + b"\x00" * 300
+
+def _fakeG(reply, status=200):
+    def h(request):
+        h.sent = _jsonG.loads(request.content)
+        h.key = request.headers.get("x-goog-api-key")
+        if status != 200:
+            return _hxG.Response(status, text="quota exhausted")
+        return _hxG.Response(200, json={"candidates": [
+            {"content": {"parts": [{"text": reply}]}}]})
+    return h
+
+# Pretend a key exists, for this block only.
+_detG.AI_KEY = _cfgG.AI_KEY = "test-key-not-real"
+_detG.AI_ENABLED = _cfgG.AI_ENABLED = True
+check("with a key it reports itself available", _detG.available())
+
+_tgr = mgr.post("/tasks/new", data={
+    "title": f"SMOKE detective: fix the BIPS bus GPS {RUN}",
+    "details": "Install GPS on bus 4 and send a photo of the fitted unit",
+    "doer_id": "6", "branch_id": "", "priority": "medium",
+    "due_at": "2026-12-31T23:59"})
+_tid = int(_re.findall(r"/tasks/(\d+)/comment", _tgr.text)[0])
+submit(doer, _tid, completion_note="done")
+
+def _runG(reply, status=200, task_id=None):
+    h = _fakeG(reply, status)
+    with _hxG.Client(transport=_hxG.MockTransport(h)) as c:
+        with _slG() as _d:
+            row = _detG.review(_d, _d.get(_TG, task_id or _tid), client=c)
+            _d.refresh(row)
+            return h, row
+
+_h, _row = _runG(_jsonG.dumps({
+    "verdict": "unrelated", "confidence": 88,
+    "remark": "The screenshot is a WhatsApp chat about a gym membership. "
+              "The task asked for a photo of a GPS unit fitted to a bus.",
+    "looked_at": "1 screenshot of a chat"}))
+check("it reaches a verdict", _row.verdict == _AVG.UNRELATED, _row.verdict)
+check("keeps how sure it was", _row.confidence == 88)
+check("and writes something a manager can act on",
+      "WhatsApp" in _row.remark and len(_row.remark) > 30)
+check("the key goes in the header, never the URL", _h.key == "test-key-not-real")
+
+# What it was actually SENT — the whole point is that it sees the image.
+_parts = _h.sent["contents"][0]["parts"]
+check("the task itself was sent", "TASK:" in _parts[0]["text"])
+check("so was what the person typed when marking it done",
+      "done" in _parts[0]["text"])
+check("and what the task asked for", "GPS" in _parts[0]["text"])
+check("it was told whether proof was required",
+      "PROOF WAS:" in _parts[0]["text"])
+# Not a length threshold — decode it and check the bytes are the file. A
+# threshold would have passed on a truncated image and failed on a small one.
+import base64 as _b64G
+_imgG = [p["inline_data"] for p in _parts if "inline_data" in p]
+check("the attached image was sent as a real image, not a file name",
+      len(_imgG) == 1, [list(p)[0] for p in _parts])
+check("and the bytes that arrived are the bytes of the file",
+      _imgG and _b64G.b64decode(_imgG[0]["data"]).startswith(b"\x89PNG"),
+      _imgG[0]["data"][:20] if _imgG else "none")
+check("with the right type on it, so it is read as a picture",
+      _imgG and _imgG[0]["mime_type"] == "image/png")
+check("it counted the image it opened", _row.images_seen >= 1, _row.images_seen)
+check("the instructions tell it to judge the evidence, not the person",
+      "not running an appraisal" in _detG.SYSTEM)
+
+# Replies that are not clean JSON must still be read.
+_, _r2 = _runG("```json\n" + _jsonG.dumps({"verdict": "ok", "confidence": 70,
+    "remark": "Photo shows a GPS unit on a bus dashboard.",
+    "looked_at": "1 photo"}) + "\n```")
+check("a reply wrapped in code fences is still read", _r2.verdict == _AVG.OK)
+_, _r3 = _runG('Sure!\n{"verdict":"weak","confidence":30,'
+               '"remark":"The photo is too dark to make anything out.",'
+               '"looked_at":"1 dark photo"}\nHope this helps.')
+check("and one buried in chatter", _r3.verdict == _AVG.WEAK)
+
+# Failure must never become an accusation.
+for _bad, _why in (
+        (_jsonG.dumps({"verdict": "suspicious", "confidence": 50, "remark": "x"}),
+         "a verdict it invented"),
+        (_jsonG.dumps({"verdict": "error", "confidence": 50, "remark": "x"}),
+         "claiming 'error' itself"),
+        ("I think it's fine honestly.", "a reply that is not JSON"),
+        ("", "an empty reply")):
+    _, _rb = _runG(_bad)
+    check(f"{_why} becomes 'could not check', not a judgement",
+          _rb.verdict == _AVG.ERROR and not _rb.is_judgement, _rb.verdict)
+_, _rl = _runG("", status=429)
+check("a rate limit is recorded as could-not-check", _rl.verdict == _AVG.ERROR)
+check("and the reason is kept, so a quota and a bad key read differently",
+      "429" in _rl.remark, _rl.remark[:60])
+_, _ro = _runG(_jsonG.dumps({"verdict": "ok", "confidence": 5000, "remark": "x"}))
+check("a confidence out of range is clamped", _ro.confidence == 100, _ro.confidence)
+
+# THE GUARANTEE: nothing the AI says touches the task.
+with _slG() as _d:
+    _t = _d.get(_TG, _tid)
+    _before = (_t.status, _t.audit_state, _t.audit_score, _t.closed_at,
+               _t.false_marked, _t.priority, _t.due_at, _t.auditor_id)
+_runG(_jsonG.dumps({"verdict": "no_proof", "confidence": 99,
+                    "remark": "Nothing was attached and the note says only 'done'.",
+                    "looked_at": "nothing"}))
+with _slG() as _d:
+    _t = _d.get(_TG, _tid)
+    _after = (_t.status, _t.audit_state, _t.audit_score, _t.closed_at,
+              _t.false_marked, _t.priority, _t.due_at, _t.auditor_id)
+check("the harshest possible verdict changes NOTHING about the task",
+      _before == _after, (_before, _after))
+check("it does not mark the task false", not _t.false_marked)
+check("it does not appoint itself auditor", _t.auditor_id is None)
+
+# The score must be untouched too — this is the promise that matters most.
+from app.services import scoring as _scG
+from app.models import User as _UG
+with _slG() as _d:
+    _amitG = _d.query(_UG).filter(_UG.email == "amit@gcs.local").one()
+    _scoreG = _scG.user_scorecard(_d, _amitG, days=3650).score
+_runG(_jsonG.dumps({"verdict": "unrelated", "confidence": 99,
+                    "remark": "Nothing to do with the task.", "looked_at": "x"}))
+with _slG() as _d:
+    _amitG = _d.query(_UG).filter(_UG.email == "amit@gcs.local").one()
+    check("and nobody's score moves because of it",
+          _scG.user_scorecard(_d, _amitG, days=3650).score == _scoreG)
+
+# Re-checking keeps the history rather than overwriting it.
+with _slG() as _d:
+    _n = _d.query(_AAG).filter(_AAG.task_id == _tid).count()
+check("each check is kept, so you can see what it said before", _n >= 5, _n)
+with _slG() as _d:
+    _latest = _detG.latest_for(_d, _tid)
+    check("and the newest one is the one shown",
+          _latest.verdict == _AVG.UNRELATED, _latest.verdict)
+
+# The page.
+_pg = admin.get("/detective?verdict=all").text
+check("the task appears on the Detective page", f"/tasks/{_tid}" in _pg)
+check("with what the AI said", "Nothing to do with the task." in _pg)
+check("the page says it decides nothing",
+      "advice, not a decision" in _pg and "only thing that decides" in _pg)
+check("there is a Needs-a-look tab", "Needs a look" in _pg)
+check("and the menu item is called Task Detective AI",
+      "Task Detective AI" in admin.get("/").text)
+check("a doer does not get the menu item",
+      "Task Detective AI" not in doer.get("/").text)
+
+_sus = admin.get("/detective?verdict=suspect").text
+check("the doubtful ones are what it opens on", f"/tasks/{_tid}" in _sus)
+check("filtering by verdict works",
+      f"/tasks/{_tid}" not in admin.get("/detective?verdict=ok").text)
+check("searching what the AI wrote works",
+      f"/tasks/{_tid}" in admin.get("/detective?verdict=all&q=Nothing+to+do").text)
+check("and a search that matches nothing empties it",
+      f"/tasks/{_tid}" not in admin.get("/detective?verdict=all&q=zzzqqq").text)
+_xd = admin.get("/detective?verdict=all&export=xlsx")
+check("the list downloads as Excel", _xd.status_code == 200, _xd.status_code)
+
+# The task's own page shows it, labelled as a machine.
+_tp = admin.get(f"/tasks/{_tid}").text
+check("the task page carries the AI's remark", "Nothing to do with the task." in _tp)
+check("labelled as advice from a machine",
+      "Task Detective AI" in _tp and "decides nothing" in _tp)
+check("the manual audit is still there, untouched",
+      "Approve &amp; close" in _tp or "Audit" in _tp)
+
+# Submitting must never be slowed or broken by the AI.
+_detG.AI_KEY = _cfgG.AI_KEY = ""         # key gone mid-flight
+_tgr2 = mgr.post("/tasks/new", data={
+    "title": f"SMOKE detective offline {RUN}", "details": "",
+    "doer_id": "6", "branch_id": "", "priority": "low",
+    "due_at": "2026-12-31T23:59"})
+_tid2 = int(_re.findall(r"/tasks/(\d+)/comment", _tgr2.text)[0])
+_sub = submit(doer, _tid2, completion_note="finished")
+check("a submission still works with the AI switched off",
+      _sub.status_code == 200, _sub.status_code)
+with _slG() as _d:
+    check("and the task really was submitted",
+          _d.get(_TG, _tid2).status in (_STG.SUBMITTED, _STG.COMPLETED))
+check("review_quietly never raises, whatever happens",
+      _detG.review_quietly(_tid2) is None)
+check("nor on a task that does not exist",
+      _detG.review_quietly(999999) is None)
+_detG.AI_KEY = _cfgG.AI_KEY = ""
+_detG.AI_ENABLED = _cfgG.AI_ENABLED = True
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

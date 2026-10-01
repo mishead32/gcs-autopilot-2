@@ -1,0 +1,336 @@
+"""Task Detective — a second pair of eyes on finished work.
+
+The problem it exists for: somebody marks a task complete, attaches a
+screenshot of something else entirely, or types "done" and nothing more, and
+nobody notices until the auditor opens it three days later — if they open it
+at all. One person checking a hundred finished tasks a week will not look
+hard at every screenshot. A machine will look at all of them.
+
+What it does NOT do, deliberately:
+
+  * it does not close, reopen, approve or reject anything
+  * it does not touch a score, a benchmark or a false mark
+  * it does not stop a submission, or slow one down
+
+It reads what was handed in, writes down what it saw, and says whether the
+proof looks like proof. A person still decides. An AI quietly costing
+somebody marks is how a scoring system loses the trust that makes it worth
+having — so this one is advisory, in writing, and reversible by ignoring it.
+
+It also must never break the thing it is watching. Every call is wrapped: a
+missing key, a dead network, a rate limit or a reply in the wrong shape all
+end as a stored "could not check", never as an error on the page the person
+was using.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import re
+import time
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .. import clock
+from ..config import (AI_KEY, AI_MODEL, AI_ENABLED, AI_MAX_FILES,
+                      AI_MAX_FILE_MB, AI_TIMEOUT, UPLOAD_DIR)
+from ..models import AiAudit, AiVerdict, Attachment, Task
+
+API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+# What the model is told to do. Written as instructions to a careful clerk
+# rather than a prompt full of adjectives: the useful output here is a
+# specific observation ("the screenshot is a WhatsApp chat about a gym
+# membership, the task is about a bus GPS") and not a score out of ten.
+SYSTEM = """You check whether the proof attached to a finished work task
+actually shows that the task was done.
+
+You are given the task as it was assigned, what the person wrote when they
+marked it complete, and the files they attached. Images are included as
+images — look at them properly and describe what is actually in them.
+
+Judge only one thing: does this evidence show THIS task being done?
+
+Answer with one of these verdicts:
+  ok         the files or the note show the work described
+  weak       something was handed in, but it would not convince anyone
+             — a blurry photo, a note with no detail, a file that could
+             belong to any task
+  unrelated  the proof is clearly of something else
+  no_proof   nothing was attached and the note says nothing useful
+             (for example just "done", "ok", "completed")
+
+Rules you must follow:
+  * Do not guess at what a file might contain. If an image is unreadable,
+    say so and answer weak.
+  * A task that never required proof, closed with a sensible note, is ok.
+  * Do not comment on whether the work was late, or on the person. You are
+    looking at the evidence, not running an appraisal.
+  * Be concrete. "The screenshot shows a bank statement for a different
+    account" is useful. "The proof seems insufficient" is not.
+  * Write the remark for the manager who will read it. One or two plain
+    sentences, no jargon, no preamble.
+
+Reply with JSON only, in exactly this shape:
+{"verdict": "ok|weak|unrelated|no_proof",
+ "confidence": 0-100,
+ "remark": "one or two plain sentences",
+ "looked_at": "what you actually saw, e.g. '1 screenshot of a payment receipt'"}"""
+
+# Files we can hand over as text rather than as an image.
+TEXTY = ("text/plain", "text/csv", "application/csv", "text/markdown")
+
+
+def available() -> bool:
+    """Whether the detective can run at all."""
+    return bool(AI_ENABLED and AI_KEY)
+
+
+def why_not() -> str:
+    """One plain sentence for the page when it cannot run."""
+    if not AI_ENABLED:
+        return ("Task Detective is switched off. Remove the AI_AUDIT setting "
+                "on the server, or set it to on, to switch it back.")
+    if not AI_KEY:
+        return ("Task Detective needs a Gemini API key. Add one as "
+                "GEMINI_API_KEY in the server's environment settings and it "
+                "starts working on the next task that is marked complete. "
+                "Until then nothing is sent anywhere.")
+    return ""
+
+
+# ------------------------------------------------------------ the prompt ---
+def _task_brief(task: Task) -> str:
+    bits = [f"TASK: {task.title}"]
+    if task.details:
+        bits.append(f"WHAT IT ASKED FOR: {task.details}")
+    bits.append(f"KIND OF WORK: {task.source.value}")
+    bits.append(f"PLANNED FOR: {task.due_at:%d %b %Y, %I:%M %p}")
+    bits.append("PROOF WAS: " + ("required" if task.requires_attachment
+                                 else "not required"))
+    note = (task.completion_note or "").strip()
+    bits.append("WHAT THEY WROTE WHEN MARKING IT DONE: "
+                + (note if note else "(nothing)"))
+    return "\n".join(bits)
+
+
+def _bytes_of(att: Attachment) -> bytes | None:
+    """The actual file, wherever it was put.
+
+    On the live site attachments live in the database, so att.data is right
+    there. On a machine with a disk they are files, and reading only att.data
+    would hand the AI nothing but a file name — which is exactly the case
+    this feature exists to catch, so it would fail silently at being useful.
+    S3 is left alone on purpose: fetching from a bucket belongs behind the
+    same signed-URL path everything else uses, and is not worth doing badly
+    here.
+    """
+    if att.data:
+        return att.data
+    if (att.storage or "") == "local" and att.stored_name:
+        try:
+            path = UPLOAD_DIR / att.stored_name
+            if path.is_file():
+                return path.read_bytes()
+        except OSError:
+            return None
+    return None
+
+
+def _parts_for(task: Task, files: list[Attachment]) -> tuple[list[dict], int, int]:
+    """The task, then each file — images as images, text as text.
+
+    A file too large to send, or of a kind nothing can read, is still
+    MENTIONED by name and type. Staying silent about it would let a person
+    attach a 40MB video and get "no proof attached" back, which is both
+    wrong and the sort of wrong that destroys confidence in the whole thing.
+    """
+    parts: list[dict] = [{"text": _task_brief(task)}]
+    cap = int(AI_MAX_FILE_MB * 1024 * 1024)
+    images = seen = 0
+
+    for att in files[:AI_MAX_FILES]:
+        seen += 1
+        blob = _bytes_of(att)
+        label = f"ATTACHED FILE: {att.filename} ({att.content_type or 'unknown type'}, {att.size or 0} bytes)"
+        if not blob:
+            parts.append({"text": label + " — the file itself could not be "
+                                  "loaded, so judge it by its name only."})
+            continue
+        if len(blob) > cap:
+            parts.append({"text": label + " — too large to open here, so "
+                                  "judge it by its name only."})
+            continue
+        if att.is_image:
+            parts.append({"text": label})
+            parts.append({"inline_data": {
+                "mime_type": att.content_type,
+                "data": base64.b64encode(blob).decode("ascii")}})
+            images += 1
+        elif (att.content_type or "") in TEXTY:
+            try:
+                text = blob.decode("utf-8", "replace")[:4000]
+            except Exception:
+                text = ""
+            parts.append({"text": label + "\nITS CONTENTS:\n" + text})
+        else:
+            parts.append({"text": label + " — this kind of file cannot be "
+                                  "opened here. Say so rather than guessing "
+                                  "what is in it."})
+
+    extra = len(files) - min(len(files), AI_MAX_FILES)
+    if extra > 0:
+        parts.append({"text": f"({extra} further file(s) were attached and "
+                              f"not shown here.)"})
+    if not files:
+        parts.append({"text": "NO FILES WERE ATTACHED."})
+    return parts, seen, images
+
+
+# ----------------------------------------------------------- the answer ----
+def _read_reply(payload: dict) -> dict:
+    """Pull our four fields out of whatever came back.
+
+    Models wrap JSON in prose and in ``` fences however firmly you ask them
+    not to, so this digs the object out rather than trusting the shape.
+    """
+    try:
+        text = payload["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        raise ValueError("the reply had no text in it")
+
+    body = text.strip()
+    if body.startswith("```"):
+        body = re.sub(r"^```[a-z]*\s*|\s*```$", "", body, flags=re.I | re.S)
+    try:
+        data = json.loads(body)
+    except Exception:
+        match = re.search(r"\{.*\}", body, re.S)
+        if not match:
+            raise ValueError("the reply was not JSON")
+        data = json.loads(match.group(0))
+
+    raw = str(data.get("verdict", "")).strip().lower()
+    try:
+        verdict = AiVerdict(raw)
+    except ValueError:
+        raise ValueError(f"unknown verdict {raw!r}")
+    if verdict == AiVerdict.ERROR:
+        raise ValueError("the model may not return 'error' as a verdict")
+
+    try:
+        confidence = max(0, min(100, int(float(data.get("confidence", 0)))))
+    except Exception:
+        confidence = 0
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "remark": str(data.get("remark", "")).strip()[:2000],
+        "looked_at": str(data.get("looked_at", "")).strip()[:500],
+    }
+
+
+def _call(parts: list[dict], client: httpx.Client | None = None) -> dict:
+    body = {
+        "system_instruction": {"parts": [{"text": SYSTEM}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
+                             "responseMimeType": "application/json"},
+    }
+    url = API.format(model=AI_MODEL)
+    owned = client is None
+    client = client or httpx.Client(timeout=AI_TIMEOUT)
+    try:
+        r = client.post(url, json=body,
+                        headers={"x-goog-api-key": AI_KEY,
+                                 "content-type": "application/json"})
+        if r.status_code != 200:
+            # The message is kept because a rate limit and a bad key need
+            # different answers from whoever reads it, and "it failed" tells
+            # them neither.
+            raise ValueError(f"the AI service answered {r.status_code}: "
+                             f"{r.text[:200]}")
+        return r.json()
+    finally:
+        if owned:
+            client.close()
+
+
+# -------------------------------------------------------------- the run ----
+def review(db: Session, task: Task, client: httpx.Client | None = None) -> AiAudit:
+    """Check one finished task and store what was found.
+
+    Always returns a row, even when the check failed: a stored "could not
+    check" is a fact somebody can act on, while silence looks identical to
+    "nothing wrong here".
+    """
+    started = time.monotonic()
+    files = list(db.scalars(
+        select(Attachment).where(Attachment.task_id == task.id)
+        .order_by(Attachment.id)).all())
+
+    row = AiAudit(org_id=task.org_id, task_id=task.id, model=AI_MODEL,
+                  files_seen=len(files))
+    try:
+        if not available():
+            raise ValueError(why_not())
+        parts, seen, images = _parts_for(task, files)
+        row.files_seen, row.images_seen = seen, images
+        found = _read_reply(_call(parts, client))
+        row.verdict = found["verdict"]
+        row.confidence = found["confidence"]
+        row.remark = found["remark"]
+        row.looked_at = found["looked_at"]
+    except Exception as e:
+        row.verdict = AiVerdict.ERROR
+        row.confidence = 0
+        row.remark = str(e)[:2000]
+        row.looked_at = ""
+    row.took_ms = int((time.monotonic() - started) * 1000)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def review_quietly(task_id: int) -> None:
+    """Run a check in the background, and never let it reach the person.
+
+    Called after somebody marks a task complete. It opens its own database
+    session because the request's one is closed by the time this runs, and
+    it swallows everything: a slow AI service must never be the reason a
+    doer's submission appears to fail.
+    """
+    from ..db import SessionLocal
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is not None:
+                review(db, task)
+    except Exception:
+        pass
+
+
+def latest_for(db: Session, task_id: int) -> AiAudit | None:
+    return db.scalar(select(AiAudit).where(AiAudit.task_id == task_id)
+                     .order_by(AiAudit.created_at.desc(), AiAudit.id.desc())
+                     .limit(1))
+
+
+def latest_map(db: Session, task_ids: list[int]) -> dict[int, AiAudit]:
+    """The newest check for each of these tasks, in one query.
+
+    One query rather than one per row: a list of five hundred tasks each
+    asking the database its own question is how a page that was fast becomes
+    a page nobody opens.
+    """
+    if not task_ids:
+        return {}
+    out: dict[int, AiAudit] = {}
+    rows = db.scalars(
+        select(AiAudit).where(AiAudit.task_id.in_(task_ids))
+        .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all()
+    for r in rows:
+        out[r.task_id] = r          # later rows overwrite earlier ones
+    return out

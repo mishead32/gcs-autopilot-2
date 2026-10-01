@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
+{% block title %}Task Detective AI · {{ APP_NAME }}{% endblock %}
+{% block content %}
+{% set base = '/detective?verdict=' ~ verdict ~ '&source=' ~ source ~
+              '&doer=' ~ (doer_id or '') ~ '&branch=' ~ (branch_id or '') ~
+              '&date_from=' ~ date_from ~ '&date_to=' ~ date_to ~
+              '&q=' ~ q|urlencode %}
+<div class="page-head">
+  <div>
+    <h1>Task Detective AI</h1>
+    <p class="sub readable">A second pair of eyes on finished work: it reads
+      the task, the note and the attached screenshots, and says whether the
+      proof actually shows the job being done.</p>
+  </div>
+  <div>
+    {{ excel_btn(base ~ '&export=xlsx',
+                 title='Download exactly this list as an Excel file') }}
+  </div>
+</div>
+
+{# The most important sentence on the page. Somebody reading a machine's
+   opinion of a colleague's work needs to know, before they read one, what it
+   can and cannot do. #}
+<div class="proof need readable">
+  <strong>This is advice, not a decision.</strong>
+  Nothing here closes a task, reopens one, or changes anybody's score. The
+  manual audit is unchanged and is still the only thing that decides
+  anything. Use it to pick which finished tasks are worth opening.
+</div>
+
+{% if not on %}
+<div class="danger-box readable">
+  <strong>Task Detective is not running.</strong> {{ why_not }}
+</div>
+{% endif %}
+
+<div class="grid g3 fu-pick">
+  <a class="kpi {{ 'bad' if counts.suspect else 'ok' }} {{ 'on' if verdict == 'suspect' }}"
+     href="/detective?verdict=suspect">
+    <div class="n">{{ counts.suspect }}</div><div class="l">Needs a look</div>
+    <div class="m">{{ counts.unrelated }} don’t match · {{ counts.no_proof }} with no real proof</div></a>
+  <a class="kpi {{ 'on' if verdict == 'weak' }}" href="/detective?verdict=weak">
+    <div class="n">{{ counts.weak }}</div><div class="l">Proof is thin</div>
+    <div class="m">handed something in, but it proves little</div></a>
+  <a class="kpi ok {{ 'on' if verdict == 'ok' }}" href="/detective?verdict=ok">
+    <div class="n">{{ counts.ok }}</div><div class="l">Proof looks right</div>
+    <div class="m">{{ counts.error }} could not be checked</div></a>
+</div>
+
+<div class="tabs fu-when">
+  <span class="m">Verdict</span>
+  {% for k, label in verdict_tabs %}
+  <a class="{{ 'active' if verdict == k }}" href="/detective?verdict={{ k }}">
+    {{ label }} <b>{{ counts[k] }}</b></a>
+  {% endfor %}
+</div>
+
+<form method="get" action="/detective" class="card daterange">
+  <input type="hidden" name="verdict" value="{{ verdict }}">
+  <div class="fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="Words from the task, or from what the AI said">
+  </div>
+  <div>
+    <label>Work type</label>
+    <select name="source"><option value="">All work</option>
+      {% for k, label in [('delegation','Delegation'),('checklist','Checklist'),('fms','FMS')] %}
+      <option value="{{ k }}" {{ 'selected' if source == k }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Employee</label>
+    <select name="doer"><option value="">Everyone</option>
+      {% for p in people %}
+      <option value="{{ p.id }}" {{ 'selected' if doer_id == p.id }}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Branch</label>
+    <select name="branch"><option value="">All branches</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if branch_id == b.id }}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><label>Checked from</label>
+    <input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div><label>Checked to</label>
+    <input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="acts">
+    <button class="btn">Apply</button>
+    <a class="btn ghost" href="/detective?verdict={{ verdict }}">Clear</a>
+  </div>
+</form>
+
+{% if unchecked %}
+<form method="post" action="/detective/run" class="card searchbar">
+  <div>
+    <strong>{{ unchecked }} finished task(s) have never been checked.</strong>
+    <div class="m">Older work, and anything finished while this was switched
+      off. Checking runs in the background.</div>
+  </div>
+  <div class="acts">
+    <select name="limit" style="width:auto">
+      <option value="25">25 at a time</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+    <button class="btn" {{ 'disabled' if not on }}>Check them</button>
+  </div>
+</form>
+{% endif %}
+
+<div class="sect">
+  <div class="sect-head"><h2>{{ verdict_tabs|selectattr('0','equalto',verdict)|map(attribute='1')|first }}</h2>
+    <span class="count {{ 'bad' if verdict in ('suspect','unrelated','no_proof') and rows }}">{{ rows|length }}</span></div>
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <tr><th>ID</th><th>Task</th><th>Doer</th><th>AI verdict</th>
+      <th>What the AI saw</th><th>Human audit</th><th>Checked</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td class="refcell"><a class="refid" href="/tasks/{{ r.task.id }}">{{ r.task.ref or '—' }}</a></td>
+    <td><a href="/tasks/{{ r.task.id }}"><strong>{{ r.task.title }}</strong></a>
+      <div class="m rowsub">{{ r.task.source.value }}
+        · done {{ (r.task.closed_at or r.task.submitted_at)|dt('%d %b, %I:%M %p') }}</div></td>
+    <td>{{ r.task.doer.name }}</td>
+    <td class="whencell">
+      <span class="chip ai_{{ r.verdict.value }}">{{ r.label }}</span>
+      {% if r.is_judgement %}<div class="m" style="font-size:11px">{{ r.confidence }}% sure</div>{% endif %}
+    </td>
+    <td class="airemark">{{ r.remark }}
+      {% if r.looked_at %}<div class="m" style="font-size:11px">Looked at: {{ r.looked_at }}</div>{% endif %}
+    </td>
+    <td><span class="chip audit_{{ r.task.audit_state.value }}">{{ r.task.audit_label }}</span></td>
+    <td class="whencell">{{ r.created_at|dt('%d %b, %I:%M %p') }}<br>
+      <span class="m" style="font-size:11px">{{ r.created_at|ago }}</span></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<div class="empty">
+  {% if not on %}Nothing has been checked yet, because the detective is not running.
+  {% elif counts.all %}Nothing in this group. Try another verdict above.
+  {% else %}Nothing checked yet. Finished tasks are looked at as they come in.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

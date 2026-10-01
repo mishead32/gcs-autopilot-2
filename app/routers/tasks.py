@@ -2,7 +2,8 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, HTTPException
+from fastapi import (APIRouter, BackgroundTasks, Depends, Request, Form,
+                     UploadFile, File, HTTPException)
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, or_, update, case, func, delete as sa_delete
 from sqlalchemy.orm import Session
@@ -20,7 +21,8 @@ from ..models import (
     HelpTicket, HelpStatus, REF_PREFIX,
     Followup
 )
-from ..services import notify, flows as flow_svc, storage, holidays, xlsx
+from ..services import (notify, flows as flow_svc, storage, holidays, xlsx,
+                        detective)
 from ..templating import templates
 
 router = APIRouter()
@@ -575,6 +577,10 @@ def task_detail(task_id: int, request: Request,
         "can_reopen": user.has(Right.REOPEN_TASK)
                       and task.status == TaskStatus.COMPLETED,
         "can_set_audit": user.has(Right.AUDIT_TASK),
+        # The AI's reading of this task, if it has one. Advisory: the page
+        # shows it, and nothing in the software acts on it.
+        "ai": detective.latest_for(db, task.id),
+        "ai_on": detective.available(),
         # Nothing can be moved onto — or off — an auditor's list until the
         # person doing the work has said it is done. Turning the audit
         # requirement off is the one thing still allowed, because that is a
@@ -871,6 +877,7 @@ def start_task(task_id: int, user: User = Depends(current_user),
 
 @router.post("/tasks/{task_id}/submit")
 async def submit_task(task_id: int, request: Request,
+                      background: BackgroundTasks,
                       user: User = Depends(current_user), db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
     if not task or task.doer_id != user.id:
@@ -923,6 +930,14 @@ async def submit_task(task_id: int, request: Request,
         db.commit()
         if task.flow_instance_id:
             flow_svc.advance_flow(db, task)
+    # Hand the finished work to the detective — AFTER the commit, and in the
+    # background. It opens its own session and swallows its own failures, so
+    # a slow or dead AI service can never be the reason a doer's submission
+    # appears to fail. The worst case is no remark, which is where this
+    # software was last week.
+    if detective.available():
+        background.add_task(detective.review_quietly, task.id)
+
     flash.set(request, "submitted" if task.requires_audit else "completed",
               task.title)
     # Submitted from the pop-up on a list: go back to that list, on the same

@@ -18,7 +18,8 @@ from . import migrate
 from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       help as help_router, setup as setup_router,
                       followups as followups_router,
-                      reports as reports_router)
+                      reports as reports_router,
+                      detective as detective_router)
 from .services import recurring
 from .templating import templates
 from . import lastview
@@ -254,6 +255,7 @@ app.include_router(help_router.router)
 app.include_router(setup_router.router)
 app.include_router(followups_router.router)
 app.include_router(reports_router.router)
+app.include_router(detective_router.router)
 
 
 @app.get("/healthz")

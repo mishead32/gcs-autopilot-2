@@ -129,6 +129,7 @@ PRIORITY_TABLES = ("tasks", "recurring_rules", "flow_steps")
 # type name -> labels that must exist. Labels are the enum MEMBER names,
 # which is what SQLAlchemy stores by default (ON_HOLD, not on_hold).
 ENUM_VALUES = {
+    "aiverdict": ["OK", "WEAK", "UNRELATED", "NO_PROOF", "ERROR"],
     "taskstatus": ["ON_HOLD"],
     "recurrence": ["YEARLY", "FORTNIGHTLY", "QUARTERLY"],
     "auditstate": ["WAITING"],
