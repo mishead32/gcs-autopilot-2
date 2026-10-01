@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -6,6 +6,8 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from .. import clock
+from .. import flash
+from .. import lastview
 from .. import search
 from ..db import get_db
 from ..deps import current_user, manager_up, admin_up
@@ -339,6 +341,55 @@ async def create_rule(
     return RedirectResponse("/recurring", status_code=303)
 
 
+def _rule_or_404(db: Session, user: User, rule_id: int) -> RecurringRule:
+    rule = db.get(RecurringRule, rule_id)
+    if not rule or rule.org_id != user.org_id:
+        raise HTTPException(404, "No such checklist item")
+    return rule
+
+
+def _prefill(rule: RecurringRule) -> dict:
+    """The two schedule boxes that are not stored the way the form asks for
+    them: quarterly wants a date, yearly wants DD/MM."""
+    quarter_start, year_day = "", ""
+    if rule.frequency == Recurrence.QUARTERLY and rule.start_month:
+        day = (rule.month_day_list or [1])[0]
+        year = clock.today().year
+        try:
+            quarter_start = date(year, rule.start_month, day).isoformat()
+        except ValueError:
+            quarter_start = ""
+    if rule.frequency == Recurrence.YEARLY and rule.day_of:
+        mmdd = f"{int(rule.day_of):04d}"
+        year_day = f"{mmdd[2:]}/{mmdd[:2]}"
+    return {"quarter_start": quarter_start, "year_day": year_day}
+
+
+@router.get("/recurring/{rule_id}", response_class=HTMLResponse)
+def edit_rule_form(rule_id: int, request: Request,
+                   user: User = Depends(manager_up),
+                   db: Session = Depends(get_db)):
+    rule = _rule_or_404(db, user, rule_id)
+    doers = db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True))
+        .order_by(User.name)).all()
+    branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)).all()
+    made = db.scalars(
+        select(Task).where(Task.rule_id == rule.id)
+        .order_by(Task.due_at.desc()).limit(8)).all()
+    spawned = db.scalar(select(func.count()).select_from(Task)
+                        .where(Task.rule_id == rule.id)) or 0
+    return templates.TemplateResponse(request, "rule_edit.html", {
+        "user": user, "r": rule, "doers": doers, "branches": branches,
+        "frequencies": FREQ_ORDER, "FREQ_LABELS": FREQ_LABELS,
+        "today_iso": clock.today().isoformat(),
+        "priorities": list(Priority),
+        "recent": made, "spawned": spawned,
+        "today_made": rule.last_spawned_on == clock.today(),
+        **_prefill(rule),
+    })
+
+
 @router.post("/recurring/{rule_id}/toggle")
 def toggle_rule(rule_id: int, user: User = Depends(manager_up), db: Session = Depends(get_db)):
     rule = db.get(RecurringRule, rule_id)
@@ -352,6 +403,53 @@ def toggle_rule(rule_id: int, user: User = Depends(manager_up), db: Session = De
 def run_recurring(user: User = Depends(manager_up), db: Session = Depends(get_db)):
     recurring.run_spawn(db)
     return RedirectResponse("/recurring", status_code=303)
+
+
+@router.post("/recurring/{rule_id}")
+async def edit_rule(rule_id: int, request: Request,
+                    title: str = Form(...), details: str = Form(""),
+                    doer_id: int = Form(...), branch_id: str = Form(""),
+                    frequency: str = Form("daily"),
+                    due_time: str = Form("23:59"),
+                    priority: str = Form("medium"),
+                    requires_audit: str = Form(""),
+                    user: User = Depends(manager_up),
+                    db: Session = Depends(get_db)):
+    """Change a checklist rule, for the tasks it makes from here on.
+
+    Nothing in this function touches the tasks table. That is the whole
+    point: a rule describes what to create NEXT time, and the tasks it has
+    already created are finished business — somebody has been given them,
+    some are done, and they carry the deadline and the priority their score
+    was worked out from. Rewriting those because a rule was edited would
+    move people's scores retrospectively, which is the one thing a scoring
+    system must never do.
+    """
+    rule = _rule_or_404(db, user, rule_id)
+    form = await request.form()
+    _proof = form.getlist("requires_attachment")
+    proof_required = True if not _proof else ("1" in _proof)
+    doer = db.get(User, doer_id)
+    if not doer or doer.org_id != user.org_id:
+        raise HTTPException(400, "Unknown doer")
+    try:
+        sched = recurring.read_schedule(frequency, form)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    rule.title = title.strip()
+    rule.details = details.strip() or None
+    rule.doer_id = doer.id
+    rule.branch_id = int(branch_id) if branch_id else (doer.branch_id or rule.branch_id)
+    rule.priority = Priority(priority)
+    rule.due_time = due_time
+    rule.requires_audit = bool(requires_audit)
+    rule.requires_attachment = proof_required
+    for field, value in sched.items():
+        setattr(rule, field, value)
+    db.commit()
+    flash.set(request, "saved", f"{rule.title} — from the next one on")
+    return RedirectResponse(lastview.url(request, "/recurring"), status_code=303)
 
 
 # ------------------------------------------------------- google sheet -----

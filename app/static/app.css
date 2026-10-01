@@ -799,3 +799,6 @@ table tr:hover td.stickycol{background:var(--card)}
   white-space:nowrap}
 .duepick input[type=datetime-local]{padding:5px 7px;font-size:12px;width:auto;
   margin:0}
+
+/* A planned date this person may see but not move. */
+.locked{cursor:help;border-bottom:1px dotted var(--line)}

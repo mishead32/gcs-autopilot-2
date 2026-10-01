@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_export.html" import excel_btn %}
+{% from "_rulefields.html" import rule_fields, rule_script with context %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px"><div><h1>Checklist</h1></div><div>{{ excel_btn('/recurring?export=xlsx') }}
 <a class="btn ghost" href="/bulk?kind=checklist">Bulk import</a></div></div>
@@ -25,16 +26,21 @@
   <div>
     {% if rules %}
     <div class="table-wrap"><table>
-      <tr><th>Task</th><th>Doer</th><th>Schedule</th><th>Due</th><th></th></tr>
+      <tr><th>Task</th><th>Doer</th><th>Priority</th><th>Schedule</th>
+          <th>Due</th><th></th><th></th></tr>
       {% for r in rules %}
       <tr>
         <td><strong>{{ r.title }}</strong>
           <div style="color:var(--muted);font-size:12px">
             last spawned {{ r.last_spawned_on or 'never' }}</div></td>
         <td>{{ r.doer.name }}</td>
+        <td><span class="chip {{ r.priority.value }}"
+                  title="Counts as {{ PRIORITY_WEIGHT[r.priority] }} tasks in the score"
+              >{{ r.priority.value }} {{ PRIORITY_WEIGHT[r.priority] }}×</span></td>
         <td><span class="chip">{{ r.frequency.value }}</span>
           <div class="m">{{ r.schedule_label }}</div></td>
         <td>{{ r.due_time }}</td>
+        <td><a class="btn sm ghost" href="/recurring/{{ r.id }}">Edit</a></td>
         <td><form method="post" action="/recurring/{{ r.id }}/toggle">
           <button class="btn sm {{ '' if r.active else 'ghost' }}">{{ 'On' if r.active else 'Off' }}</button>
         </form></td>
@@ -49,219 +55,10 @@
 
   <form method="post" action="/recurring" class="card">
     <strong>New checklist item</strong>
-    <label>Task title</label>
-    <input name="title" required placeholder="e.g. Post daily sales MIS to CMD">
-    <label>Details</label><textarea name="details" style="min-height:56px"></textarea>
-    <div class="row">
-      <div><label>Doer</label><select name="doer_id" required>
-        {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
-      <div><label>Branch</label><select name="branch_id"><option value="">Doer's branch</option>
-        {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select></div>
-    </div>
-    {# Pick how often, and only the boxes that apply to it appear. A form
-       that shows every option at once is a form people fill in wrongly. #}
-    <div class="row">
-      <div><label>How often</label><select name="frequency" id="freqSel">
-        {% for f in frequencies %}
-        <option value="{{ f.value }}">{{ FREQ_LABELS[f] }}</option>{% endfor %}
-      </select></div>
-      <div><label>Due time</label><input name="due_time" value="23:59" placeholder="HH:MM">
-        <div class="m" style="margin-top:4px">By when on the day it falls.</div></div>
-    </div>
-
-    <div class="sched" id="schedBox">
-      {# Weekly and fortnightly: which day(s) of the week #}
-      <div data-when="weekly fortnightly month-weekday">
-        <label>On which day(s)</label>
-        <div class="daypick">
-          {% for i, d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),
-                          (5,'Sat'),(6,'Sun')] %}
-          <label class="daybtn"><input type="checkbox" name="weekdays" value="{{ i }}"> {{ d }}</label>
-          {% endfor %}
-        </div>
-        <div class="m" data-when="weekly">Tick more than one if the job is done
-          on several days — Monday to Friday is five ticks, and it stays one
-          rule with one line on the scorecard.</div>
-      </div>
-
-      {# Fortnightly also needs to know which of the two weeks is the on week #}
-      <div data-when="fortnightly">
-        <label>First fortnight starts on</label>
-        <input type="date" name="anchor_on" value="{{ today_iso }}">
-        <div class="m">The week of this date is the first fortnight. Every
-          second week after it is due; the weeks between are not.</div>
-      </div>
-
-      {# Monthly: by date, or by the nth weekday #}
-      <div data-when="monthly">
-        <label>Choose by</label>
-        <select name="month_mode" id="monthMode">
-          <option value="date">Date — the 5th, the 15th, or 15,30 for both</option>
-          <option value="weekday">Week and day — the first Saturday, the third Friday</option>
-        </select>
-      </div>
-      <div data-when="month-date">
-        <label>Which date(s)</label>
-        <input name="day_of_month" value="1" placeholder="1 to 31 — or 15,30 for both">
-        <div class="m">1 to 31. Several are fine: type <strong>15,30</strong>
-          for a job done twice a month. In a month too short for it, the last
-          day is used instead — the 31st becomes the 30th in April.</div>
-      </div>
-      <div data-when="month-weekday">
-        <label>Which week(s)</label>
-        <div class="daypick">
-          {% for v, t in [(1,'First'),(2,'Second'),(3,'Third'),(4,'Fourth'),(-1,'Last')] %}
-          <label class="daybtn"><input type="checkbox" name="weeks_of_month" value="{{ v }}"> {{ t }}</label>
-          {% endfor %}
-        </div>
-        <div class="m">Tick more than one for “first and third”. “Last” is not
-          the same as “fourth” — some months have five Saturdays.</div>
-      </div>
-
-      {# Quarterly: one date, and the other three follow #}
-      <div data-when="quarterly">
-        <label>First date it falls on</label>
-        <input type="date" name="quarter_start" value="{{ today_iso }}">
-        <div class="m">The next three are worked out for you — every third
-          month from this date.</div>
-      </div>
-
-      {# Yearly #}
-      <div data-when="yearly">
-        <label>Which date each year</label>
-        <input name="year_day" placeholder="DD/MM — e.g. 17/04">
-        <div class="m">Renewals, licences, subscriptions.</div>
-      </div>
-
-      <div class="m schedsum" id="schedSum"></div>
-    </div>
-    <div class="row">
-      <div><label>Priority</label><select name="priority">
-        {% for p in priorities %}<option value="{{ p.value }}" {{ 'selected' if p.value=='medium' }}>{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}</select></div>
-    </div>
-    <div class="inline" style="margin-top:14px">
-      <input type="hidden" name="requires_attachment" value="0">
-      <input type="checkbox" name="requires_attachment" value="1" id="rat2" checked>
-      <label for="rat2" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">Proof required before submitting</label>
-    </div>
-    <div class="inline" style="margin-top:10px">
-      <input type="checkbox" name="requires_audit" value="1" id="ra2">
-      <label for="ra2" style="margin:0;text-transform:none;font-weight:400;color:var(--ink)">Requires audit</label>
-    </div>
+    {{ rule_fields(doers, branches, frequencies, priorities, today_iso) }}
     <div style="margin-top:18px"><button class="btn">Create rule</button></div>
   </form>
 
-<script>
-/* Show only the boxes that belong to the chosen frequency, and say in plain
- * words what the rule will do. A form that shows every option at once is a
- * form people fill in wrongly — and a schedule filled in wrongly is a task
- * that turns up on the wrong day for months before anybody notices. */
-(function(){
-  var freq = document.getElementById('freqSel'),
-      mode = document.getElementById('monthMode'),
-      box  = document.getElementById('schedBox'),
-      sum  = document.getElementById('schedSum');
-  if(!freq || !box) return;
-
-  var DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  var NTH  = {'1':'first','2':'second','3':'third','4':'fourth','-1':'last'};
-  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct',
-             'Nov','Dec'];
-
-  function ticked(name){
-    return Array.prototype.slice.call(
-      box.querySelectorAll('input[name="' + name + '"]:checked')).map(function(i){
-        return i.value; });
-  }
-
-  function words(list, fmt){
-    var n = list.map(fmt);
-    if(!n.length) return '';
-    if(n.length === 1) return n[0];
-    return n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
-  }
-
-  /* A run of consecutive days reads as a range, the same as it will once the
-   * rule is saved. The sentence under the form has to match the one on the
-   * Checklist page, or people think something changed when they pressed
-   * Create. */
-  function dayWords(){
-    var nums = ticked('weekdays').map(Number).sort(function(a, b){ return a - b; });
-    if(!nums.length) return '';
-    var run = nums.length >= 3 && nums[nums.length - 1] - nums[0] === nums.length - 1;
-    if(run) return DAYS[nums[0]] + ' to ' + DAYS[nums[nums.length - 1]];
-    return words(nums, function(v){ return DAYS[v]; });
-  }
-
-  function states(){
-    var f = freq.value, m = mode ? mode.value : 'date', on = [f];
-    if(f === 'monthly') on.push('month-' + m);
-    return on;
-  }
-
-  function describe(){
-    var f = freq.value,
-        days = dayWords();
-    if(f === 'daily')    return 'A task every single day.';
-    if(f === 'weekly')
-      return days ? 'A task every ' + days + '.' : 'Tick at least one day.';
-    if(f === 'fortnightly'){
-      if(!days) return 'Tick at least one day.';
-      var from = box.querySelector('[name=anchor_on]').value;
-      return 'A task every second ' + days +
-             (from ? ', starting the week of ' + from + '.' : '.');
-    }
-    if(f === 'yearly'){
-      var d = box.querySelector('[name=year_day]').value.trim();
-      return d ? 'One task a year, on ' + d + '.' : 'Type the date as DD/MM.';
-    }
-    if(f === 'quarterly'){
-      var q = box.querySelector('[name=quarter_start]').value;
-      if(!q) return 'Pick the first date it falls on.';
-      var parts = q.split('-'), m0 = +parts[1] - 1, dd = +parts[2];
-      var names = [];
-      for(var i = 0; i < 4; i++) names.push(MON[(m0 + i * 3) % 12]);
-      return 'A task on ' + dd + ' ' + names.slice(0, -1).join(', ') +
-             ' and ' + names[3] + ', every year.';
-    }
-    var when;
-    if(mode && mode.value === 'weekday'){
-      var wk = words(ticked('weeks_of_month'), function(v){ return NTH[v] || v; });
-      if(!wk || !days) return 'Pick the week(s) and the day.';
-      when = 'the ' + wk + ' ' + days;
-    } else {
-      var raw = (box.querySelector('[name=day_of_month]').value || '1');
-      var list = raw.split(/[,&]|\band\b/).map(function(x){
-        return x.trim().replace(/(st|nd|rd|th)$/i, ''); }).filter(Boolean);
-      if(!list.length || list.some(function(x){
-           return !/^\d+$/.test(x) || +x < 1 || +x > 31; }))
-        return 'Type a date from 1 to 31 — or several, like 15,30.';
-      when = 'the ' + words(list, function(x){ return x + ordinal(x); });
-    }
-    return 'A task on ' + when + ' of every month.';
-  }
-
-  function ordinal(n){
-    n = parseInt(n, 10) || 1;
-    if(n % 100 >= 11 && n % 100 <= 13) return 'th';
-    return ({1:'st', 2:'nd', 3:'rd'})[n % 10] || 'th';
-  }
-
-  function apply(){
-    var on = states();
-    box.querySelectorAll('[data-when]').forEach(function(el){
-      var want = el.getAttribute('data-when').split(' ');
-      el.hidden = !want.some(function(w){ return on.indexOf(w) !== -1; });
-    });
-    sum.textContent = describe();
-  }
-
-  freq.addEventListener('change', apply);
-  if(mode) mode.addEventListener('change', apply);
-  box.addEventListener('change', apply);
-  box.addEventListener('input', apply);
-  apply();
-})();
-</script>
+{{ rule_script() }}
 </div>
 {% endblock %}

@@ -47,8 +47,16 @@
         </form>
       </details>
       {% else %}
-      {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
-      <span style="font-size:11px">{{ t.due_at|due }}</span>
+      {# No picker without the right. Someone who can edit everything ELSE
+         about a task will reasonably wonder why not this, so the date says
+         so on hover rather than leaving them hunting. #}
+      <span {% if user and user.has(EDIT_RIGHT) %}class="locked"
+            title="Only someone with the “Change a task’s planned date” right
+                   can move this. An admin ticks it on your user under
+                   Setup → Users."{% endif %}>
+        {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
+        <span style="font-size:11px">{{ t.due_at|due }}</span>
+      </span>
       {% endif %}
     </td>
     {# Closed, or finished and waiting on an auditor — both are "the doer has

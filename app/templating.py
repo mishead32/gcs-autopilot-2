@@ -103,6 +103,7 @@ templates.env.globals["counter"] = _Counter
 from .models import Right as _Right
 templates.env.globals["AUDIT_RIGHT"] = _Right.AUDIT_TASK
 templates.env.globals["MOVE_DUE_RIGHT"] = _Right.CHANGE_DUE_DATE
+templates.env.globals["EDIT_RIGHT"] = _Right.EDIT_TASK
 
 # "Back" means back to the filtered list they were actually on, not to an
 # unfiltered one. See app/lastview.py.

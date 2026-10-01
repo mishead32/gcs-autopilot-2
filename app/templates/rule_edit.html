@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "_rulefields.html" import rule_fields, rule_script with context %}
+{% block title %}Edit checklist item · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<p class="sub"><a href="{{ back_url(request, '/recurring') }}">&larr;
+  Back to {{ back_label(request, 'Checklist') }}</a></p>
+
+<div class="page-head">
+  <div>
+    <h1>Edit checklist item</h1>
+    <p class="sub">{{ r.title }}</p>
+  </div>
+</div>
+
+{# The single most important thing on this page. Somebody changing a doer or
+   a frequency needs to know, before they press Save, that they are not
+   rewriting history — the twenty tasks this rule has already produced keep
+   the doer, the deadline and the priority they were created with. #}
+<div class="proof need" style="margin-bottom:16px">
+  <strong>Changes apply to tasks made from tomorrow on.</strong>
+  The {{ spawned }} task(s) this rule has already created keep the doer,
+  priority, deadline and details they were given — whether they are pending,
+  overdue or already done. Nobody's score changes because a rule was edited.
+  {% if today_made %}
+  <br>Today's task has already gone out, so the next one to follow these
+  settings is tomorrow's.
+  {% endif %}
+</div>
+
+<div class="grid g2">
+  <form method="post" action="/recurring/{{ r.id }}" class="card">
+    {{ rule_fields(doers, branches, frequencies, priorities, today_iso,
+                   r=r, quarter_start=quarter_start, year_day=year_day) }}
+    <div style="margin-top:18px">
+      <button class="btn">Save changes</button>
+      <a class="btn ghost" href="{{ back_url(request, '/recurring') }}">Cancel</a>
+    </div>
+  </form>
+
+  <div>
+    <div class="card">
+      <strong>As it stands</strong>
+      <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <tr><th>Doer</th><td>{{ r.doer.name }}</td></tr>
+        <tr><th>Priority</th>
+            <td><span class="chip {{ r.priority.value }}">{{ r.priority.value }}
+              {{ PRIORITY_WEIGHT[r.priority] }}×</span></td></tr>
+        <tr><th>Schedule</th><td>{{ r.schedule_label }}</td></tr>
+        <tr><th>Due time</th><td>{{ r.due_time }}</td></tr>
+        <tr><th>Branch</th><td>{{ r.branch.name if r.branch else 'Doer’s branch' }}</td></tr>
+        <tr><th>Proof</th><td>{{ 'Required' if r.requires_attachment else 'Not required' }}</td></tr>
+        <tr><th>Audit</th><td>{{ 'Required' if r.requires_audit else 'Not required' }}</td></tr>
+        <tr><th>Running</th><td>{{ 'On' if r.active else 'Off' }}</td></tr>
+        <tr><th>Last made a task</th>
+            <td>{{ r.last_spawned_on or 'never' }}</td></tr>
+      </table>
+      </div>
+    </div>
+
+    {% if recent %}
+    <div class="card">
+      <strong>Tasks this rule has already made</strong>
+      <p class="sub" style="margin:8px 0 0">
+        These are not touched by anything on this page.
+      </p>
+      <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <tr><th>ID</th><th>For</th><th>Doer</th><th>Priority</th><th>Status</th></tr>
+        {% for t in recent %}
+        <tr>
+          <td class="refcell"><a class="refid" href="/tasks/{{ t.id }}">{{ t.ref or '—' }}</a></td>
+          <td class="whencell">{{ (t.covers_day or t.due_at.date()).strftime('%d %b %Y') }}</td>
+          <td>{{ t.doer.name }}</td>
+          <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}</span></td>
+          <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{{ rule_script() }}
+{% endblock %}

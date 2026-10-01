@@ -4552,10 +4552,19 @@ try:
     _hrow = next((r[0].row for r in _ws7.iter_rows(max_col=1)
                   if str(r[0].value).strip() == "Task"), None)
     check("the download has a Task column", _hrow is not None)
+    # An empty download still writes one line — "Nothing matched these
+    # filters" — which is the right thing to hand somebody and is not a row
+    # of data.
     _n7 = sum(1 for r in _ws7.iter_rows(min_row=(_hrow or 1) + 1, max_col=1)
-              if r[0].value and str(r[0].value).strip())
-    check("and holds exactly the filtered rows", _n7 == len(_late_ids),
-          f"{_n7} rows for {len(_late_ids)} tasks")
+              if r[0].value and str(r[0].value).strip()
+              and not str(r[0].value).startswith("Nothing matched"))
+    # Compare the file with the SCREEN, not with a number worked out again
+    # from the database. The desk is split by "is it overdue yet", which
+    # changes as the day passes, so recomputing it a second later can give a
+    # different answer and fail a test that found nothing wrong.
+    _on_screen = len(_rows7(_pc.get(_base7 + "&show=pending&when=overdue").text))
+    check("and holds exactly the rows that were on screen",
+          _n7 == _on_screen, f"{_n7} in the file, {_on_screen} on screen")
 except ImportError:
     pass
 
@@ -5175,6 +5184,19 @@ check("an off-site return is refused here too",
 # The right is the control, not the absence of a button.
 check("a doer is not shown the picker",
       "duepick" not in doer.get("/tasks?scope=mine&status=pending").text)
+# A manager can edit a task but is NOT given the date right by default, which
+# is exactly the case that looks like a missing feature rather than a
+# deliberate limit. The date says why on hover.
+_mgrlist = mgr.get("/tasks?scope=assigned&status=pending").text
+from app.models import DEFAULT_RIGHTS as _DRF, Role as _RoleF, Right as _RightF
+check("a manager does not hold the date right by default",
+      _RightF.CHANGE_DUE_DATE not in _DRF.get(_RoleF.MANAGER, []),
+      [r.value for r in _DRF.get(_RoleF.MANAGER, [])])
+check("so a manager sees no picker either", "duepick" not in _mgrlist)
+check("but the date explains why, rather than just not working",
+      "locked" in _mgrlist and "Setup" in _mgrlist)
+check("an admin, who holds every right, does get the picker",
+      "duepick" in admin.get("/tasks?scope=all&status=pending").text)
 check("and cannot move a deadline by posting anyway",
       doer.post(f"/tasks/{_ddid}/due",
                 data={"due_at": "2028-01-01T10:00"}).status_code == 403)
@@ -5206,6 +5228,178 @@ check("the three dates are still in order",
       < _listD.index("<th>Completed</th>"))
 check("the Excel download still names the work type",
       admin.get("/tasks?scope=all&status=all&export=xlsx").status_code == 200)
+
+print("\n== editing a checklist rule ==")
+from app.db import SessionLocal as _slE
+from app.models import (RecurringRule as _RE, Task as _TE, Priority as _PE,
+                        Recurrence as _FE, TaskStatus as _STE)
+from app.services import recurring as _recE
+from app import clock as _ckE
+
+# Priority belongs on the list: it is what decides whether a checklist task
+# counts as five tasks or one in somebody's score.
+_lstE = admin.get("/recurring").text
+check("the checklist list has a Priority column", "<th>Priority</th>" in _lstE)
+check("and shows the weight beside it", "5×" in _lstE or "2×" in _lstE or "1×" in _lstE)
+check("every rule offers an Edit", _lstE.count(">Edit</a>") > 0)
+
+# Real user ids, looked up rather than typed. A hard-coded id is a test that
+# passes until somebody adds a person to the seed, and then fails somewhere
+# with no obvious connection to the change.
+with _slE() as _d:
+    _people = _d.query(_UA).filter(
+        _UA.email.in_(["amit@gcs.local", "priya@gcs.local",
+                       "ravi@gcs.local"])).all()
+    _pick = {u.email: u.id for u in _people}
+_doerA = str(_pick["amit@gcs.local"])
+_doerB = str(_pick["priya@gcs.local"])
+_doerC = str(_pick["ravi@gcs.local"])
+
+# Make a rule, let it produce a task, then change everything about the rule.
+_reE = admin.post("/recurring", data={
+    "title": f"SMOKE editable rule {RUN}", "details": "first wording",
+    "doer_id": _doerA, "branch_id": "", "frequency": "daily",
+    "due_time": "10:00", "priority": "low", "requires_attachment": "1"})
+check("the rule was created", _reE.status_code == 200, _reE.status_code)
+with _slE() as _d:
+    _rule = _d.query(_RE).filter(_RE.title == f"SMOKE editable rule {RUN}").one()
+    _rid = _rule.id
+admin.post("/recurring/run")
+with _slE() as _d:
+    _made = _d.query(_TE).filter(_TE.rule_id == _rid).all()
+    check("it produced a task", len(_made) >= 1, len(_made))
+    _oldE = [(t.id, t.doer_id, t.priority, t.title, t.details,
+              t.due_at, t.requires_audit) for t in _made]
+
+_formE = admin.get(f"/recurring/{_rid}")
+check("the edit page opens", _formE.status_code == 200, _formE.status_code)
+_fb = _formE.text
+check("it is filled in with the rule as it stands",
+      f"SMOKE editable rule {RUN}" in _fb and "first wording" in _fb)
+check("the frequency is pre-selected",
+      'value="daily"\n          selected' in _fb or 'value="daily"' in _fb)
+check("and it warns that history is not rewritten",
+      "apply to tasks made from tomorrow" in _fb)
+check("saying how many tasks it has already made",
+      f"{len(_made)} task(s)" in _fb, f"{len(_made)}")
+check("and listing them", "not touched by anything on this page" in _fb)
+
+# Change the doer, the priority, the wording, the frequency and the time.
+_saveE = admin.post(f"/recurring/{_rid}", data={
+    "title": f"SMOKE edited rule {RUN}", "details": "second wording",
+    "doer_id": _doerB, "branch_id": "", "frequency": "weekly",
+    "weekdays": ["1", "3"], "due_time": "16:30", "priority": "high",
+    "requires_audit": "1", "requires_attachment": "1"})
+check("the change saves", _saveE.status_code == 200, _saveE.status_code)
+
+with _slE() as _d:
+    _r2 = _d.get(_RE, _rid)
+    check("the rule's title changed", _r2.title == f"SMOKE edited rule {RUN}")
+    check("its details changed", _r2.details == "second wording")
+    check("its doer changed", _r2.doer_id == int(_doerB), _r2.doer_id)
+    check("its priority changed", _r2.priority == _PE.HIGH, _r2.priority)
+    check("its frequency changed", _r2.frequency == _FE.WEEKLY, _r2.frequency)
+    check("its days changed", _r2.weekday_list == [1, 3], _r2.weekday_list)
+    check("its due time changed", _r2.due_time == "16:30", _r2.due_time)
+    check("and it now wants an audit", _r2.requires_audit)
+
+    # THE POINT OF THE WHOLE FEATURE: nothing already made is touched.
+    _nowE = {t.id: (t.doer_id, t.priority, t.title, t.details, t.due_at,
+                    t.requires_audit) for t in
+             _d.query(_TE).filter(_TE.rule_id == _rid).all()}
+    for _tid, _doer, _pri, _title, _det, _due, _aud in _oldE:
+        _got = _nowE.get(_tid)
+        check(f"task {_tid} keeps its doer", _got[0] == _doer, (_got[0], _doer))
+        check(f"task {_tid} keeps its priority", _got[1] == _pri, (_got[1], _pri))
+        check(f"task {_tid} keeps its wording", _got[2] == _title)
+        check(f"task {_tid} keeps its details", _got[3] == _det)
+        check(f"task {_tid} keeps its deadline", _got[4] == _due, (_got[4], _due))
+        check(f"task {_tid} keeps its audit setting", _got[5] == _aud)
+    check("and no task was deleted or added by the edit",
+          set(_nowE) == {t[0] for t in _oldE},
+          (sorted(_nowE), sorted(t[0] for t in _oldE)))
+
+# A finished task is just as untouchable as a pending one.
+with _slE() as _d:
+    _t = _d.query(_TE).filter(_TE.rule_id == _rid).first()
+    _t.status = _STE.COMPLETED
+    _t.closed_at = _ckE.now()
+    _t.priority = _PE.LOW
+    _d.commit()
+    _doneid, _donepri = _t.id, _t.priority
+admin.post(f"/recurring/{_rid}", data={
+    "title": f"SMOKE edited again {RUN}", "details": "third wording",
+    "doer_id": _doerC, "branch_id": "", "frequency": "daily",
+    "due_time": "09:00", "priority": "medium", "requires_attachment": "1"})
+with _slE() as _d:
+    _t = _d.get(_TE, _doneid)
+    check("a completed task keeps the priority it was scored on",
+          _t.priority == _donepri, _t.priority)
+    check("and its doer", _t.doer_id != int(_doerC))
+    check("and stays completed", _t.status == _STE.COMPLETED)
+
+# The next task the rule makes DOES follow the new settings.
+#
+# Clearing last_spawned_on is not enough: the spawner keys on the day a task
+# is FOR, so today's job is already made and will not be made twice. That is
+# right, and it is why this clears today's tasks for this rule before asking
+# it to run again — anything less would be testing the duplicate guard
+# rather than whether the spawner reads the edited rule.
+with _slE() as _d:
+    _clear = [t.id for t in _d.query(_TE).filter(_TE.rule_id == _rid).all()]
+# Delete through the app's own route rather than straight out of the table:
+# notes, files and follow-up ticks point at these rows, and the database
+# refuses a bare DELETE that would leave them pointing at nothing. Using the
+# real route is also the only version of "delete" the software actually ships.
+for _cid in _clear:
+    admin.post(f"/tasks/{_cid}/delete")
+with _slE() as _d:
+    _r3 = _d.get(_RE, _rid)
+    _r3.last_spawned_on = None
+    _d.commit()
+    _seen = {t.id for t in _d.query(_TE).filter(_TE.rule_id == _rid).all()}
+admin.post("/recurring/run")
+with _slE() as _d:
+    _fresh = [t for t in _d.query(_TE).filter(_TE.rule_id == _rid).all()
+              if t.id not in _seen]
+    if _fresh:
+        _f = _fresh[0]
+        check("the next task follows the edited rule",
+              _f.doer_id == int(_doerC)
+              and _f.title == f"SMOKE edited again {RUN}",
+              (_f.doer_id, _f.title))
+        check("with the new deadline time",
+              _f.due_at.strftime("%H:%M") == "09:00", str(_f.due_at))
+    else:
+        check("the rule made a fresh task to check", False, "none spawned")
+
+# Guards.
+check("a doer cannot open the edit page",
+      doer.get(f"/recurring/{_rid}").status_code == 403)
+check("nor save one",
+      doer.post(f"/recurring/{_rid}", data={
+          "title": "x", "doer_id": _doerA,
+          "frequency": "daily"}).status_code == 403)
+check("a rule pointed at somebody who does not exist is refused",
+      admin.post(f"/recurring/{_rid}", data={
+          "title": "x", "doer_id": "999999", "frequency": "daily",
+          "due_time": "09:00", "priority": "low"}).status_code == 400)
+check("a rule that does not exist is a clean 404",
+      admin.get("/recurring/999999").status_code == 404)
+check("a broken schedule is refused rather than stored",
+      admin.post(f"/recurring/{_rid}", data={
+          "title": "x", "doer_id": _doerA, "frequency": "weekly",
+          "due_time": "09:00", "priority": "low"}).status_code == 400)
+
+# The button that shares the same address shape must still work.
+check("Run spawner now is not swallowed by the edit route",
+      admin.post("/recurring/run").status_code == 200)
+
+# One form, used twice — so creating and editing can never mean two
+# different things.
+check("the create form and the edit form come from the same block",
+      'name="weeks_of_month"' in admin.get("/recurring").text
+      and 'name="weeks_of_month"' in admin.get(f"/recurring/{_rid}").text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
