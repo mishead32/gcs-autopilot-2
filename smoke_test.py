@@ -735,7 +735,12 @@ check("a finished task can be pulled in for audit later",
       "Audit pending" in mgr.get(f"/tasks/{nid}").text)
 check("audit-pending filter finds it",
       f'/tasks/{nid}' in mgr.get("/tasks?scope=all&status=audit_pending").text)
-check("audit column is on the task list", "Audit</th>" in mgr.get("/tasks?scope=all&status=all").text)
+# Audit is no longer a column of its own — it is a chip under the status
+# chip, because two chips about where a task stands do not need two columns
+# on a 1000px screen.
+_al = mgr.get("/tasks?scope=all&status=all").text
+check("the audit state is on the task list",
+      "statecell" in _al and "audit_" in _al)
 check("bad audit state refused",
       mgr.post(f"/tasks/{nid}/audit-state", data={"state": "nonsense"}).status_code == 400)
 
@@ -1162,8 +1167,18 @@ check("the new deadline is the working day BEFORE", "07 Nov 2026" in r.text)
 check("and not the day after", "09 Nov 2026" not in r.text)
 
 print("\n== date filters on the task lists ==")
+# Which date a window means is now the PERSON'S choice, not the tab's.
+# Planned date everywhere by default, because "show me October" nearly
+# always means the work October was promised — and a window that silently
+# changed meaning between tabs could not be reconciled with anything.
 r = admin.get("/tasks?scope=all&status=done")
-check("completed filters on the completion date", "Completion date" in r.text)
+check("Completed defaults to the planned date too",
+      'name="basis"' in r.text and 'value="due_at" selected' in r.text)
+check("and the other two dates are offered",
+      'value="finished_at"' in r.text and 'value="created_at"' in r.text)
+r = admin.get("/tasks?scope=all&status=done&basis=finished_at")
+check("choosing completion date is honoured",
+      'value="finished_at" selected' in r.text)
 r = admin.get("/tasks?scope=all&status=open")
 check("open filters on the planned date", "Planned date" in r.text)
 check("there is a Coming up view",
@@ -1179,23 +1194,36 @@ _t.closed_at = _dt(2025, 6, 20, 12, 0)
 _db.add(_t); _db.commit(); _cid = _t.id
 _db.close()
 
-r = admin.get("/tasks?scope=all&status=done&date_from=2025-06-01&date_to=2025-06-30")
+r = admin.get("/tasks?scope=all&status=done&basis=finished_at&date_from=2025-06-01&date_to=2025-06-30")
 check("a task closed in June shows in a June completion range",
       f"SMOKE closed in range {RUN}" in r.text)
-r = admin.get("/tasks?scope=all&status=done&date_from=2025-07-01&date_to=2025-07-31")
+r = admin.get("/tasks?scope=all&status=done&basis=finished_at&date_from=2025-07-01&date_to=2025-07-31")
 check("and not in a July range", f"SMOKE closed in range {RUN}" not in r.text)
 r = admin.get("/tasks?scope=all&status=all&date_from=2025-01-01&date_to=2025-01-31")
 check("but its PLANNED date puts it in a January planned range",
       f"SMOKE closed in range {RUN}" in r.text)
-r = admin.get("/tasks?scope=all&status=done&date_from=2025-06-30&date_to=2025-06-01")
+r = admin.get("/tasks?scope=all&status=done&basis=finished_at&date_from=2025-06-30&date_to=2025-06-01")
 check("dates entered backwards are swapped, not empty",
       f"SMOKE closed in range {RUN}" in r.text)
-r = admin.get("/tasks?scope=all&status=done&date_from=2025-06-20&date_to=2025-06-20")
+r = admin.get("/tasks?scope=all&status=done&basis=finished_at&date_from=2025-06-20&date_to=2025-06-20")
 check("a single day includes the whole day",
       f"SMOKE closed in range {RUN}" in r.text)
 check("a nonsense date is ignored rather than crashing",
       admin.get("/tasks?scope=all&status=done&date_from=rubbish").status_code == 200)
 check("the completion column is on the list", "Completed</th>" in r.text)
+# The same task, same dates, read as PLANNED instead — it must disappear,
+# which is the proof that the choice is really doing something.
+check("the same window on the planned date does not find it",
+      f"SMOKE closed in range {RUN}" not in admin.get(
+          "/tasks?scope=all&status=done&basis=due_at"
+          "&date_from=2025-06-01&date_to=2025-06-30").text)
+check("but its own planned date does",
+      f"SMOKE closed in range {RUN}" in admin.get(
+          "/tasks?scope=all&status=done&basis=due_at"
+          "&date_from=2025-01-01&date_to=2025-01-31").text)
+check("and the assigned date is a third, separate answer",
+      admin.get("/tasks?scope=all&status=all&basis=created_at"
+                "&date_from=2025-01-01&date_to=2025-01-31").status_code == 200)
 
 print("\n== first-run setup (hosts with no shell) ==")
 from app.routers.setup import needs_setup as _ns
@@ -1387,11 +1415,22 @@ for _src, _label in [("delegation", "Delegation"), ("checklist", "Checklist"),
 check("an unknown report is a readable 404",
       admin.get("/reports/tasks?source=nonsense").status_code == 404)
 
-# Pending is filtered on the PLANNED date, completed on the COMPLETION date.
-# Filtering both on one column is the usual way this goes quietly wrong.
+# Both halves of the report are filtered on the SAME date, chosen by the
+# person and planned by default. It used to filter pending work on its
+# planned date and finished work on the date it was finished, so one report
+# answered two questions at once and its totals reconciled with nothing.
 _r = admin.get("/reports/tasks?source=delegation")
-check("the page says which date it filters on",
-      "planned date for pending" in _r.text and "completion date for completed" in _r.text)
+check("the report lets you choose which date the window means",
+      'name="basis"' in _r.text)
+check("and starts on the planned date", 'value="due_at" selected' in _r.text)
+check("with completion and assigned offered too",
+      'value="finished_at"' in _r.text and 'value="created_at"' in _r.text)
+_rb = admin.get("/reports/tasks?source=delegation&basis=finished_at"
+                "&date_from=2025-06-01&date_to=2025-06-30")
+check("choosing completion date is honoured on the report",
+      'value="finished_at" selected' in _rb.text)
+check("and the summary line says which date it used",
+      "completion date" in _rb.text.lower())
 
 print("\n== every report filter has BOTH a from and a to ==")
 for _path in ["/reports/tasks?source=delegation", "/reports/tasks?source=checklist",
@@ -2699,10 +2738,11 @@ check("no Mark complete button on it any more",
 # which a task waiting on an auditor does not have yet — so picking any date
 # range would have emptied the tab all over again.
 _today = _clock.today().isoformat()
-_ranged = doer.get(f"/tasks?scope=mine&status=done&date_from={_today}&date_to={_today}").text
+_ranged = doer.get(f"/tasks?scope=mine&status=done&basis=finished_at"
+                   f"&date_from={_today}&date_to={_today}").text
 check("a date range on Completed still finds it",
       f'/tasks/{_cid}"' in _ranged, "dropped by the date filter")
-check("and says which date it is filtering on", "Completion date" in _ranged)
+check("and the completion-date choice is held", 'value="finished_at" selected' in _ranged)
 
 # Closing the audit must not push it back out of the tab.
 admin.post(f"/tasks/{_cid}/audit",
@@ -4651,28 +4691,41 @@ check("a picked range cannot reach into the future",
 
 # The scores themselves have to differ by window, and match a hand count.
 def _hand_score(uid, start, end):
-    """Work out 'planned' and 'closed' the long way, straight off the rows.
+    """Work out 'owed' and 'closed' the long way, straight off the rows.
 
     Counted in SCORE WEIGHT, not in tasks — high priority is worth 5, medium
     2, low 1 — because that is what the scorecard measures. Counting rows
     here instead is how you write a test that agrees with itself and not
     with the software.
+
+    A task is owed in the period if it was due in it, OR was due before it
+    and still unfinished when it began (the backlog somebody carried in), OR
+    was closed inside it whenever it was due. Written out longhand here on
+    purpose: restating the rule in different words is the only way this
+    checks the software rather than echoing it.
     """
     from app.models import PARKED_STATES as _PK8
     with _sl8() as _d:
-        rows = _d.query(_T8).filter(_T8.doer_id == uid).all()
-        planned = sum(t.weight for t in rows
-                      if start <= t.due_at <= end and t.status not in _PK8)
-        closed = sum(t.weight for t in rows
-                     if t.closed_at and start <= t.closed_at <= end)
-    return planned, closed
+        rows = [t for t in _d.query(_T8).filter(_T8.doer_id == uid).all()
+                if t.status not in _PK8]
+        owed, closed = 0, 0
+        for t in rows:
+            shut_in = t.closed_at is not None and start <= t.closed_at <= end
+            due_in = start <= t.due_at <= end
+            carried = t.due_at < start and (t.closed_at is None
+                                            or t.closed_at >= start)
+            if shut_in:
+                closed += t.weight
+            if due_in or carried or shut_in:
+                owed += t.weight
+    return owed, closed
 
 with _sl8() as _d:
     _card_all = _sc8.user_scorecard(_d, _amit8, start=_ov[0], end=_ov[1])
     _card_lw = _sc8.user_scorecard(_d, _amit8, start=_lw[0], end=_lw[1])
 _p_all, _c_all = _hand_score(_amit8.id, _ov[0], _ov[1])
 _p_lw, _c_lw = _hand_score(_amit8.id, _lw[0], _lw[1])
-check("Overall counts every task that person was ever given",
+check("Overall counts every task that person was ever on the hook for",
       _card_all.planned == _p_all, (_card_all.planned, _p_all))
 check("last week counts only that week's",
       _card_lw.planned == _p_lw, (_card_lw.planned, _p_lw))
@@ -5058,14 +5111,19 @@ with _slC() as _d:
     _sample = next(t for t in _allC if t.source == _SC2.DELEGATION)
     _sid, _sref = _sample.id, _sample.ref
     _sstamp = _sample.created_at.strftime("%d %b, %I:%M %p")
+    _sample_day = _sample.created_at.strftime("%d %b")
     _sfull = _sample.created_at.strftime("%d %b %Y, %I:%M %p")
 
 _listC = admin.get("/tasks?scope=all&status=all").text
-check("the task list has an Assigned column", "<th>Assigned</th>" in _listC)
-check("and it carries the real time", _sstamp in _listC, _sstamp)
-check("the three dates read as a sequence",
-      _listC.index("<th>Assigned</th>") < _listC.index("<th>Planned</th>")
-      < _listC.index("<th>Completed</th>"))
+# Assigned is on the row, under the task's name, rather than in a column of
+# its own: the row had to fit on a 1000px screen, and a date that is read
+# occasionally does not earn a column from one that is read every time.
+check("the task list says when each task was assigned",
+      "assigned" in _listC.lower() and "rowsub" in _listC)
+check("and it carries the real date",
+      _sample_day in _listC, _sample_day)
+check("Planned still comes before Completed",
+      _listC.index("<th>Planned</th>") < _listC.index("<th>Completed</th>"))
 
 _pageC = admin.get(f"/tasks/{_sid}").text
 check("the task's own page says Assigned on", "Assigned on" in _pageC)
@@ -5223,9 +5281,10 @@ _hdrD2 = _listD.split("<table>", 1)[1].split("</tr>", 1)[0]
 check("one header per column still",
       _hdrD2.count("<th") == _listD.split("</tr>", 2)[1].count("<td"),
       (_hdrD2.count("<th"), _listD.split("</tr>", 2)[1].count("<td")))
-check("the three dates are still in order",
-      _listD.index("<th>Assigned</th>") < _listD.index("<th>Planned</th>")
-      < _listD.index("<th>Completed</th>"))
+check("Planned still comes before Completed",
+      _listD.index("<th>Planned</th>") < _listD.index("<th>Completed</th>"))
+check("and the assigned date is on the row rather than in a column",
+      "<th>Assigned</th>" not in _listD and "assigned" in _listD.lower())
 check("the Excel download still names the work type",
       admin.get("/tasks?scope=all&status=all&export=xlsx").status_code == 200)
 
@@ -5400,6 +5459,117 @@ check("Run spawner now is not swallowed by the edit route",
 check("the create form and the edit form come from the same block",
       'name="weeks_of_month"' in admin.get("/recurring").text
       and 'name="weeks_of_month"' in admin.get(f"/recurring/{_rid}").text)
+
+print("\n== what a period's score counts ==")
+# Rajinder's own worked example, run through the real scorer rather than a
+# description of it.
+#
+#   Week: 1-7 Oct 2026.
+#   50 tasks due in the week, 25 of them marked done inside it.
+#   10 due BEFORE the week, marked done inside it.
+#    5 due AFTER the week, marked done inside it (finished early).
+#    5 due before the week and still pending - the backlog carried in.
+#   plus noise that must not count: due AND closed entirely outside it.
+from datetime import datetime as _dtF, timedelta as _tdF
+from app.services.scoring import window_tasks as _winF
+from app.models import TaskStatus as _STF, TaskSource as _SRF, Priority as _PRF
+
+_START = _dtF(2026, 10, 1, 0, 0)
+_END = _dtF(2026, 10, 7, 23, 59, 59)
+
+class _FakeTask:
+    _n = 0
+    def __init__(self, due, closed=None):
+        _FakeTask._n += 1
+        self.id = _FakeTask._n
+        self.due_at, self.closed_at = due, closed
+        self.status = _STF.COMPLETED if closed else _STF.IN_PROGRESS
+        self.source, self.priority = _SRF.DELEGATION, _PRF.LOW
+        self.false_marked, self.audit_score = False, None
+    @property
+    def weight(self): return 1
+    @property
+    def was_on_time(self):
+        return self.closed_at <= self.due_at if self.closed_at else None
+    @property
+    def is_overdue(self): return self.closed_at is None
+
+_rowsF = []
+for _i in range(50):                       # due in the week
+    _d = _START + _tdF(days=_i % 7, hours=12)
+    _rowsF.append(_FakeTask(_d, closed=_d if _i < 25 else None))
+for _i in range(10):                       # due before, done inside
+    _rowsF.append(_FakeTask(_dtF(2026, 9, 20, 12), _dtF(2026, 10, 3, 12)))
+for _i in range(5):                        # due after, done inside
+    _rowsF.append(_FakeTask(_dtF(2026, 10, 20, 12), _dtF(2026, 10, 2, 12)))
+for _i in range(5):                        # due before, still pending
+    _rowsF.append(_FakeTask(_dtF(2026, 9, 15, 12)))
+for _i in range(7):                        # noise: before and before
+    _rowsF.append(_FakeTask(_dtF(2026, 9, 10, 12), _dtF(2026, 9, 11, 12)))
+for _i in range(3):                        # noise: after and after
+    _rowsF.append(_FakeTask(_dtF(2026, 10, 20, 12), _dtF(2026, 10, 21, 12)))
+
+_owedF, _closedF = _winF(_rowsF, _START, _END)
+_pendF = [t for t in _owedF if t.closed_at is None]
+check("the week is on the hook for 70 tasks (50 + 10 + 5 + 5)",
+      len(_owedF) == 70, len(_owedF))
+check("40 of them were marked inside the week (25 + 10 + 5)",
+      len(_closedF) == 40, len(_closedF))
+check("30 are still pending (25 from the week + 5 carried in)",
+      len(_pendF) == 30, len(_pendF))
+check("and the carried-in backlog really is in there",
+      len([t for t in _pendF if t.due_at < _START]) == 5,
+      len([t for t in _pendF if t.due_at < _START]))
+check("work due AND finished before the week does not count",
+      not any(t.due_at < _START and t.closed_at and t.closed_at < _START
+              for t in _owedF))
+check("work due AND finished after the week does not count",
+      not any(t.closed_at and t.closed_at > _END for t in _owedF))
+check("ten rows were excluded, exactly the noise",
+      len(_rowsF) - len(_owedF) == 10, len(_rowsF) - len(_owedF))
+
+# The same rule on real rows, through the real scorecard.
+from app.db import SessionLocal as _slF
+from app.models import Task as _TF, User as _UF
+from app.services import scoring as _scF
+with _slF() as _d:
+    _amitF = _d.query(_UF).filter(_UF.email == "amit@gcs.local").one()
+    _cardF = _scF.user_scorecard(_d, _amitF, start=_START, end=_END)
+    _rowsR = [t for t in _d.query(_TF).filter(_TF.doer_id == _amitF.id).all()]
+_owedR, _closedR = _winF(_rowsR, _START, _END)
+check("the scorecard's denominator is the owed weight",
+      _cardF.planned == sum(t.weight for t in _owedR),
+      (_cardF.planned, sum(t.weight for t in _owedR)))
+check("and its numerator is what closed inside the window",
+      _cardF.completed == sum(t.weight for t in _closedR),
+      (_cardF.completed, sum(t.weight for t in _closedR)))
+check("a task due in the window but finished long after is NOT done for it",
+      _cardF.completed <= _cardF.planned)
+check("the score still lands between 0 and 100",
+      0 <= _cardF.score <= 100, _cardF.score)
+
+# The dashboard's own window has to use the same rule, or the number on the
+# dashboard and the number in the report would disagree.
+_dashF = doer.get("/?period=last_week")
+check("the dashboard score opens on that rule too", _dashF.status_code == 200)
+check("the Performance page as well",
+      admin.get("/stats").status_code == 200)
+check("and the EM score report",
+      admin.get("/reports/score").status_code == 200)
+
+print("\n== the task row fits a 1000px screen ==")
+_fitF = admin.get("/tasks?scope=all&status=pending").text
+_hdrF = _fitF.split("<table>", 1)[1].split("</tr>", 1)[0]
+check("eight columns, not eleven", _hdrF.count("<th") == 8, _hdrF.count("<th"))
+for _gone in ("<th>Source</th>", "<th>Audit</th>", "<th>Assigned</th>"):
+    check(f"{_gone} is folded into the row", _gone not in _fitF)
+check("but nothing was actually lost: source is on the row",
+      "delegation" in _fitF.lower() or "recurring" in _fitF.lower())
+check("the assigned date is on the row", "assigned" in _fitF.lower())
+check("and the audit state is on the row", "audit_" in _fitF)
+check("one header per column still",
+      _hdrF.count("<th") == _fitF.split("</tr>", 2)[1].count("<td"),
+      (_hdrF.count("<th"), _fitF.split("</tr>", 2)[1].count("<td")))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

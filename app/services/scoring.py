@@ -323,6 +323,49 @@ def _w(tasks) -> int:
     return sum(t.weight for t in tasks)
 
 
+def window_tasks(tasks, start: datetime, end: datetime):
+    """Which tasks count towards a period's score, and which of them closed in it.
+
+    One place, used by every scorecard, because "what was this person on the
+    hook for between these two dates" has to mean the same thing on the
+    dashboard, on the Performance page and in the EM score report.
+
+    A task is ON THE HOOK for the period if any of these is true:
+
+      · it was DUE inside the period — the obvious case;
+      · it was due BEFORE the period and was still not finished when the
+        period began — the backlog somebody carried into the week. Leaving
+        this out is what made a week of clearing old work look like a week
+        of doing nothing: the old tasks were not due that week, so they
+        counted nowhere, and the person scored zero for the only work they
+        actually did;
+      · it was CLOSED inside the period, whenever it happened to be due —
+        so finishing next week's job early still counts this week.
+
+    It is DONE for the period only if it was closed inside it. A task due in
+    the period and finished a month later is not done for the period, which
+    is the whole point of measuring a week.
+
+    Cancelled and on-hold work leaves entirely: a declined help request or a
+    job that stopped mattering is not a job somebody failed to do.
+    """
+    owed, closed = [], []
+    for t in tasks:
+        if t.status in PARKED_STATES:
+            continue
+        shut_in = t.closed_at is not None and start <= t.closed_at <= end
+        due_in = start <= t.due_at <= end
+        # Open when the period began: either never closed, or closed after
+        # the period started. Work finished BEFORE the period belongs to the
+        # period it was finished in, not to this one.
+        carried = t.due_at < start and (t.closed_at is None or t.closed_at >= start)
+        if shut_in:
+            closed.append(t)
+        if due_in or carried or shut_in:
+            owed.append(t)
+    return owed, closed
+
+
 def _build(planned: list[Task], closed_in_window: list[Task],
            benchmarks: dict | None = None) -> Card:
     bm = benchmarks or DEFAULT_BENCHMARKS
@@ -334,7 +377,8 @@ def _build(planned: list[Task], closed_in_window: list[Task],
     c.planned = _w(planned)
     c.closed_in_window = _w(closed_in_window)
 
-    done = [t for t in planned if t.status in CLOSED]
+    shut = {t.id for t in closed_in_window}
+    done = [t for t in planned if t.id in shut]
     c.completed = _w(done)
     c.not_done = c.planned - c.completed
     c.on_time = _w([t for t in done if t.was_on_time])
@@ -350,7 +394,7 @@ def _build(planned: list[Task], closed_in_window: list[Task],
                         benchmark=bm.get(src.value, 0))
         rows = [t for t in planned if t.source == src]
         s.planned = _w(rows)
-        sdone = [t for t in rows if t.status in CLOSED]
+        sdone = [t for t in rows if t.id in shut]
         s.completed = _w(sdone)
         s.not_done = s.planned - s.completed
         s.on_time = _w([t for t in sdone if t.was_on_time])
@@ -400,13 +444,7 @@ def scoreboard(db: Session, org_id: int, start: datetime, end: datetime,
         q = q.where(Task.doer_id == doer_id)
     all_tasks = list(db.scalars(q).all())
 
-    # A cancelled task was un-planned — a declined help request, a job that
-    # stopped mattering. Counting it as 'not done' would punish the person
-    # who was right to stop, so it leaves the denominator entirely.
-    planned = [t for t in all_tasks
-               if start <= t.due_at <= end and t.status not in PARKED_STATES]
-    closed = [t for t in all_tasks
-              if t.closed_at is not None and start <= t.closed_at <= end]
+    planned, closed = window_tasks(all_tasks, start, end)
 
     users = {u.id: u for u in db.scalars(
         select(User).where(User.org_id == org_id)).all()}
@@ -459,9 +497,7 @@ def user_scorecard(db: Session, user: User, days: int = 30,
     if start is None or end is None:
         start, end = resolve_window(None, None, days)
     tasks = list(db.scalars(select(Task).where(Task.doer_id == user.id)).all())
-    planned = [t for t in tasks
-               if start <= t.due_at <= end and t.status not in PARKED_STATES]
-    closed = [t for t in tasks if t.closed_at and start <= t.closed_at <= end]
+    planned, closed = window_tasks(tasks, start, end)
     return _build(planned, closed, user.benchmarks)
 
 

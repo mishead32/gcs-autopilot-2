@@ -4,7 +4,8 @@
 {% set q = 'scope=' ~ scope ~ '&status=' ~ status ~ '&source=' ~ source ~
            '&date_from=' ~ date_from ~ '&date_to=' ~ date_to ~
            '&doer=' ~ (doer_id or '') ~ '&branch=' ~ (branch_id or '') ~
-           '&dept=' ~ (dept_id or '') ~ '&q=' ~ ref_q|urlencode %}
+           '&dept=' ~ (dept_id or '') ~ '&q=' ~ ref_q|urlencode ~
+           '&basis=' ~ basis %}
 {% macro tablink(over) %}{{ '/tasks?' ~ q }}{% endmacro %}
 {% block content %}
 <div class="page-head">
@@ -117,9 +118,13 @@
     <label>To</label>
     <input type="date" name="date_to" value="{{ date_to }}">
   </div>
-  <div class="basis">
+  <div>
     <label>Dates filter on</label>
-    <div class="v">{{ basis_label }}</div>
+    <select name="basis">
+      {% for k, label in basis_choices %}
+      <option value="{{ k }}" {{ 'selected' if basis == k }}>{{ label }}</option>
+      {% endfor %}
+    </select>
   </div>
   <div class="acts">
     <button class="btn">Apply</button>

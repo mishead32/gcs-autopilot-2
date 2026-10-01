@@ -83,6 +83,25 @@ def _day(raw: str) -> date | None:
         return None
 
 
+# The three dates a report window can mean. Same words as the task list, so
+# "planned date" is one idea in this software rather than two.
+BASIS_CHOICES = [
+    ("due_at", "Planned date"),
+    ("finished_at", "Completion date"),
+    ("created_at", "Assigned date"),
+]
+BASIS_LABELS = dict(BASIS_CHOICES)
+
+
+def _basis_col(name: str):
+    """A task waiting on an auditor has no closed_at yet, only submitted_at.
+    Both are finished as far as the doer is concerned, so "completion date"
+    means whichever of the two exists."""
+    if name == "finished_at":
+        return func.coalesce(Task.closed_at, Task.submitted_at)
+    return getattr(Task, name)
+
+
 @dataclass
 class Filters:
     """Everything the filter bar collects, already validated."""
@@ -93,6 +112,11 @@ class Filters:
     priority: str = ""
     state: str = ""
     q: str = ""            # free-text search over the task and its details
+    # Which date the window applies to. Planned by default: "show me
+    # October" nearly always means the work October was promised, and the
+    # report quietly answering a different question is worse than making
+    # somebody pick.
+    basis: str = "due_at"
 
     branches: list = field(default_factory=list)
     doers: list = field(default_factory=list)
@@ -124,7 +148,7 @@ class Filters:
         q.update({"date_from": self.f_from, "date_to": self.f_to,
                   "branch": self.branch_id or "", "doer": self.doer_id or "",
                   "priority": self.priority, "state": self.state,
-                  "q": self.q})
+                  "q": self.q, "basis": self.basis})
         q.update(over)
         q = {k: v for k, v in q.items() if v not in ("", None)}
         return f"{self.path}?{urlencode(q)}"
@@ -166,13 +190,15 @@ class Filters:
             bits.append(f"{self.priority} priority")
         if self.q:
             bits.append(f'matching "{self.q}"')
+        if self.date_from or self.date_to:
+            bits.append(f"on {BASIS_LABELS.get(self.basis, 'planned date').lower()}")
         return " · ".join(bits)
 
 
 def build_filters(db: Session, user: User, path: str, date_from: str, date_to: str,
                   branch: str, doer: str, priority: str = "", state: str = "",
                   hidden: dict | None = None, default_days: int | None = None,
-                  q: str = "") -> Filters:
+                  q: str = "", basis: str = "") -> Filters:
     """Validate the query string once, for every report.
 
     A branch the viewer cannot see, or an employee who is not in the branch
@@ -208,6 +234,7 @@ def build_filters(db: Session, user: User, path: str, date_from: str, date_to: s
     return Filters(date_from=start, date_to=end, branch_id=branch_id,
                    doer_id=doer_id, priority=pr, state=state.strip().lower(),
                    q=search.clean(q),
+                   basis=basis if basis in BASIS_LABELS else "due_at",
                    branches=branches, doers=doers, path=path,
                    hidden=hidden or {})
 
@@ -307,7 +334,7 @@ def index(request: Request, user: User = Depends(current_user)):
 def task_report(request: Request, source: str = "delegation",
                 date_from: str = "", date_to: str = "", branch: str = "",
                 doer: str = "", priority: str = "", state: str = "pending",
-                q: str = "", export: str = "",
+                q: str = "", basis: str = "", export: str = "",
                 user: User = Depends(current_user), db: Session = Depends(get_db)):
     if source not in SOURCES:
         raise HTTPException(404, "Unknown report. Pick one from the Reports page.")
@@ -315,23 +342,24 @@ def task_report(request: Request, source: str = "delegation",
     src = cfg["src"]
 
     f = build_filters(db, user, "/reports/tasks", date_from, date_to, branch,
-                      doer, priority, state, hidden={"source": source}, q=q)
+                      doer, priority, state, hidden={"source": source},
+                      q=q, basis=basis)
     if f.state not in ("pending", "completed", "overdue", "audit_pending",
                        "audit_done", "false", "all"):
         f.state = "pending"
 
     base = _apply_common(_scoped(user, select(Task)).where(Task.source == src), f)
 
-    # Pending is about the PLANNED date; finished work is about the date the
-    # doer finished it. Same window, two different columns on purpose.
+    # Both halves are filtered on the SAME date — whichever the person chose,
+    # planned by default. It used to filter pending work on its planned date
+    # and finished work on the date it was finished, which meant one report
+    # answered two different questions at once and the totals could not be
+    # reconciled with anything.
+    col = _basis_col(f.basis)
     pending = list(db.scalars(
-        _between(base.where(Task.status.in_(OPEN_STATES)), Task.due_at, f)).all())
-    # A task waiting on an auditor has no closed_at yet, so the window has to
-    # look at whichever of the two dates exists — filtering on closed_at alone
-    # would drop every submitted task out of the report.
+        _between(base.where(Task.status.in_(OPEN_STATES)), col, f)).all())
     completed = list(db.scalars(
-        _between(base.where(Task.status.in_(FINISHED_STATES)),
-                 func.coalesce(Task.closed_at, Task.submitted_at), f)).all())
+        _between(base.where(Task.status.in_(FINISHED_STATES)), col, f)).all())
 
     now = clock.now()
     overdue = [t for t in pending if t.due_at < now]
@@ -511,14 +539,16 @@ def followup_report(request: Request, date_from: str = "", date_to: str = "",
 @router.get("/reports/audit", response_class=HTMLResponse)
 def audit_report(request: Request, date_from: str = "", date_to: str = "",
                  branch: str = "", doer: str = "", priority: str = "",
-                 state: str = "pending", q: str = "", export: str = "",
+                 state: str = "pending", q: str = "", basis: str = "",
+                 export: str = "",
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     f = build_filters(db, user, "/reports/audit", date_from, date_to, branch,
-                      doer, priority, state, q=q)
+                      doer, priority, state, q=q, basis=basis)
     if f.state not in ("pending", "completed", "waiting", "not_required", "all"):
         f.state = "pending"
 
-    base = _between(_apply_common(_scoped(user, select(Task)), f), Task.due_at, f)
+    base = _between(_apply_common(_scoped(user, select(Task)), f),
+                    _basis_col(f.basis), f)
     tasks = list(db.scalars(base).all())
 
     # source key -> {pending, completed, waiting, not_required, total}

@@ -21,7 +21,7 @@
 
 
 {% macro filter_bar(f, basis='', show_branch=true, show_doer=true,
-                    show_priority=true, show_search=true) %}
+                    show_priority=true, show_search=true, show_basis=true) %}
 <form method="get" action="{{ f.path }}" class="card filterbar">
   {% for k, v in f.hidden.items() %}
   <input type="hidden" name="{{ k }}" value="{{ v }}">
@@ -40,6 +40,16 @@
   {% endif %}
 
   <div class="fb-row">
+    {% if show_basis %}
+    <div class="fb-f">
+      <label>Dates filter on</label>
+      <select name="basis">
+        {% for k, label in BASIS_CHOICES %}
+        <option value="{{ k }}" {{ 'selected' if f.basis == k }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <div class="fb-f">
       <label>From date</label>
       <input type="date" name="date_from" value="{{ f.f_from }}">
@@ -88,7 +98,7 @@
 
   <div class="fb-acts">
     <span class="m">
-      {% if basis %}Dates filter on <strong>{{ basis }}</strong>. {% endif %}
+      {% if basis and not show_basis %}Dates filter on <strong>{{ basis }}</strong>. {% endif %}
       Showing: <strong>{{ f.summary }}</strong>
     </span>
     <span class="fb-sp"></span>

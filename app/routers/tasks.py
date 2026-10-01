@@ -59,15 +59,37 @@ def _visible_tasks_query(user: User):
 # week" means the date it was CLOSED; asking "what is open in this period"
 # means the date it was PLANNED for. Filtering both on the same column is the
 # usual way these reports end up quietly wrong.
-DATE_BASIS = {
-    "done": ("finished_at", "Completion date"),
-    "audit_pending": ("submitted_at", "Submission date"),
-    "audit_done": ("audited_at", "Audit date"),
-    "false_mark": ("false_marked_at", "Flagged on"),
-    "pending": ("due_at", "Planned date"),
-    "overdue": ("due_at", "Planned date"),
-    "upcoming": ("due_at", "Planned date"),
-    "all": ("due_at", "Planned date"),
+# Which date the From/To boxes filter on. The person CHOOSES, because the
+# question "show me October's work" has three honest answers — what was
+# planned for October, what was finished in October, and what was handed out
+# in October — and the software guessing from the tab it was opened on is
+# how somebody ends up reading a list that quietly answers a different
+# question from the one they asked.
+BASIS_CHOICES = [
+    ("due_at", "Planned date"),
+    ("finished_at", "Completion date"),
+    ("created_at", "Assigned date"),
+]
+BASIS_LABELS = dict(BASIS_CHOICES)
+DEFAULT_BASIS = "due_at"
+
+# What each tab FILTERS on when nobody has chosen. Planned date everywhere,
+# because that is the date the work was promised for, and a window that
+# silently changes meaning from tab to tab cannot be reconciled with
+# anything.
+DATE_BASIS = {k: ("due_at", "Planned date") for k in
+              ("done", "audit_pending", "audit_done", "false_mark",
+               "pending", "overdue", "upcoming", "all")}
+
+# What each tab SORTS on, which is a different question. On False marking
+# the useful order is most-recently-flagged first, whatever date the window
+# was drawn on. Filtering and ordering were one setting before, so choosing
+# a date range quietly re-ordered the page as well.
+SORT_BASIS = {
+    "done": "finished_at",
+    "audit_pending": "submitted_at",
+    "audit_done": "audited_at",
+    "false_mark": "false_marked_at",
 }
 
 
@@ -226,7 +248,7 @@ def _parse_day(raw: str):
 def task_list(request: Request, status: str = "pending", scope: str = "mine",
               date_from: str = "", date_to: str = "", source: str = "",
               doer: str = "", branch: str = "", dept: str = "",
-              q: str = "", ref: str = "", export: str = "",
+              q: str = "", ref: str = "", basis: str = "", export: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     # Read the search text first: `q` is reused below as the query being
     # built, and reading it afterwards would find a SELECT statement rather
@@ -315,7 +337,9 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     elif status == "done":
         q = q.where(Task.status.in_(FINISHED_STATES))
 
-    col_name, basis_label = DATE_BASIS.get(status, ("due_at", "Planned date"))
+    col_name = basis if basis in BASIS_LABELS else DATE_BASIS.get(
+        status, (DEFAULT_BASIS, ""))[0]
+    basis_label = BASIS_LABELS[col_name]
     col = _basis_col(col_name)
     start, end = _parse_day(date_from), _parse_day(date_to)
     if start and end and start > end:
@@ -358,11 +382,13 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         if SOURCE_TABS[source].get("help"):
             q = q.where(Task.id.in_(_help_desk_ids()))
 
-    if col_name in ("finished_at", "audited_at", "false_marked_at"):
-        order = (col.desc(),)                     # newest first
+    sort_on = SORT_BASIS.get(status)
+    if sort_on:
+        order = (_basis_col(sort_on).desc(),)     # newest first
         sort_label = {"finished_at": "Most recently completed first",
+                      "submitted_at": "Most recently submitted first",
                       "audited_at": "Most recently audited first",
-                      "false_marked_at": "Most recently flagged first"}[col_name]
+                      "false_marked_at": "Most recently flagged first"}[sort_on]
     else:
         order = (PRIORITY_RANK, Task.due_at.asc())
         sort_label = "High priority first, then by deadline"
@@ -407,7 +433,8 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         "doer_id": doer_id, "branch_id": branch_id, "dept_id": dept_id,
         "date_from": start.isoformat() if start else "",
         "date_to": end.isoformat() if end else "",
-        "basis_label": basis_label,
+        "basis_label": basis_label, "basis": col_name,
+        "basis_choices": BASIS_CHOICES,
         "filtered": bool(start or end),
     })
 

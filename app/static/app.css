@@ -802,3 +802,8 @@ table tr:hover td.stickycol{background:var(--card)}
 
 /* A planned date this person may see but not move. */
 .locked{cursor:help;border-bottom:1px dotted var(--line)}
+
+/* Status and audit share a column: two chips about where the task stands. */
+.statecell{white-space:normal}
+.statecell .chip{display:block;width:fit-content;margin-bottom:3px}
+.statecell .chip:last-child{margin-bottom:0}

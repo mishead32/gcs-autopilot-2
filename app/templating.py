@@ -105,6 +105,10 @@ templates.env.globals["AUDIT_RIGHT"] = _Right.AUDIT_TASK
 templates.env.globals["MOVE_DUE_RIGHT"] = _Right.CHANGE_DUE_DATE
 templates.env.globals["EDIT_RIGHT"] = _Right.EDIT_TASK
 
+# The three dates a window can mean, so the filter bar can offer them.
+from .routers.reports import BASIS_CHOICES as _BASIS      # noqa: E402
+templates.env.globals["BASIS_CHOICES"] = _BASIS
+
 # "Back" means back to the filtered list they were actually on, not to an
 # unfiltered one. See app/lastview.py.
 from . import lastview as _lastview
