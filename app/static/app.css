@@ -55,7 +55,19 @@ a:hover{text-decoration:underline}
 main{max-width:1180px;margin:22px auto;padding:0 18px}
 body.app main{margin-left:var(--side);margin-right:0;max-width:none;
   padding:74px 26px 40px;transition:margin-left .18s ease}
-body.app main>*{max-width:1180px}
+/* How wide the page is allowed to get.
+ *
+ * This was 1180px, which on a 1920px screen left nearly 500px of empty desk
+ * to the right of a task table that was being squeezed and cut off at the
+ * same time. A reading width is the right idea for prose and the wrong one
+ * for a table of work, so the ceiling is now high enough to show the table
+ * whole, and the few places that are really prose cap their own line length
+ * instead (see .readable below). */
+body.app main>*{max-width:1700px}
+
+/* Sentences, as opposed to data. Long lines of text are genuinely harder to
+ * read, so these keep a comfortable measure however wide the window is. */
+.readable, main>p.sub, .statusnote{max-width:88ch}
 
 /* --- collapsed: icons only (desktop) --- */
 body.collapsed #sidebar{width:var(--side-mini)}
