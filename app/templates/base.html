@@ -19,6 +19,14 @@
     {# 1 · Dashboard — and the two things every single person uses daily #}
     <a class="{{ 'active' if p == '/' }}" href="/" title="Dashboard">
       <span class="ic">▤</span><span class="lb">Dashboard</span></a>
+    {# The group's position in counts, for whoever is running it. Second in
+       the menu rather than buried under Reports: it is the page somebody
+       opens first thing in the morning, and a report is where you go after
+       it has told you where to look. #}
+    {% if user.can_manage %}
+    <a class="{{ 'active' if p == '/cmd' }}" href="/cmd" title="CMD board">
+      <span class="ic">◍</span><span class="lb">CMD board</span></a>
+    {% endif %}
     {# The admin account hands work out and is never given any, so its own
        task list is permanently empty. It goes straight to the work it
        delegated instead. #}

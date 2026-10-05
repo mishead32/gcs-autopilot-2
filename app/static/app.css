@@ -835,3 +835,61 @@ table tr:hover td.stickycol{background:var(--card)}
   margin-top:12px;background:var(--bg)}
 .aibox .who{font-size:11px;text-transform:uppercase;letter-spacing:.5px;
   color:var(--muted);font-weight:700;margin-bottom:6px}
+
+/* ------------------------------------------------------- CMD board ----- */
+/* A matrix rather than a wall of cards: one row per kind of work, one
+   column per question, so the two rows can be compared by running an eye
+   down a column. Cards in a grid cannot be compared that way — which is
+   what made the old dashboard a page people scanned instead of read. */
+.mhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  margin:26px 0 10px}
+.mhead h2{margin:0;font-size:17px}
+.mhead .m{font-size:12px;max-width:72ch}
+.live{font-size:11px;font-weight:600;color:var(--ok);text-transform:uppercase;
+  letter-spacing:.5px;white-space:nowrap}
+
+.matrix{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  overflow:hidden}
+.mrow{display:grid;grid-template-columns:150px repeat(auto-fit,minmax(110px,1fr));
+  border-top:1px solid var(--line)}
+.mrow:first-child{border-top:0}
+.mrow.mhdr{background:var(--chip)}
+.mrow.mhdr .mcell{padding:8px 14px}
+.mrow.mhdr .l{font-size:10.5px}
+.mname{padding:14px;font-weight:700;display:flex;flex-direction:column;
+  justify-content:center;border-right:1px solid var(--line);background:#fbfcfe}
+.mname .s{font-weight:400;color:var(--muted);font-size:11px}
+.mcell{padding:13px 14px}
+.mcell a{color:inherit;display:block}
+.mcell a:hover{text-decoration:none}
+.mcell a:hover .n{text-decoration:underline}
+.mcell .n{font-size:25px;font-weight:700;line-height:1.1}
+.mcell .n.small{font-size:19px}
+.mcell .l{color:var(--muted);font-size:11px;text-transform:uppercase;
+  letter-spacing:.4px}
+.mcell .s{color:var(--muted);font-size:11px;margin-top:3px}
+.mcell.bad .n{color:var(--bad)}
+.mcell.warn .n{color:var(--warn)}
+.mcell.ok .n{color:var(--ok)}
+.mcell .n.good{color:var(--ok)} .mcell .n.poor{color:var(--bad)}
+
+.mbar{height:5px;border-radius:3px;background:var(--chip);margin:6px 0 0;
+  overflow:hidden}
+.mbar i{display:block;height:100%;background:var(--brand-2)}
+.mbar i.ok{background:var(--ok)}
+
+table.cmdtable th{text-align:center;font-size:11px}
+table.cmdtable th[rowspan]{text-align:left}
+table.cmdtable tr.sub2 th{font-size:10px;color:var(--muted);font-weight:600;
+  padding-top:0}
+table.cmdtable td{text-align:center}
+table.cmdtable td:first-child{text-align:left}
+table.cmdtable td.hot{color:var(--bad);font-weight:700}
+table.cmdtable td.warm{color:var(--warn);font-weight:600}
+
+@media (max-width:900px){
+  .mrow{grid-template-columns:repeat(2,1fr)}
+  .mname{grid-column:1/-1;border-right:0;border-bottom:1px solid var(--line)}
+  .mrow.mhdr{display:none}
+  .mcell .l{font-size:10px}
+}

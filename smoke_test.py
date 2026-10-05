@@ -6247,5 +6247,183 @@ check("and prints that doer's own benchmark, not the default",
       [x for x in ("Benchmark 20%", "Benchmark 15%", "Benchmark 60%") if x in _perf])
 
 
+# ==========================================================================
+print("\n== the CMD board ==")
+# Counts, not score weight, and every figure checked against the rows it
+# came from — a board nobody can reconcile is a board nobody believes.
+from datetime import datetime as _dtB, timedelta as _tdB
+from app.db import SessionLocal as _slB
+from app.models import (Task as _TB, TaskSource as _SRB, TaskStatus as _STB,
+                        AuditState as _ASB, Priority as _PB, User as _UB,
+                        Followup as _FUB, PARKED_STATES as _PKB)
+from app.services import cmdboard as _cbB
+from app import clock as _clkB
+from sqlalchemy import select as _spB
+
+_todayB = _clkB.today()
+_nowB = _clkB.now()
+
+check("a doer cannot open the CMD board", doer.get("/cmd").status_code == 403)
+check("and does not get the menu item", "CMD board" not in doer.get("/").text)
+check("a manager can", mgr.get("/cmd").status_code == 200)
+_pageB = admin.get("/cmd").text
+check("the board opens on this month", "This month" in _pageB)
+check("it says it is counting tasks, not weight", "not score weight" in _pageB)
+check("all four blocks are there",
+      all(x in _pageB for x in ("Where the work stands", "Audit",
+                                "Follow-ups", "On time vs delayed")))
+check("and the company table", "Company by company" in _pageB)
+
+with _slB() as _d:
+    _bossB = _d.scalar(_spB(_UB).where(_UB.email == "mis@gcs.local"))
+    _manB = _d.scalar(_spB(_UB).where(_UB.email == "amit@gcs.local"))
+    _brB = _manB.branch_id
+    _bossidB = _bossB.id
+    _manidB = _manB.id
+
+
+def _boardB(period="this_month"):
+    with _slB() as _d:
+        _s, _e, _ = _cbB.window(period)
+        return _cbB.build(_d, 1, _s, _e, branch_id=_brB, day=_todayB)
+
+
+# What this branch already looks like, BEFORE the rows below are written.
+# Earlier parts of the suite put work on this person too, so every check
+# further down measures the difference rather than an absolute.
+_baseB = _boardB()
+
+with _slB() as _d:
+    def _mkB(src, due, st, au, sub=None):
+        return _TB(org_id=1, branch_id=_brB,
+                   title=f"SMOKE cmd {RUN} {due:%d%b%H%M%S}",
+                   assigner_id=_bossidB, doer_id=_manidB, priority=_PB.MEDIUM,
+                   source=src, due_at=due, status=st, audit_state=au,
+                   requires_audit=au != _ASB.NOT_REQUIRED, submitted_at=sub,
+                   closed_at=sub if st == _STB.COMPLETED else None)
+
+    # A known spread, inside this month, for one branch only.
+    _firstB = _nowB.replace(day=1, hour=9, minute=0, second=0, microsecond=0)
+    _rowsB = [
+        _mkB(_SRB.DELEGATION, _nowB - _tdB(days=2), _STB.IN_PROGRESS, _ASB.WAITING),
+        _mkB(_SRB.DELEGATION, _nowB - _tdB(days=3), _STB.IN_PROGRESS, _ASB.WAITING),
+        _mkB(_SRB.DELEGATION, _nowB.replace(hour=23, minute=58), _STB.IN_PROGRESS, _ASB.WAITING),
+        _mkB(_SRB.DELEGATION, _nowB + _tdB(days=4), _STB.IN_PROGRESS, _ASB.WAITING),
+        # finished early -> on time, and the auditor has cleared it
+        _mkB(_SRB.DELEGATION, _firstB + _tdB(days=1), _STB.COMPLETED, _ASB.COMPLETED,
+             _firstB + _tdB(days=1) - _tdB(hours=2)),
+        # finished late -> delayed, and still waiting on the auditor
+        _mkB(_SRB.DELEGATION, _firstB + _tdB(days=2), _STB.SUBMITTED, _ASB.PENDING,
+             _firstB + _tdB(days=2) + _tdB(hours=6)),
+    ]
+    _d.add_all(_rowsB)
+    _d.commit()
+    _idsB = [t.id for t in _rowsB]
+    _overB = _idsB[0]
+
+
+_bB = _boardB()
+_dlB = _bB.position["delegation"]
+_b0 = _baseB.position["delegation"]
+# Compared against the board BEFORE these rows were added: this branch has
+# other work from earlier in the suite, and an absolute number here would be
+# measuring that instead of the six rows just written.
+check("two overdue delegation tasks are counted",
+      _dlB.overdue - _b0.overdue == 2, (_b0.overdue, _dlB.overdue))
+check("one due today", _dlB.today - _b0.today == 1, (_b0.today, _dlB.today))
+check("one upcoming", _dlB.upcoming - _b0.upcoming == 1,
+      (_b0.upcoming, _dlB.upcoming))
+check("and 'open in all' adds up", _dlB.total - _b0.total == 4,
+      (_b0.total, _dlB.total))
+check("the three parts are the whole",
+      _dlB.total == _dlB.overdue + _dlB.today + _dlB.upcoming)
+
+_aB = _bB.audit["delegation"]
+_a0 = _baseB.audit["delegation"]
+check("one audit cleared this month", _aB.done - _a0.done == 1, _aB.done)
+check("one waiting on the auditor", _aB.pending - _a0.pending == 1, _aB.pending)
+check("the cleared percentage is done out of done-plus-pending",
+      _aB.done_pct == round(_aB.done / (_aB.done + _aB.pending) * 100, 1),
+      (_aB.done, _aB.pending, _aB.done_pct))
+
+_tB = _bB.timing["delegation"]
+_t0 = _baseB.timing["delegation"]
+check("one task was finished on time", _tB.on_time - _t0.on_time == 1, _tB.on_time)
+check("one was late", _tB.delayed - _t0.delayed == 1, _tB.delayed)
+check("on time plus delayed is everything finished",
+      _tB.finished == _tB.on_time + _tB.delayed,
+      (_tB.finished, _tB.on_time, _tB.delayed))
+check("a task waiting on audit still counts as finished",
+      _tB.finished - _t0.finished == 2, _tB.finished)
+
+# Follow-ups are one day's tick, whatever period is chosen above.
+_cB = _bB.chase["delegation"]
+_c0 = _baseB.chase["delegation"]
+check("the three new open-and-owed tasks need chasing today",
+      _cB.open_tasks - _c0.open_tasks == 3, (_c0.open_tasks, _cB.open_tasks))
+check("what needs chasing is exactly what is overdue or due today",
+      _cB.open_tasks == _dlB.overdue + _dlB.today,
+      (_cB.open_tasks, _dlB.overdue, _dlB.today))
+check("none of them chased yet", _cB.done == _c0.done, _cB.done)
+check("so they are all pending", _cB.pending == _cB.open_tasks - _cB.done)
+with _slB() as _d:
+    _d.add(_FUB(org_id=1, task_id=_overB, day=_todayB, by_id=_bossidB,
+                remark="chased"))
+    _d.commit()
+_cB2 = _boardB().chase["delegation"]
+check("chasing one moves it across",
+      (_cB2.done - _cB.done, _cB2.pending - _cB.pending) == (1, -1),
+      (_cB.done, _cB2.done, _cB.pending, _cB2.pending))
+check("and the covered percentage follows",
+      _cB2.done_pct == round(_cB2.done / _cB2.open_tasks * 100, 1),
+      (_cB2.done, _cB2.open_tasks, _cB2.done_pct))
+
+# The thing the scoring argument was about: audit lag is not the doer's
+# backlog, so it must not appear as work still owed.
+check("a task waiting on an auditor is NOT counted as overdue",
+      _boardB().position["delegation"].overdue == _dlB.overdue,
+      (_dlB.overdue, _boardB().position["delegation"].overdue))
+
+# Parked work leaves entirely.
+with _slB() as _d:
+    _d.get(_TB, _overB).status = _STB.CANCELLED
+    _d.commit()
+check("stopped work stops being counted as owed",
+      _boardB().position["delegation"].overdue == _dlB.overdue - 1,
+      (_dlB.overdue, _boardB().position["delegation"].overdue))
+
+# Every period opens, and a window means what it says.
+for _p, _ in _cbB.PERIODS:
+    _r = admin.get(f"/cmd?period={_p}")
+    check(f"the board opens on '{_p}'", _r.status_code == 200, _r.status_code)
+_s1B, _e1B, _ = _cbB.window("custom", "2026-09-01", "2026-09-30")
+check("a custom window is read as given",
+      (_s1B.date().isoformat(), _e1B.date().isoformat())
+      == ("2026-09-01", "2026-09-30"), (str(_s1B), str(_e1B)))
+_s2B, _e2B, _ = _cbB.window("custom", "2026-09-30", "2026-09-01")
+check("dates the wrong way round are swapped, not refused",
+      _s2B.date().isoformat() == "2026-09-01", str(_s2B))
+_s3B, _e3B, _ = _cbB.window("today")
+check("'today' is one day wide", _s3B.date() == _e3B.date() == _todayB)
+check("rubbish falls back to this month", _cbB.window("nonsense")[0].day == 1)
+
+# The company table and the download.
+with _slB() as _d:
+    _sB, _eB, _ = _cbB.window("this_month")
+    _byB = _cbB.by_branch(_d, 1, _sB, _eB, day=_todayB)
+check("the company table has rows", bool(_byB), len(_byB))
+check("worst overdue is first",
+      all(sum(p.overdue for p in _byB[i][1].position.values())
+          >= sum(p.overdue for p in _byB[i + 1][1].position.values())
+          for i in range(len(_byB) - 1)))
+_xB = admin.get("/cmd?export=xlsx")
+check("the board downloads as Excel", _xB.status_code == 200, _xB.status_code)
+check("and it really is a workbook", _xB.content[:2] == b"PK", _xB.content[:4])
+
+# FMS is deliberately not on this board.
+check("only delegation and checklist are on the board",
+      set(_bB.position) == {"delegation", "recurring"}, sorted(_bB.position))
+
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

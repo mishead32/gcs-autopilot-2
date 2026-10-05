@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
+{% block title %}CMD board · {{ APP_NAME }}{% endblock %}
+
+{# One macro for every number on the page: a figure, what it is, and a link
+   to the list it came from. A board of numbers nobody can open is a board
+   people stop trusting the first time one looks wrong. #}
+{% macro cell(n, label, href='', tone='', sub='') %}
+<div class="mcell {{ tone }}">
+  {% if href %}<a href="{{ href }}">{% endif %}
+  <div class="n">{{ n }}</div>
+  <div class="l">{{ label }}</div>
+  {% if sub %}<div class="s">{{ sub }}</div>{% endif %}
+  {% if href %}</a>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro bar(done, total, good='ok') %}
+{% set pct = (done / total * 100) if total else 0 %}
+<div class="mbar"><i class="{{ good }}" style="width:{{ pct|round }}%"></i></div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>CMD board</h1>
+    <p class="sub readable">The group's position in plain counts — number of
+      tasks, not score weight. Delegation and Checklist are kept apart because
+      they go wrong for different reasons.</p>
+  </div>
+  <div>{{ excel_btn('/cmd?period=' ~ period ~ '&date_from=' ~ date_from ~
+                    '&date_to=' ~ date_to ~ '&export=xlsx',
+                    title='The whole board, company by company, as Excel') }}</div>
+</div>
+
+<form method="get" action="/cmd" class="card daterange">
+  <div>
+    <label>Period</label>
+    <select name="period" onchange="this.form.submit()">
+      {% for k, lbl in periods %}
+      <option value="{{ k }}" {{ 'selected' if period == k }}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="acts">
+    <button class="btn" name="period" value="custom">Apply dates</button>
+    <a class="btn ghost" href="/cmd">This month</a>
+  </div>
+</form>
+
+{# ---------------------------------------------------------------- 1 ---- #}
+{# The live block is deliberately first and deliberately not period-filtered:
+   "what is late right now" is the one question that cannot wait for a date
+   range to be chosen. #}
+<div class="mhead">
+  <h2>Where the work stands <span class="live">● right now</span></h2>
+  <span class="m">{{ today.strftime('%A %d %b %Y') }} · a task handed in and
+    waiting on an auditor is not counted as owed</span>
+</div>
+
+<div class="matrix">
+  <div class="mrow mhdr">
+    <div class="mname"></div>
+    <div class="mcell"><div class="l">Overdue</div></div>
+    <div class="mcell"><div class="l">Due today</div></div>
+    <div class="mcell"><div class="l">Upcoming</div></div>
+    <div class="mcell"><div class="l">Open in all</div></div>
+  </div>
+  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
+                          ('recurring', 'Checklist', 'checklist')] %}
+  {% set p = board.position[key] %}
+  <div class="mrow">
+    <div class="mname">{{ name }}</div>
+    {{ cell(p.overdue, 'overdue',
+            '/tasks?scope=all&status=overdue&source=' ~ q,
+            'bad' if p.overdue else '') }}
+    {{ cell(p.today, 'due today',
+            '/tasks?scope=all&status=pending&source=' ~ q,
+            'warn' if p.today else '') }}
+    {{ cell(p.upcoming, 'upcoming',
+            '/tasks?scope=all&status=upcoming&source=' ~ q) }}
+    {{ cell(p.total, 'still open',
+            '/tasks?scope=all&status=pending&source=' ~ q) }}
+  </div>
+  {% endfor %}
+</div>
+
+<p class="sub m">Everything below is for <strong>{{ label }}</strong>,
+  counted on the planned date.</p>
+
+{# ---------------------------------------------------------------- 2 ---- #}
+<div class="mhead"><h2>Audit</h2>
+  <span class="m">Of the work in this period that needs checking, how much
+    the auditors have cleared</span></div>
+
+<div class="matrix">
+  <div class="mrow mhdr">
+    <div class="mname"></div>
+    <div class="mcell"><div class="l">Total tasks</div></div>
+    <div class="mcell"><div class="l">Needs audit</div></div>
+    <div class="mcell"><div class="l">Audit done</div></div>
+    <div class="mcell"><div class="l">Audit pending</div></div>
+    <div class="mcell"><div class="l">Cleared</div></div>
+  </div>
+  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
+                          ('recurring', 'Checklist', 'checklist')] %}
+  {% set a = board.audit[key] %}
+  <div class="mrow">
+    <div class="mname">{{ name }}</div>
+    {{ cell(board.total_in_period[key], 'in period',
+            '/tasks?scope=all&status=all&source=' ~ q) }}
+    {{ cell(a.total, 'need audit') }}
+    {{ cell(a.done, 'done', '/tasks?scope=all&status=audit_done&source=' ~ q, 'ok') }}
+    {{ cell(a.pending, 'waiting on auditor',
+            '/tasks?scope=all&status=audit_pending&source=' ~ q,
+            'bad' if a.pending else '') }}
+    <div class="mcell">
+      <div class="n small">{{ a.done_pct }}%</div>
+      {{ bar(a.done, a.done + a.pending) }}
+      <div class="s">of what is finished</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ---------------------------------------------------------------- 3 ---- #}
+<div class="mhead"><h2>Follow-ups <span class="live">● today</span></h2>
+  <span class="m">A follow-up is a tick against a task on one day — chasing
+    it yesterday does not cover it today — so this is {{ today.strftime('%d %b') }}
+    only, whatever period is chosen above</span></div>
+
+<div class="matrix">
+  <div class="mrow mhdr">
+    <div class="mname"></div>
+    <div class="mcell"><div class="l">Needs chasing</div></div>
+    <div class="mcell"><div class="l">Followed up</div></div>
+    <div class="mcell"><div class="l">Not yet chased</div></div>
+    <div class="mcell"><div class="l">Covered</div></div>
+  </div>
+  {% for key, name, desk in [('delegation', 'Delegation', 'ea'),
+                             ('recurring', 'Checklist', 'pc')] %}
+  {% set c = board.chase[key] %}
+  <div class="mrow">
+    <div class="mname">{{ name }}
+      <div class="s">{{ 'EA desk' if desk == 'ea' else 'PC desk' }}</div></div>
+    {{ cell(c.open_tasks, 'open and owed', '/followups?desk=' ~ desk) }}
+    {{ cell(c.done, 'chased today', '/followups?desk=' ~ desk ~ '&show=done', 'ok') }}
+    {{ cell(c.pending, 'still to chase',
+            '/followups?desk=' ~ desk ~ '&show=pending',
+            'bad' if c.pending else '') }}
+    <div class="mcell">
+      <div class="n small">{{ c.done_pct }}%</div>
+      {{ bar(c.done, c.open_tasks) }}
+      <div class="s">of what is owed today</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ---------------------------------------------------------------- 4 ---- #}
+<div class="mhead"><h2>On time vs delayed</h2>
+  <span class="m">Of the work finished in this period, measured on the day
+    the employee handed it in</span></div>
+
+<div class="matrix">
+  <div class="mrow mhdr">
+    <div class="mname"></div>
+    <div class="mcell"><div class="l">Finished</div></div>
+    <div class="mcell"><div class="l">On time</div></div>
+    <div class="mcell"><div class="l">Delayed</div></div>
+    <div class="mcell"><div class="l">On-time rate</div></div>
+  </div>
+  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
+                          ('recurring', 'Checklist', 'checklist')] %}
+  {% set t = board.timing[key] %}
+  <div class="mrow">
+    <div class="mname">{{ name }}</div>
+    {{ cell(t.finished, 'marked done',
+            '/tasks?scope=all&status=completed&source=' ~ q) }}
+    {{ cell(t.on_time, 'on time', '', 'ok' if t.on_time else '') }}
+    {{ cell(t.delayed, 'late', '', 'bad' if t.delayed else '') }}
+    <div class="mcell">
+      <div class="n small {{ 'good' if t.on_time_pct >= 85 else 'poor' if t.on_time_pct < 60 else '' }}">{{ t.on_time_pct }}%</div>
+      {{ bar(t.on_time, t.finished) }}
+      <div class="s">{{ t.on_time }} of {{ t.finished }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# -------------------------------------------------------- by company ---- #}
+<div class="mhead"><h2>Company by company</h2>
+  <span class="m">Worst overdue first — the row at the top is the telephone
+    call to make</span></div>
+
+{% if branches %}
+<div class="table-wrap">
+<table class="cmdtable">
+  <tr>
+    <th rowspan="2">Company</th>
+    <th colspan="2">Overdue now</th>
+    <th colspan="2">Due today</th>
+    <th colspan="2">Audit pending</th>
+    <th colspan="2">Not chased today</th>
+    <th colspan="2">Delayed in period</th>
+  </tr>
+  <tr class="sub2">
+    <th>DEL</th><th>CL</th><th>DEL</th><th>CL</th><th>DEL</th><th>CL</th>
+    <th>DEL</th><th>CL</th><th>DEL</th><th>CL</th>
+  </tr>
+  {% for branch, b in branches %}
+  <tr>
+    <td><strong>{{ branch.name if branch else '—' }}</strong></td>
+    <td class="{{ 'hot' if b.position['delegation'].overdue }}">{{ b.position['delegation'].overdue }}</td>
+    <td class="{{ 'hot' if b.position['recurring'].overdue }}">{{ b.position['recurring'].overdue }}</td>
+    <td>{{ b.position['delegation'].today }}</td>
+    <td>{{ b.position['recurring'].today }}</td>
+    <td class="{{ 'warm' if b.audit['delegation'].pending }}">{{ b.audit['delegation'].pending }}</td>
+    <td class="{{ 'warm' if b.audit['recurring'].pending }}">{{ b.audit['recurring'].pending }}</td>
+    <td class="{{ 'warm' if b.chase['delegation'].pending }}">{{ b.chase['delegation'].pending }}</td>
+    <td class="{{ 'warm' if b.chase['recurring'].pending }}">{{ b.chase['recurring'].pending }}</td>
+    <td class="{{ 'hot' if b.timing['delegation'].delayed }}">{{ b.timing['delegation'].delayed }}</td>
+    <td class="{{ 'hot' if b.timing['recurring'].delayed }}">{{ b.timing['recurring'].delayed }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<div class="empty">No company has any delegation or checklist work yet.</div>
+{% endif %}
+{% endblock %}
