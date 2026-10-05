@@ -811,7 +811,16 @@ class Task(Base):
 
     @property
     def is_overdue(self) -> bool:
+        """Past its date and still owed BY THE DOER.
+
+        A task the doer has handed in is not overdue, even while it waits on
+        an auditor. It was marked red on every list for as long as the audit
+        queue was behind, which told the doer they were late for work they
+        had already finished.
+        """
         if self.status in (TaskStatus.COMPLETED,) + PARKED_STATES:
+            return False
+        if self.submitted_at is not None:
             return False
         return clock.now() > self.due_at
 

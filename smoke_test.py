@@ -5489,6 +5489,10 @@ class _FakeTask:
         _FakeTask._n += 1
         self.id = _FakeTask._n
         self.due_at, self.closed_at = due, closed
+        # The doer's own date. For a task with no audit these are the same
+        # moment; the score reads this one, so that waiting in the audit
+        # queue never costs the person who did the work.
+        self.submitted_at = closed
         self.status = _STF.COMPLETED if closed else _STF.IN_PROGRESS
         self.source, self.priority = _SRF.DELEGATION, _PRF.LOW
         self.false_marked, self.audit_score = False, None
@@ -6122,6 +6126,125 @@ check("a doer cannot delete a flow",
       in (403, 404))
 check("nor edit its steps",
       doer.post(f"/flows/{_flidK}/edit", data=_dropK).status_code in (403, 404))
+
+
+# ==========================================================================
+print("\n== the audit queue never costs the doer a point ==")
+# The real complaint, from a real week: Kiran finished 17 checklist jobs on
+# the Saturday, every one on time, and scored -2.8 because the auditor had
+# not reached them yet. The doer's job is to do the work and hand it in.
+from datetime import datetime as _dtQ, timedelta as _tdQ
+from app.db import SessionLocal as _slQ
+from app.models import Task as _TQ, User as _UQ, TaskStatus as _STQ
+from app.services import scoring as _scQ
+from sqlalchemy import select as _spQ
+
+_startQ = _dtQ(2026, 11, 23)                      # a Monday
+_endQ = _dtQ(2026, 11, 28, 23, 59, 59)            # that Saturday
+_dueQ = "2026-11-25T18:00"
+
+def _newtaskQ(title, due=_dueQ, audit="1"):
+    r = mgr.post("/tasks/new", data={
+        "title": title, "details": "", "doer_id": "6", "branch_id": "",
+        "priority": "high", "due_at": due, "requires_audit": audit})
+    return int(_re.findall(r"/tasks/(\d+)/comment", r.text)[0])
+
+def _cardQ():
+    with _slQ() as _d:
+        _u = _d.scalar(_spQ(_UQ).where(_UQ.email == "amit@gcs.local"))
+        return _scQ.user_scorecard(_d, _u, start=_startQ, end=_endQ)
+
+_beforeQ = _cardQ()
+_qid = _newtaskQ(f"SMOKE audit-wait {RUN}")
+with _slQ() as _d:                       # hand it in inside the window, on time
+    _t = _d.get(_TQ, _qid)
+    _t.submitted_at = _dtQ(2026, 11, 25, 10, 0)
+    _t.status = _STQ.SUBMITTED
+    _d.commit()
+_afterQ = _cardQ()
+check("the handed-in task is on the hook for the week",
+      _afterQ.planned == _beforeQ.planned + 5,
+      (_beforeQ.planned, _afterQ.planned))
+check("and it counts as DONE while it waits for the auditor",
+      _afterQ.completed == _beforeQ.completed + 5,
+      (_beforeQ.completed, _afterQ.completed))
+check("so the not-done penalty does not move",
+      _afterQ.sources["delegation"].not_done == _beforeQ.sources["delegation"].not_done,
+      (_beforeQ.sources["delegation"].not_done,
+       _afterQ.sources["delegation"].not_done))
+with _slQ() as _d:
+    check("a task waiting on audit is never overdue",
+          not _d.get(_TQ, _qid).is_overdue)
+    check("nor counted as still open on the scorecard",
+          _afterQ.still_open == _beforeQ.still_open,
+          (_beforeQ.still_open, _afterQ.still_open))
+
+# Approving it changes nothing — the credit was already there.
+_appr = auditor.post(f"/tasks/{_qid}/audit",
+                     data={"decision": "approve", "score": "8", "remark": "fine"})
+_approvedQ = _cardQ()
+check("approving it later does not move the score",
+      _approvedQ.completed == _afterQ.completed
+      and _approvedQ.sources["delegation"].subtotal
+          == _afterQ.sources["delegation"].subtotal,
+      (_afterQ.completed, _approvedQ.completed))
+
+# Sending it back DOES take the credit away — that is the whole safeguard.
+_qid2 = _newtaskQ(f"SMOKE audit-reject {RUN}")
+with _slQ() as _d:
+    _t = _d.get(_TQ, _qid2)
+    _t.submitted_at = _dtQ(2026, 11, 25, 10, 0)
+    _t.status = _STQ.SUBMITTED
+    _d.commit()
+_heldQ = _cardQ()
+check("a second handed-in task also counts",
+      _heldQ.completed == _approvedQ.completed + 5,
+      (_approvedQ.completed, _heldQ.completed))
+auditor.post(f"/tasks/{_qid2}/audit",
+             data={"decision": "reject", "score": "0", "remark": "proof is wrong"})
+_rejQ = _cardQ()
+check("but the credit goes the moment the auditor sends it back",
+      _rejQ.completed == _approvedQ.completed,
+      (_heldQ.completed, _rejQ.completed))
+check("and it is owed again", _rejQ.not_done > _heldQ.not_done,
+      (_heldQ.not_done, _rejQ.not_done))
+with _slQ() as _d:
+    check("a task sent back is overdue again once its date passes",
+          _d.get(_TQ, _qid2).submitted_at is None)
+
+# False marking does the same, and still carries its own -10.
+_qid3 = _newtaskQ(f"SMOKE false-marked {RUN}")
+with _slQ() as _d:
+    _t = _d.get(_TQ, _qid3)
+    _t.submitted_at = _dtQ(2026, 11, 25, 10, 0)
+    _t.status = _STQ.SUBMITTED
+    _d.commit()
+_fmBefore = _cardQ()
+auditor.post(f"/tasks/{_qid3}/false-mark",
+             data={"confirm": "yes", "reason": "nothing was done"})
+_fmAfter = _cardQ()
+check("a false mark takes the credit back too",
+      _fmAfter.completed == _fmBefore.completed - 5,
+      (_fmBefore.completed, _fmAfter.completed))
+check("and still costs its own 10 points",
+      _fmAfter.false_penalty <= _fmBefore.false_penalty - 10,
+      (_fmBefore.false_penalty, _fmAfter.false_penalty))
+
+# The benchmark printed on the Performance make-up cards must be the one the
+# penalty was worked out from — it was printing the 60/20/20 defaults under
+# numbers derived from the person's real benchmarks.
+with _slQ() as _d:
+    _kb = _d.scalar(_spQ(_UQ).where(_UQ.email == "amit@gcs.local"))
+    _kb.bm_delegation, _kb.bm_checklist, _kb.bm_fms = 20, 15, 20
+    _d.commit()
+    _kbid = _kb.id
+_perf = admin.get(f"/stats?doer={_kbid}"
+                  f"&date_from=2026-11-23&date_to=2026-11-28").text
+check("the Performance page opens for one doer", "Score make-up" in _perf)
+check("and prints that doer's own benchmark, not the default",
+      "Benchmark 20%" in _perf and "Benchmark 15%" in _perf
+      and "Benchmark 60%" not in _perf,
+      [x for x in ("Benchmark 20%", "Benchmark 15%", "Benchmark 60%") if x in _perf])
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

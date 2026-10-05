@@ -1,11 +1,17 @@
 """Scoring engine.
 
+Everything here is measured against what the DOER did, not what an auditor
+did afterwards. A task counts as done the moment the person hands it in; if
+an auditor later sends it back — rejected, reopened or flagged as false
+marking — the credit disappears with it. Waiting in the audit queue is not
+the doer's backlog and never costs them a point.
+
 Two date bases, deliberately kept separate:
 
   planned  — tasks whose DUE date falls in the window. "What was supposed to
              happen this week." This is the denominator for everything.
-  closed   — tasks whose COMPLETION date falls in the window. "What actually
-             got closed." Shown alongside so clearing old backlog still counts.
+  closed   — tasks the doer FINISHED inside the window. "What actually got
+             done." Shown alongside so clearing old backlog still counts.
 
 Penalties are computed SEPARATELY for each work source, so a doer can see
 which kind of work is dragging them down:
@@ -323,8 +329,29 @@ def _w(tasks) -> int:
     return sum(t.weight for t in tasks)
 
 
+def handed_in(t: Task) -> datetime | None:
+    """When the DOER finished with this task — or None if they have not.
+
+    This is the date everything in the score is measured against, and it is
+    deliberately the doer's date, not the auditor's.
+
+    A task that needs an audit used to count as done only once the auditor
+    approved it, because that is when closed_at is set. The effect was that
+    an employee who did every job on time scored badly whenever the auditor
+    was a few days behind — a penalty for somebody else's backlog, on work
+    that was already finished and sitting in the queue. The doer's job is to
+    do the work and hand it in; that is what is measured here.
+
+    submitted_at is exactly the right signal, because every route that sends
+    work back clears it: a rejection, a reopen and a false marking all set it
+    to None, so the credit disappears the moment anybody says the work was
+    not really done. An approval leaves it alone.
+    """
+    return t.submitted_at
+
+
 def window_tasks(tasks, start: datetime, end: datetime):
-    """Which tasks count towards a period's score, and which of them closed in it.
+    """Which tasks count towards a period's score, and which were finished in it.
 
     One place, used by every scorecard, because "what was this person on the
     hook for between these two dates" has to mean the same thing on the
@@ -339,12 +366,13 @@ def window_tasks(tasks, start: datetime, end: datetime):
         of doing nothing: the old tasks were not due that week, so they
         counted nowhere, and the person scored zero for the only work they
         actually did;
-      · it was CLOSED inside the period, whenever it happened to be due —
+      · it was FINISHED inside the period, whenever it happened to be due —
         so finishing next week's job early still counts this week.
 
-    It is DONE for the period only if it was closed inside it. A task due in
-    the period and finished a month later is not done for the period, which
-    is the whole point of measuring a week.
+    It is DONE for the period only if the doer finished it inside it. A task
+    due in the period and handed in a month later is not done for the period,
+    which is the whole point of measuring a week. Whether an auditor has got
+    round to it does not come into it — see handed_in above.
 
     Cancelled and on-hold work leaves entirely: a declined help request or a
     job that stopped mattering is not a job somebody failed to do.
@@ -353,12 +381,13 @@ def window_tasks(tasks, start: datetime, end: datetime):
     for t in tasks:
         if t.status in PARKED_STATES:
             continue
-        shut_in = t.closed_at is not None and start <= t.closed_at <= end
+        done_at = handed_in(t)
+        shut_in = done_at is not None and start <= done_at <= end
         due_in = start <= t.due_at <= end
-        # Open when the period began: either never closed, or closed after
-        # the period started. Work finished BEFORE the period belongs to the
-        # period it was finished in, not to this one.
-        carried = t.due_at < start and (t.closed_at is None or t.closed_at >= start)
+        # Open when the period began: either never finished, or finished
+        # after the period started. Work finished BEFORE the period belongs
+        # to the period it was finished in, not to this one.
+        carried = t.due_at < start and (done_at is None or done_at >= start)
         if shut_in:
             closed.append(t)
         if due_in or carried or shut_in:
@@ -383,7 +412,8 @@ def _build(planned: list[Task], closed_in_window: list[Task],
     c.not_done = c.planned - c.completed
     c.on_time = _w([t for t in done if t.was_on_time])
     c.late = c.completed - c.on_time
-    c.still_open = sum(1 for t in planned if t.status not in
+    c.still_open = sum(1 for t in planned if handed_in(t) is None
+                       and t.status not in
                        (TaskStatus.COMPLETED,) + PARKED_STATES)
     c.overdue_now = sum(1 for t in planned if t.is_overdue)
     c.false_marks = sum(1 for t in set(planned) | set(closed_in_window) if t.false_marked)
@@ -421,6 +451,19 @@ def _aggregate(planned: list[Task], closed: list[Task],
 
     n = len(members)
     c.total_override = sum(m.total_penalty for m in members) / n
+    # The benchmarks on an aggregate card are the members' own, averaged —
+    # not the defaults _build started with. Filtered to one person that is
+    # exactly their benchmark, and the card was printing "Benchmark 60%"
+    # under a penalty worked out from their real 20%, which makes the
+    # arithmetic on screen impossible to follow.
+    for src in SOURCE_ORDER:
+        k = src.value
+        have = [m.benchmarks.get(k) for m in members if m.benchmarks.get(k) is not None]
+        if have:
+            avg = round(sum(have) / len(have))
+            c.benchmarks[k] = avg
+            if k in c.sources:
+                c.sources[k].benchmark = avg
     for src in SOURCE_ORDER:
         k = src.value
         if k in c.sources:
