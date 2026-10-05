@@ -269,16 +269,52 @@ def my_score_api(days: int = 30, period: str = "", date_from: str = "",
 
 
 # ------------------------------------------------------- recurring rules ---
+def _duplicate_rules(db: Session, org_id: int) -> list[list[RecurringRule]]:
+    """Groups of switched-on rules that are the same job twice.
+
+    Matched on the title and the person, ignoring case and spacing, because
+    that is what a second import produces and what a doer sees twice in a
+    day. Only switched-on rules: one of a pair that has already been turned
+    off is the problem already solved, and a page that keeps shouting about
+    it gets ignored.
+    """
+    groups: dict[tuple, list[RecurringRule]] = {}
+    for r in db.scalars(select(RecurringRule).where(
+            RecurringRule.org_id == org_id,
+            RecurringRule.active.is_(True)).order_by(RecurringRule.id)).all():
+        key = (" ".join((r.title or "").lower().split()), r.doer_id)
+        groups.setdefault(key, []).append(r)
+    return [g for g in groups.values() if len(g) > 1]
+
+
 @router.get("/recurring", response_class=HTMLResponse)
 def recurring_list(request: Request, export: str = "", q: str = "",
+                   doer: str = "", branch: str = "", state: str = "",
                    user: User = Depends(manager_up), db: Session = Depends(get_db)):
     text_q = search.clean(q)
+    doer_id = int(doer) if doer.strip().isdigit() else None
+    branch_id = int(branch) if branch.strip().isdigit() else None
+
+    q_sel = select(RecurringRule).where(RecurringRule.org_id == user.org_id)
+    if doer_id:
+        q_sel = q_sel.where(RecurringRule.doer_id == doer_id)
+    if branch_id:
+        q_sel = q_sel.where(RecurringRule.branch_id == branch_id)
+    if state == "on":
+        q_sel = q_sel.where(RecurringRule.active.is_(True))
+    elif state == "off":
+        q_sel = q_sel.where(RecurringRule.active.is_(False))
     rules = db.scalars(
-        search.apply(
-            select(RecurringRule).where(RecurringRule.org_id == user.org_id),
-            [RecurringRule.title, RecurringRule.details], text_q)
+        search.apply(q_sel, [RecurringRule.title, RecurringRule.details], text_q)
         .order_by(RecurringRule.title)
     ).all()
+
+    # Rules that look like the same job entered twice — same title, same
+    # person. A bulk import run twice is the usual cause, and the result is
+    # two tasks a day that are genuinely two tasks as far as the software is
+    # concerned, so nothing else can catch it. Counted across the whole
+    # company, not just the filtered page, or filtering would hide it.
+    dupes = _duplicate_rules(db, user.org_id)
     doers = db.scalars(
         select(User).where(User.org_id == user.org_id, User.active.is_(True)).order_by(User.name)
     ).all()
@@ -299,7 +335,9 @@ def recurring_list(request: Request, export: str = "", q: str = "",
         ], rules, "The rules that create checklist tasks each day.")
 
     return templates.TemplateResponse(request, "recurring.html", {
-        "q": text_q,
+        "q": text_q, "doer_id": doer_id, "branch_id": branch_id,
+        "state": state if state in ("on", "off") else "",
+        "dupes": dupes,
         "user": user, "rules": rules, "doers": doers, "branches": branches,
         "frequencies": FREQ_ORDER, "FREQ_LABELS": FREQ_LABELS,
         "today_iso": clock.today().isoformat(),

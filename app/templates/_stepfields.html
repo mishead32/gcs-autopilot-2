@@ -1,0 +1,169 @@
+{# One step card, used three times: building a new flow, editing an existing
+   one, and as the blank template the "+ Add step" button clones. Written once
+   because a field that exists when a flow is created and not when it is
+   edited is a field somebody can never change again. #}
+{% macro step_card(doers, priorities, span_units, step=None, locked=false) %}
+<div class="card stepcard" style="background:var(--card)">
+  <div class="step-no">Step <b class="num">{{ step.position if step else 1 }}</b>
+    {% if step and step.used_count %}
+    <span class="m" style="font-weight:400">· used by {{ step.used_count }} task(s)</span>
+    {% endif %}
+  </div>
+  <input type="hidden" name="step_id" value="{{ step.id if step else '' }}">
+  <div class="row">
+    <div style="flex:2"><label>Step title</label>
+      <input name="step_title" value="{{ step.title if step else '' }}"
+             placeholder="e.g. Verify the bill as per checklist"></div>
+    <div><label>Who does it</label>
+      <select name="step_doer"><option value="">Pick at run time</option>
+        {% for d in doers %}<option value="{{ d.id }}"
+          {{ 'selected' if step and step.default_doer_id == d.id }}>{{ d.name }}</option>{% endfor %}
+      </select></div>
+    <div style="max-width:150px"><label>TAT — measured in</label>
+      <select name="step_tat_unit" class="tatunit">
+        {% for k, lbl in span_units.items() %}
+        <option value="{{ k }}"
+          {{ 'selected' if (step and step.tat_unit == k) or (not step and k == 'hours') }}>{{ k|title }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="max-width:120px"><label>How many</label>
+      <select name="step_tat" class="tatval"
+              data-value="{{ step.tat_value if step else 24 }}"></select></div>
+    <div><label>Priority</label>
+      <select name="step_priority">
+        {% for p in priorities %}<option value="{{ p.value }}"
+          {{ 'selected' if (step and step.priority == p) or (not step and p.value == 'medium') }}
+          >{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
+      </select></div>
+  </div>
+  <label>Instructions</label><textarea name="step_instructions"
+    style="min-height:52px">{{ step.instructions or '' if step else '' }}</textarea>
+
+  <div class="row">
+    <div><label>Fields the doer must capture (comma separated)</label>
+      <input name="step_fields" value="{{ step.capture_fields or '' if step else '' }}"
+             placeholder="Receipt No, Amount"></div>
+    <div style="max-width:140px"><label>Needs audit</label>
+      <select name="step_audit">
+        <option value="0" {{ 'selected' if step and not step.requires_audit }}>No</option>
+        <option value="1" {{ 'selected' if step and step.requires_audit }}>Yes</option></select></div>
+    <div style="max-width:140px"><label>Proof required</label>
+      <select name="step_proof">
+        <option value="1" {{ 'selected' if not step or step.requires_attachment }}>Yes</option>
+        <option value="0" {{ 'selected' if step and not step.requires_attachment }}>No</option></select></div>
+  </div>
+
+  <div class="routebox">
+    <div class="row">
+      <div style="max-width:190px"><label>This step is a</label>
+        <select name="step_decision" class="decsel">
+          <option value="0" {{ 'selected' if not step or not step.is_decision }}>Normal step</option>
+          <option value="1" {{ 'selected' if step and step.is_decision }}>Decision — two outcomes</option>
+        </select></div>
+      <div class="onlydecision" {{ 'hidden' if not (step and step.is_decision) }} style="max-width:180px">
+        <label>First outcome is called</label>
+        <input name="step_yes" value="{{ step.pass_label or '' if step else '' }}" placeholder="Verified"></div>
+      <div style="max-width:210px"><label class="gotolbl">After this step, open step number</label>
+        <input type="number" name="step_next" min="0" placeholder="next in order"
+               value="{{ step.next_step_pos if step and step.next_step_pos is not none else '' }}"></div>
+      <div class="onlydecision" {{ 'hidden' if not (step and step.is_decision) }} style="max-width:180px">
+        <label>Second outcome is called</label>
+        <input name="step_no" value="{{ step.fail_label or '' if step else '' }}" placeholder="Rejected"></div>
+      <div class="onlydecision" {{ 'hidden' if not (step and step.is_decision) }} style="max-width:170px">
+        <label>…then open step number</label>
+        <input type="number" name="step_fail" min="0" placeholder="e.g. 1"
+               value="{{ step.fail_step_pos if step and step.fail_step_pos is not none else '' }}"></div>
+    </div>
+    <div class="m">Which step comes <strong>next</strong>. Blank = the one
+      below · 0 = the flow finishes here · an earlier number sends it back for
+      rework.</div>
+
+    <div class="row" style="margin-top:12px">
+      <div style="max-width:320px"><label>Start this step's clock from step number</label>
+        <input type="number" name="step_due_from" min="1"
+               value="{{ step.due_from_pos if step and step.due_from_pos else '' }}"
+               placeholder="blank — from the moment this step opens">
+        <div class="m" style="margin-top:4px">
+          Nothing to do with <em>where the flow goes</em> — only with
+          <em>when this step is due</em>. Blank means the TAT above starts
+          counting the moment this step opens. Put a step number here and it
+          counts from <em>that</em> step's planned date instead, so a late
+          step earlier in the chain does not push every deadline after it.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if locked %}
+  <div class="m" style="margin-top:10px">Used by work already handed out, so
+    this step cannot be removed — changing it affects future runs only.</div>
+  {% else %}
+  <button type="button" class="btn ghost sm" style="margin-top:10px"
+          onclick="this.closest('.stepcard').remove(); renumber()">Remove step</button>
+  {% endif %}
+</div>
+{% endmacro %}
+
+
+{# The script that wires every card: the decision boxes, the TAT value list,
+   and the step numbering. Shared for exactly the same reason as the card. #}
+{% macro step_script(span_choices) %}
+<script>
+var SPAN_CHOICES = {{ span_choices|tojson }};
+
+function renumber(){
+  document.querySelectorAll('#steps .stepcard').forEach(function(card, i){
+    card.querySelector('.num').textContent = i + 1;
+  });
+}
+
+function wire(card){
+  var sel = card.querySelector('.decsel');
+  // The decision-only boxes are HIDDEN, never disabled. A hidden field is
+  // still submitted, so every step posts exactly one value for every name
+  // and the server's parallel lists stay lined up with the step numbers.
+  // Disabling them would drop entries and silently shift every later step's
+  // routing onto the wrong step.
+  function apply(){
+    var dec = sel.value === '1';
+    card.querySelectorAll('.onlydecision').forEach(function(el){ el.hidden = !dec; });
+    card.querySelector('.gotolbl').textContent =
+      dec ? '…then open step number' : 'After this step, open step number';
+    card.querySelector('input[name="step_next"]').placeholder =
+      dec ? '0 = finish' : 'next in order';
+  }
+  sel.addEventListener('change', apply);
+  apply();
+
+  // The second TAT box offers whole numbers that suit the unit: minutes in
+  // fives, weeks one to eight, months one to twelve. Rebuilt on every change,
+  // keeping the number the step already had whenever the new unit offers it.
+  var unit = card.querySelector('.tatunit'), val = card.querySelector('.tatval');
+  function fillValues(){
+    var opts = SPAN_CHOICES[unit.value] || SPAN_CHOICES.hours;
+    var keep = val.value || val.dataset.value;
+    val.innerHTML = '';
+    opts.forEach(function(n){
+      var o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      val.appendChild(o);
+    });
+    val.value = opts.indexOf(Number(keep)) !== -1 ? keep
+              : (unit.value === 'hours' ? 24 : opts[0]);
+  }
+  unit.addEventListener('change', fillValues);
+  fillValues();
+}
+
+function addStep(){
+  var frag = document.getElementById('tpl').content.cloneNode(true);
+  var card = frag.querySelector('.stepcard');
+  document.getElementById('steps').appendChild(frag);
+  wire(card);
+  renumber();
+}
+
+document.querySelectorAll('#steps .stepcard').forEach(wire);
+renumber();
+</script>
+{% endmacro %}

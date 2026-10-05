@@ -14,6 +14,15 @@
     <td class="refcell"><a href="/tasks/{{ t.id }}" class="refid"
         title="This task's reference — quote it when you ask about it">{{ t.ref or '—' }}</a></td>
     <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
+      {# Two rows with the same title, doer and deadline are not a duplicate:
+         one is today's job and one is the closed day's, handed out early.
+         Unlabelled they read as the same task twice, which is exactly how
+         people end up doing one and ignoring the other. #}
+      {% if t.brought_forward %}
+      <span class="chip forday" title="This is {{ t.covers_label }}'s job, given
+            out early because nobody is in that day. Today's own copy of this
+            job is the other row.">for {{ t.covers_label }}</span>
+      {% endif %}
       <div class="m rowsub">{{ t.source.value }}{% if t.branch %} ·
         {{ t.branch.name }}{% endif %} · assigned
         {{ t.created_at|dt('%d %b') }}, {{ t.created_at|ago }}</div>

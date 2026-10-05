@@ -315,7 +315,113 @@ def run() -> list[str]:
         # taken before them, so it still believes ref does not
         # exist and the backfill would quietly do nothing.
         applied += _backfill_refs(conn, inspect(conn), existing_tables)
+        applied += _dedupe_checklist_tasks(conn, existing_tables)
+
+    applied += _lock_checklist_days(existing_tables)
     return applied
+
+
+# Everything that points at a task and would otherwise hold a deleted row in
+# place. Listed rather than relied on through the ORM because this runs as
+# plain SQL on a connection, before any session exists.
+TASK_CHILDREN = [
+    ("task_comments", "task_id", "DELETE"),
+    ("attachments", "task_id", "DELETE"),
+    ("followups", "task_id", "DELETE"),
+    ("ai_audits", "task_id", "DELETE"),
+    ("outbound_messages", "task_id", "NULL"),
+    ("help_tickets", "task_id", "NULL"),
+]
+
+
+def _dedupe_checklist_tasks(conn, existing_tables: set) -> list[str]:
+    """Remove the second copy of a checklist job, then stop it happening again.
+
+    The spawner has always checked before inserting, but three things can run
+    it at once — the midnight loop, the cron ping, and the Run spawner now
+    button — and all three can look, see nothing, and insert. The doer is
+    then shown the same job twice on the same day with no way to tell the
+    copies apart, which is how a checklist stops being believed.
+
+    Only an untouched copy is removed: nothing started, nothing submitted,
+    no note, no proof, no audit. If every copy has been worked on, they are
+    all left exactly where they are and the unique index is not created —
+    a constraint is never worth deleting somebody's evidence for.
+    """
+    if "tasks" not in existing_tables:
+        return []
+    done = []
+
+    groups = conn.execute(text(
+        "SELECT rule_id, covers_day FROM tasks "
+        "WHERE rule_id IS NOT NULL AND covers_day IS NOT NULL "
+        "GROUP BY rule_id, covers_day HAVING COUNT(*) > 1")).all()
+
+    removed = 0
+    for rule_id, covers in groups:
+        # started_at is deliberately NOT one of the signals: a task is in
+        # progress from the moment it is handed out, so every copy carries
+        # one and nothing would ever be cleaned up. What counts is evidence
+        # that a person did something — handed it in, closed it, wrote a
+        # note, was audited, or attached proof.
+        rows = conn.execute(text(
+            "SELECT id, submitted_at, closed_at, completion_note, auditor_id "
+            "FROM tasks WHERE rule_id = :r AND covers_day = :d "
+            "ORDER BY id"), {"r": rule_id, "d": covers}).all()
+        # The one that is kept: the first that somebody has actually worked
+        # on, otherwise the oldest. Keeping the worked-on copy means the
+        # doer's effort survives the clean-up even when they happened to
+        # open the second one.
+        worked = [r for r in rows
+                  if r[1] or r[2] or r[3] or r[4]
+                  or conn.execute(text(
+                      "SELECT 1 FROM attachments WHERE task_id = :i LIMIT 1"),
+                      {"i": r[0]}).scalar()]
+        if len(worked) > 1:
+            continue                     # two real ones; a person must decide
+        keep = worked[0][0] if worked else rows[0][0]
+        for r in rows:
+            if r[0] == keep:
+                continue
+            for table, col, how in TASK_CHILDREN:
+                if table not in existing_tables:
+                    continue
+                if how == "DELETE":
+                    conn.execute(text(f"DELETE FROM {table} WHERE {col} = :i"),
+                                 {"i": r[0]})
+                else:
+                    conn.execute(text(
+                        f"UPDATE {table} SET {col} = NULL WHERE {col} = :i"),
+                        {"i": r[0]})
+            conn.execute(text("DELETE FROM tasks WHERE id = :i"), {"i": r[0]})
+            removed += 1
+    if removed:
+        done.append(f"{removed} duplicate checklist task(s) removed")
+
+    return done
+
+
+def _lock_checklist_days(existing_tables: set) -> list[str]:
+    """Stop two runs ever creating the same checklist day twice.
+
+    create_all() only builds constraints for a table it is creating, so an
+    existing database never gets this unless it is asked for by name. On its
+    OWN connection on purpose: a database that still holds duplicates refuses
+    the index, and in PostgreSQL a failed statement poisons the whole
+    transaction it is in — taking the real migrations down with it.
+    """
+    if "tasks" not in existing_tables:
+        return []
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_rule_day "
+                "ON tasks (rule_id, covers_day)"))
+        return []
+    except Exception as exc:
+        return [f"could not lock checklist days ({exc.__class__.__name__}) — "
+                "duplicate checklist tasks are still there and somebody has "
+                "worked on more than one copy"]
 
 
 def _backfill_refs(conn, insp, existing_tables: set) -> list[str]:

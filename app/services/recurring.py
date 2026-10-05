@@ -12,14 +12,17 @@ They differ whenever the job falls on a day nobody is in. Work planned for a
 closed day is created on the last working day BEFORE it, so the Sunday report
 is on somebody's desk on Saturday rather than being handed in late on Monday.
 
-That means a Saturday can carry two copies of a daily job — its own, and the
-Sunday one brought forward. That is deliberate: the work still has to be done,
-and doing it a day early is the point.
+That applies to weekly, fortnightly, monthly, quarterly and yearly jobs — the
+ones where a missed day means a missed week, month or year. It deliberately
+does NOT apply to a daily job: bringing Sunday's copy back onto Saturday puts
+two identical rows on one person's list, which reads as the same task twice,
+and there is another one tomorrow anyway.
 """
 import re
 from datetime import datetime, date, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -137,6 +140,16 @@ def days_to_spawn(db: Session, rule: RecurringRule, today: date) -> list[date]:
     if is_due_today(rule, today):
         out.append(today)
 
+    # A daily job is never brought forward. Pulling Sunday's copy back onto
+    # Saturday puts two identical rows on one person's list — same title,
+    # same deadline — and what they see is the same task twice. A daily job
+    # that lands on a closed day is simply not done that day; there is
+    # another one tomorrow. Everything that comes round less often IS
+    # brought forward, because missing it means missing it for a week, a
+    # month or a year.
+    if rule.frequency == Recurrence.DAILY:
+        return out
+
     for n in range(1, LOOKAHEAD_DAYS + 1):
         day = today + timedelta(days=n)
         if not holidays.is_closed(db, rule.org_id, day, rule.branch_id):
@@ -161,39 +174,53 @@ def run_spawn(db: Session, today: date | None = None) -> int:
             if _already_made(db, rule, covers):
                 continue
 
+            # Each task in its own savepoint. The check above is not enough
+            # on its own: the midnight loop, the cron ping and somebody
+            # pressing "Run spawner now" can all look at the same instant,
+            # all see nothing, and all insert. The database refuses the
+            # second one (uq_task_rule_day) and this turns that refusal into
+            # "somebody else already made it" rather than a failed run that
+            # abandons every rule after it.
             hh, mm = (int(x) for x in rule.due_time.split(":"))
             due_at = datetime.combine(today, datetime.min.time()).replace(
                 hour=hh, minute=mm)
 
-            task = Task(
-                org_id=rule.org_id,
-                branch_id=rule.branch_id,
-                title=rule.title,
-                details=rule.details,
-                assigner_id=rule.assigner_id,
-                doer_id=rule.doer_id,
-                priority=rule.priority,
-                source=TaskSource.RECURRING,
-                due_at=due_at,
-                covers_day=covers,
-                rule_id=rule.id,
-                requires_audit=rule.requires_audit,
-                requires_attachment=rule.requires_attachment,
-            )
-            db.add(task)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    task = Task(
+                        org_id=rule.org_id,
+                        branch_id=rule.branch_id,
+                        title=rule.title,
+                        details=rule.details,
+                        assigner_id=rule.assigner_id,
+                        doer_id=rule.doer_id,
+                        priority=rule.priority,
+                        source=TaskSource.RECURRING,
+                        due_at=due_at,
+                        covers_day=covers,
+                        rule_id=rule.id,
+                        requires_audit=rule.requires_audit,
+                        requires_attachment=rule.requires_attachment,
+                    )
+                    db.add(task)
+                    db.flush()
 
-            # Say why it turned up early, on the task itself, so nobody has to
-            # work out why Saturday has two of these.
-            if covers != today:
-                why = holidays.closed_reason(db, rule.org_id, covers,
-                                             rule.branch_id) or "a closed day"
-                db.add(TaskComment(
-                    task_id=task.id, author_id=rule.assigner_id,
-                    body=f"This is the {covers:%A %d %b} job, brought forward "
-                         f"because {covers:%d %b} is {why}."))
+                    # Say why it turned up early, on the task itself, so
+                    # nobody has to work out why Saturday has two of these.
+                    if covers != today:
+                        why = holidays.closed_reason(db, rule.org_id, covers,
+                                                     rule.branch_id) or "a closed day"
+                        db.add(TaskComment(
+                            task_id=task.id, author_id=rule.assigner_id,
+                            body=f"This is the {covers:%A %d %b} job, brought "
+                                 f"forward because {covers:%d %b} is {why}."))
 
-            notify.queue_task_assigned(db, task)
+                    notify.queue_task_assigned(db, task)
+            except IntegrityError:
+                # Another run got there first. Not an error: the day's job
+                # exists, which is all this was trying to achieve.
+                continue
+
             rule.last_spawned_on = today
             created += 1
 

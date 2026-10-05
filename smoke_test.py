@@ -3424,12 +3424,14 @@ def _made(rule_id):
 _rec2.run_spawn(_w, today=_sat)
 _dtasks = _made(_daily.id)
 _stasks = _made(_sunday_job.id)
-check("Saturday makes the daily job twice — its own and Sunday's",
-      len(_dtasks) == 2, [str(t.covers_day) for t in _dtasks])
-check("one covering Saturday and one covering Sunday",
-      {t.covers_day for t in _dtasks} == {_sat, _sun},
+# A DAILY job is never brought forward: two identical rows on one day read
+# as the same task twice, and there is another one tomorrow anyway.
+check("Saturday makes the daily job once, not twice",
+      len(_dtasks) == 1, [str(t.covers_day) for t in _dtasks])
+check("and it is Saturday's own",
+      {t.covers_day for t in _dtasks} == {_sat},
       sorted(str(t.covers_day) for t in _dtasks))
-check("both are due on Saturday, not on the Sunday nobody is in",
+check("due on Saturday, not on the Sunday nobody is in",
       all(t.due_at.date() == _sat for t in _dtasks),
       [str(t.due_at) for t in _dtasks])
 check("the Sunday-only job is created on Saturday too",
@@ -3441,12 +3443,12 @@ check("and it says on the task why it turned up early",
 
 # Sunday itself creates nothing — everybody is off.
 _rec2.run_spawn(_w, today=_sun)
-check("Sunday itself creates nothing", len(_made(_daily.id)) == 2,
+check("Sunday itself creates nothing", len(_made(_daily.id)) == 1,
       len(_made(_daily.id)))
 
 # Monday creates only Monday's.
 _rec2.run_spawn(_w, today=_sun + _td2(days=1))
-check("Monday creates its own and nothing else", len(_made(_daily.id)) == 3,
+check("Monday creates its own and nothing else", len(_made(_daily.id)) == 2,
       len(_made(_daily.id)))
 
 # Running the spawner twice on the same day must not double anything.
@@ -3476,8 +3478,12 @@ if _gym:
 # A run of closed days is created once, by the working day before the run.
 _w.add(_H2(org_id=1, branch_id=None, day=_d2(2027, 6, 3), name="SMOKE festival 1"))
 _w.add(_H2(org_id=1, branch_id=None, day=_d2(2027, 6, 4), name="SMOKE festival 2"))
+# Every day of the week, as a WEEKLY rule rather than a DAILY one: a job that
+# comes round once a week IS brought forward off a closed day, and this is
+# what tests that a whole run of closed days is handed out once.
 _run_rule = _RR2(org_id=1, branch_id=_ho.id, title=f"SMOKE festival daily {RUN}",
-                 doer_id=6, assigner_id=2, frequency=_Rec2.DAILY, due_time="18:00")
+                 doer_id=6, assigner_id=2, frequency=_Rec2.WEEKLY,
+                 weekdays="0,1,2,3,4,5,6", due_time="18:00")
 _w.add(_run_rule)
 _w.commit()
 _rec2.run_spawn(_w, today=_d2(2027, 6, 2))       # Wednesday before the festival
@@ -5775,6 +5781,348 @@ check("nor on a task that does not exist",
       _detG.review_quietly(999999) is None)
 _detG.AI_KEY = _cfgG.AI_KEY = ""
 _detG.AI_ENABLED = _cfgG.AI_ENABLED = True
+
+# ==========================================================================
+print("\n== one checklist job, shown once ==")
+# The complaint: "1 task is showing two times" on a doer's checklist. Two
+# things can cause it and they need different answers — a closed day's job
+# handed out early alongside today's own (right, but indistinguishable), and
+# a genuine second copy from two spawn runs racing (wrong).
+from datetime import date as _dt_date, timedelta as _dt_delta
+from app.db import SessionLocal as _slK
+from app.models import (RecurringRule as _RR_K, Task as _TK, Holiday as _HolK,
+                        Recurrence as _RecK, Priority as _PrK, TaskSource as _TSK)
+from app.services import recurring as _recK
+from app import migrate as _migK
+from sqlalchemy import select as _spK, func as _fnK
+from sqlalchemy.exc import IntegrityError as _IEK
+
+_satK = _dt_date(2027, 3, 6)             # a Saturday
+with _slK() as _d:
+    _amitK0 = _d.scalar(_spK(UserModel.id).where(UserModel.email == "amit@gcs.local"))
+    _bossK = _d.scalar(_spK(UserModel.id).where(UserModel.email == "mis@gcs.local"))
+    # A daily job, and a weekly one that runs every day of the week. The two
+    # are treated differently on a closed day on purpose.
+    _ruleK = _RR_K(org_id=1, branch_id=None, title=f"SMOKE daily job {RUN}",
+                   doer_id=_amitK0, assigner_id=_bossK, priority=_PrK.MEDIUM,
+                   frequency=_RecK.DAILY, due_time="23:59", active=True)
+    _wklyK = _RR_K(org_id=1, branch_id=None, title=f"SMOKE weekly job {RUN}",
+                   doer_id=_amitK0, assigner_id=_bossK, priority=_PrK.MEDIUM,
+                   frequency=_RecK.WEEKLY, weekdays="0,1,2,3,4,5,6",
+                   due_time="23:59", active=True)
+    _d.add_all([_ruleK, _wklyK])
+    _d.add(_HolK(org_id=1, branch_id=None, day=_satK + _dt_delta(days=1),
+                 name="Sunday"))
+    _d.commit()
+    _rid_K, _wid_K = _ruleK.id, _wklyK.id
+
+with _slK() as _d:
+    _recK.run_spawn(_d, today=_satK)
+    _madeK = _d.scalars(_spK(_TK).where(_TK.rule_id == _rid_K)
+                        .order_by(_TK.id)).all()
+    # The actual complaint: a daily job appearing twice in one day.
+    check("a daily job is handed out once, never twice",
+          len(_madeK) == 1, [str(t.covers_day) for t in _madeK])
+    check("and it is today's own, not the closed day's",
+          _madeK[0].covers_day == _satK and not _madeK[0].brought_forward,
+          str(_madeK[0].covers_day))
+    _tidK = _madeK[0].id
+
+    # A job that comes round less often still comes forward, because missing
+    # the day means missing the week.
+    _wmadeK = _d.scalars(_spK(_TK).where(_TK.rule_id == _wid_K)
+                         .order_by(_TK.id)).all()
+    check("a weekly job due on a closed day is still handed out early",
+          len(_wmadeK) == 2, [str(t.covers_day) for t in _wmadeK])
+    check("both are due on the working day",
+          all(t.due_at.date() == _satK for t in _wmadeK))
+    _todayK = [t for t in _wmadeK if not t.brought_forward]
+    _earlyK = [t for t in _wmadeK if t.brought_forward]
+    check("exactly one of them is marked as the closed day's",
+          len(_todayK) == 1 and len(_earlyK) == 1)
+    check("and it says which day it is for",
+          _earlyK[0].covers_label.startswith("Sunday"), _earlyK[0].covers_label)
+    _eidK, _wtodayK = _earlyK[0].id, _todayK[0].id
+
+_rowK = admin.get(f"/tasks/{_eidK}").text
+check("the task page says it is the closed day's job, not a duplicate",
+      "handed out early" in _rowK and "not it twice" in _rowK)
+_listK = admin.get("/tasks?source=checklist&status=all&q=SMOKE+weekly+job").text
+check("the list labels the early one", "for Sunday" in _listK, _listK[:0])
+check("and shows them both", f"/tasks/{_eidK}" in _listK
+      and f"/tasks/{_wtodayK}" in _listK)
+
+# Running the spawner again changes nothing, however often it is run.
+with _slK() as _d:
+    _recK.run_spawn(_d, today=_satK)
+    _recK.run_spawn(_d, today=_satK)
+    _againK = _d.scalar(_spK(_fnK.count()).select_from(_TK)
+                        .where(_TK.rule_id == _rid_K))
+    check("running the spawner again makes nothing new", _againK == 1, _againK)
+
+# And the database itself refuses a second copy, which is what a race makes.
+with _slK() as _d:
+    _origK = _d.get(_TK, _tidK)
+    _d.add(_TK(org_id=_origK.org_id, branch_id=_origK.branch_id,
+               title=_origK.title, assigner_id=_origK.assigner_id,
+               doer_id=_origK.doer_id, priority=_origK.priority,
+               source=_TSK.RECURRING, due_at=_origK.due_at,
+               covers_day=_origK.covers_day, rule_id=_rid_K))
+    _refusedK = False
+    try:
+        _d.commit()
+    except _IEK:
+        _refusedK = True
+        _d.rollback()
+    check("the database refuses a duplicate of the same day's job", _refusedK)
+
+# A duplicate that already existed — made before this constraint was there,
+# which is exactly the state the live database is in — is cleaned up by the
+# migration on the next start. Run against a scratch database built WITHOUT
+# the constraint, because a database that has it cannot hold the duplicate
+# the clean-up exists to remove.
+import tempfile as _tfK, os as _osK
+from sqlalchemy import create_engine as _ceK, text as _txK
+_tmpK = _osK.path.join(_tfK.mkdtemp(), "dupes.db")
+_engK = _ceK(f"sqlite:///{_tmpK}")
+with _engK.begin() as _c:
+    _c.execute(_txK("CREATE TABLE tasks (id INTEGER PRIMARY KEY, rule_id INTEGER,"
+                    " covers_day DATE, submitted_at DATETIME, closed_at DATETIME,"
+                    " completion_note TEXT, auditor_id INTEGER)"))
+    _c.execute(_txK("CREATE TABLE attachments (id INTEGER PRIMARY KEY, task_id INTEGER)"))
+    _c.execute(_txK("CREATE TABLE task_comments (id INTEGER PRIMARY KEY, task_id INTEGER)"))
+    # Three copies of one day's job: two untouched, one with real work on it.
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day) VALUES (1, 7, '2027-03-06')"))
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day, completion_note)"
+                    " VALUES (2, 7, '2027-03-06', 'I did this one')"))
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day) VALUES (3, 7, '2027-03-06')"))
+    _c.execute(_txK("INSERT INTO task_comments (id, task_id) VALUES (1, 3)"))
+    # A different day, and a delegation task with no rule: neither is a copy.
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day) VALUES (4, 7, '2027-03-07')"))
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day) VALUES (5, NULL, NULL)"))
+    _c.execute(_txK("INSERT INTO tasks (id, rule_id, covers_day) VALUES (6, NULL, NULL)"))
+with _engK.begin() as _c:
+    _saidK = _migK._dedupe_checklist_tasks(
+        _c, {"tasks", "attachments", "task_comments"})
+with _engK.begin() as _c:
+    _leftK = [r[0] for r in _c.execute(_txK("SELECT id FROM tasks ORDER BY id")).all()]
+    _cmtK = _c.execute(_txK("SELECT COUNT(*) FROM task_comments")).scalar()
+check("the duplicates made before the fix are cleaned up",
+      _leftK == [2, 4, 5, 6], _leftK)
+check("the copy somebody worked on is the one that survives", 2 in _leftK)
+check("another day's job is not touched", 4 in _leftK)
+check("and delegation tasks, which have no rule, are left alone",
+      5 in _leftK and 6 in _leftK)
+check("what it did is reported", "duplicate checklist task" in " ".join(_saidK),
+      _saidK)
+with _engK.begin() as _c:
+    check("running it again finds nothing left to do",
+          _migK._dedupe_checklist_tasks(_c, {"tasks", "attachments",
+                                             "task_comments"}) == [])
+check("the removed copies take their comments with them", _cmtK == 0, _cmtK)
+_engK.dispose()
+
+print("\n== an FMS step never falls due on a closed day ==")
+# The same rule as the checklist, on the other kind of work: a step whose
+# deadline lands on a Sunday or a holiday is due on the working day before
+# it, not the day after — handing it in on Monday is a day late, every time.
+from app.models import (Flow as _FlJ, FlowStep as _FSJ, Holiday as _HolJ,
+                        FlowInstance as _FIJ, Task as _TJ)
+from app.services import flows as _flowJ, holidays as _holJ
+from datetime import datetime as _dtJ, date as _dateJ, timedelta as _tdJ
+
+with _slK() as _d:
+    _shutJ = _dateJ(2027, 9, 15)                 # a Wednesday, made a holiday
+    if not _d.scalar(_spK(_HolJ).where(_HolJ.org_id == 1,
+                                       _HolJ.day == _shutJ)):
+        _d.add(_HolJ(org_id=1, branch_id=None, day=_shutJ, name="SMOKE shutdown"))
+        _d.commit()
+    _movedJ, _whyJ = _holJ.shift_due(_d, 1, _dtJ.combine(_shutJ, _dtJ.min.time())
+                                     .replace(hour=17))
+    check("an FMS deadline on a closed day moves to the day before",
+          _movedJ.date() == _shutJ - _tdJ(days=1), str(_movedJ))
+    check("never to the day after", _movedJ.date() > _shutJ - _tdJ(days=3),
+          str(_movedJ))
+    check("and the time of day is kept", _movedJ.hour == 17, str(_movedJ))
+
+# And through the real engine: start a flow whose first step would land on
+# the closed day, and read the task's planned date.
+_mkJ = {"name": f"SMOKE closed-day flow {RUN}", "description": "", "branch_id": "",
+        "step_title": ["Only step"], "step_doer": [""], "step_tat_unit": ["hours"],
+        "step_tat": ["24"], "step_priority": ["medium"], "step_instructions": [""],
+        "step_fields": [""], "step_audit": ["0"], "step_proof": ["1"],
+        "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+        "step_no": [""], "step_fail": [""], "step_due_from": [""]}
+admin.post("/flows/new", data=_mkJ)
+with _slK() as _d:
+    _fJ = _d.scalar(_spK(_FlJ).where(_FlJ.name == f"SMOKE closed-day flow {RUN}"))
+    check("the flow for this check was built", _fJ is not None)
+    _fJid = _fJ.id
+admin.post(f"/flows/{_fJid}/start", data={"reference": f"SMOKE closed {RUN}"})
+with _slK() as _d:
+    _instJ = _d.scalar(_spK(_FIJ).where(_FIJ.flow_id == _fJid))
+    _tJ = _d.scalar(_spK(_TJ).where(_TJ.flow_instance_id == _instJ.id))
+    check("the first step got a planned date", _tJ is not None and _tJ.due_at)
+    check("and that date is not a day the company is closed",
+          not _holJ.is_closed(_d, 1, _tJ.due_at.date(), _tJ.branch_id),
+          str(_tJ.due_at))
+
+print("\n== the Checklist page can be filtered ==")
+_recPage = admin.get("/recurring").text
+check("there is an employee filter", "Everyone" in _recPage)
+check("and a company filter", "All companies" in _recPage)
+with _slK() as _d:
+    _amitK = _d.scalar(_spK(UserModel.id).where(UserModel.email == "amit@gcs.local"))
+    # Somebody else who definitely still exists — the suite removes a user
+    # further up, and a filter on an id that is None filters nothing at all,
+    # which would make this check pass for the wrong reason.
+    _otherK = _d.scalar(_spK(UserModel.id).where(
+        UserModel.org_id == 1, UserModel.active.is_(True),
+        UserModel.id != _amitK).order_by(UserModel.id))
+_byDoer = admin.get(f"/recurring?doer={_amitK}").text
+check("filtering by employee keeps that person's rules",
+      f"SMOKE daily job {RUN}" in _byDoer)
+check("the other person is a real one", bool(_otherK), _otherK)
+check("and drops everyone else's",
+      f"SMOKE daily job {RUN}" not in admin.get(f"/recurring?doer={_otherK}").text)
+check("search and the filter work together",
+      f"SMOKE daily job {RUN}" in admin.get(
+          f"/recurring?doer={_amitK}&q=SMOKE+daily").text)
+check("the filtered list downloads as Excel",
+      admin.get(f"/recurring?doer={_amitK}&export=xlsx").status_code == 200)
+
+# The other cause of "the same task twice": the same job entered as two rules.
+with _slK() as _d:
+    _r1K = _d.get(_RR_K, _rid_K)
+    _twinK = _RR_K(org_id=_r1K.org_id, branch_id=_r1K.branch_id,
+                   title=_r1K.title.upper(), doer_id=_r1K.doer_id,
+                   assigner_id=_r1K.assigner_id, priority=_r1K.priority,
+                   frequency=_r1K.frequency, due_time=_r1K.due_time, active=True)
+    _d.add(_twinK); _d.commit()
+    _twinidK = _twinK.id
+_warnK = " ".join(admin.get("/recurring").text.split())
+check("two rules for the same job are called out",
+      "look like they were added twice" in _warnK)
+check("and the page names them", f"/recurring/{_twinidK}" in _warnK)
+with _slK() as _d:
+    _d.get(_RR_K, _twinidK).active = False
+    _d.commit()
+check("switching one off clears the warning",
+      "look like they were added twice" not in
+      " ".join(admin.get("/recurring").text.split()))
+
+print("\n== an FMS template can be changed and retired ==")
+from app.models import Flow as _FlK, FlowStep as _FSK
+_mkflowK = {"name": f"SMOKE flow {RUN}", "description": "", "branch_id": "",
+            "step_title": ["First", "Second"], "step_doer": ["", ""],
+            "step_tat_unit": ["hours", "hours"], "step_tat": ["24", "24"],
+            "step_priority": ["medium", "medium"],
+            "step_instructions": ["", ""], "step_fields": ["", ""],
+            "step_audit": ["0", "0"], "step_proof": ["1", "1"],
+            "step_decision": ["0", "0"], "step_yes": ["", ""],
+            "step_next": ["", "0"], "step_no": ["", ""], "step_fail": ["", ""],
+            "step_due_from": ["", ""]}
+_crK = admin.post("/flows/new", data=_mkflowK)
+with _slK() as _d:
+    _flK = _d.scalar(_spK(_FlK).where(_FlK.name == f"SMOKE flow {RUN}"))
+    _flidK = _flK.id
+    check("the flow was built", len(_flK.steps) == 2)
+
+_edpK = admin.get(f"/flows/{_flidK}/edit").text
+check("the edit page now carries the steps", "First" in _edpK and "Second" in _edpK)
+check("the two confusing boxes are named for what they do",
+      "After this step, open step number" in _edpK
+      and "Start this step's clock from step number" in _edpK)
+check("and the page says which is which",
+      "where the flow" in _edpK and "when this step is due" in _edpK)
+
+with _slK() as _d:
+    _idsK = [s.id for s in _d.get(_FlK, _flidK).steps]
+_editedK = dict(_mkflowK)
+_editedK["step_id"] = [str(_idsK[0]), str(_idsK[1]), ""]
+_editedK["step_title"] = ["First renamed", "Second", "Third"]
+for _k in ("step_doer", "step_tat_unit", "step_tat", "step_priority",
+           "step_instructions", "step_fields", "step_audit", "step_proof",
+           "step_decision", "step_yes", "step_next", "step_no", "step_fail",
+           "step_due_from"):
+    _editedK[_k] = list(_mkflowK[_k]) + [_mkflowK[_k][0]]
+_editedK["step_next"] = ["", "", "0"]
+_editedK["step_tat"] = ["48", "24", "24"]
+_resK = admin.post(f"/flows/{_flidK}/edit", data=_editedK)
+check("a step can be renamed and another added", _resK.status_code == 200,
+      _resK.status_code)
+with _slK() as _d:
+    _stK = _d.get(_FlK, _flidK).steps
+    check("the change stuck", [s.title for s in _stK] ==
+          ["First renamed", "Second", "Third"], [s.title for s in _stK])
+    check("and so did the new TAT", _stK[0].tat_value == 48, _stK[0].tat_value)
+    check("the steps are renumbered in order",
+          [s.position for s in _stK] == [1, 2, 3])
+
+_dropK = dict(_editedK)
+for _k in list(_dropK):
+    if _k.startswith("step_"):
+        _dropK[_k] = _dropK[_k][:2]
+_resK = admin.post(f"/flows/{_flidK}/edit", data=_dropK)
+with _slK() as _d:
+    check("an unused step can be removed", len(_d.get(_FlK, _flidK).steps) == 2)
+
+_badK = dict(_dropK)
+_badK["step_next"] = ["9", ""]
+_resK = admin.post(f"/flows/{_flidK}/edit", data=_badK)
+check("a route pointing at a step that does not exist is refused",
+      _resK.status_code == 400, _resK.status_code)
+check("and it says what is wrong",
+      "this flow does not have" in _resK.text)
+
+# Start a run, then try to take its step away.
+admin.post(f"/flows/{_flidK}/start", data={"reference": f"SMOKE ref {RUN}"})
+_cutK = dict(_dropK)
+for _k in list(_cutK):
+    if _k.startswith("step_"):
+        _cutK[_k] = _cutK[_k][1:]
+_resK = admin.post(f"/flows/{_flidK}/edit", data=_cutK)
+check("a step that work was handed out for cannot be removed",
+      _resK.status_code == 400, _resK.status_code)
+check("and the refusal explains why", "cannot be removed" in _resK.text)
+
+_resK = admin.post(f"/flows/{_flidK}/delete", data={"confirm": "yes"})
+check("a flow that has been run cannot be deleted", _resK.status_code == 400)
+check("and it points at switching off instead", "Switch it off" in _resK.text)
+
+admin.post(f"/flows/{_flidK}/toggle")
+_resK = admin.post(f"/flows/{_flidK}/start", data={"reference": "nope"})
+check("a flow that is switched off cannot be started",
+      _resK.status_code == 400, _resK.status_code)
+admin.post(f"/flows/{_flidK}/toggle")
+_resK = admin.post(f"/flows/{_flidK}/start", data={"reference": f"SMOKE back on {RUN}"})
+check("and switching it back on lets runs start again",
+      _resK.status_code == 200, _resK.status_code)
+
+# A template nobody ever ran is deleted outright.
+_mk2K = dict(_mkflowK); _mk2K["name"] = f"SMOKE throwaway {RUN}"
+admin.post("/flows/new", data=_mk2K)
+with _slK() as _d:
+    _thK = _d.scalar(_spK(_FlK).where(_FlK.name == f"SMOKE throwaway {RUN}"))
+    _thidK = _th_stepsK = _thK.id
+_resK = admin.post(f"/flows/{_thidK}/delete", data={"confirm": "yes"})
+check("a template that was never run is deleted", _resK.status_code == 200,
+      _resK.status_code)
+with _slK() as _d:
+    check("it really is gone", _d.get(_FlK, _thidK) is None)
+    check("and its steps went with it",
+          _d.scalars(_spK(_FSK).where(_FSK.flow_id == _thidK)).first() is None)
+_resK = admin.post(f"/flows/{_thidK}/delete", data={"confirm": "yes"})
+check("deleting it twice is a plain not-found, not a crash",
+      _resK.status_code == 404, _resK.status_code)
+check("deleting without confirming is refused",
+      admin.post(f"/flows/{_flidK}/delete").status_code == 400)
+check("a doer cannot delete a flow",
+      doer.post(f"/flows/{_flidK}/delete", data={"confirm": "yes"}).status_code
+      in (403, 404))
+check("nor edit its steps",
+      doer.post(f"/flows/{_flidK}/edit", data=_dropK).status_code in (403, 404))
+
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

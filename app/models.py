@@ -704,6 +704,22 @@ class FlowInstance(Base):
 # --------------------------------------------------------------------------
 class Task(Base):
     __tablename__ = "tasks"
+    # One checklist rule can only ever owe one task per day it covers.
+    #
+    # The guard in the spawner checks first and inserts afterwards, which is
+    # enough until two of them run at once — the background loop at midnight,
+    # the cron ping, and somebody pressing "Run spawner now" are three
+    # separate processes that can all look, all see nothing, and all insert.
+    # The doer then has the same job twice on the same day with no way to
+    # tell which is which. The database is the only place that check can be
+    # made to hold, so it is made here.
+    #
+    # rule_id is NULL for delegation and FMS work, and NULLs do not collide
+    # in either SQLite or PostgreSQL, so this constrains checklist tasks and
+    # nothing else.
+    __table_args__ = (UniqueConstraint("rule_id", "covers_day",
+                                       name="uq_task_rule_day"),)
+
     id: Mapped[int] = mapped_column(primary_key=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
@@ -798,6 +814,22 @@ class Task(Base):
         if self.status in (TaskStatus.COMPLETED,) + PARKED_STATES:
             return False
         return clock.now() > self.due_at
+
+    @property
+    def brought_forward(self) -> bool:
+        """Is this a closed day's job, handed out early?
+
+        Sunday's report is created on Saturday and is due on Saturday, so on
+        the list it is the same title, the same doer and the same deadline as
+        Saturday's own — two rows a person reads as one task shown twice.
+        They are different days' work and the row has to say so.
+        """
+        return bool(self.covers_day and self.covers_day != self.due_at.date())
+
+    @property
+    def covers_label(self) -> str:
+        """"Sunday 04 Oct" — the day this one is actually for."""
+        return f"{self.covers_day:%A %d %b}" if self.covers_day else ""
 
     @property
     def was_on_time(self) -> bool | None:

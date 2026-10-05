@@ -16,7 +16,14 @@
      title="Where the audit stands — click to jump to it">{{ task.audit_label }}</a>
   {% if task.false_marked %}<span class="chip falsemark">false marking −10</span>{% endif %}
   {% if task.reopen_count %}<span class="chip reopened">reopened ×{{ task.reopen_count }}</span>{% endif %}
+  {% if task.brought_forward %}<span class="chip forday">for {{ task.covers_label }}</span>{% endif %}
 </p>
+
+{% if task.brought_forward %}
+<p class="sub readable">This is <strong>{{ task.covers_label }}</strong>'s job,
+  handed out early because nobody is in that day. Today's own copy of the same
+  checklist item is a separate task — this is not it twice.</p>
+{% endif %}
 
 {% if task.false_marked %}
 <div class="danger-box">

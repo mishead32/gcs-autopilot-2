@@ -1,10 +1,24 @@
 {% extends "base.html" %}
 {% from "_startform.html" import start_form_builder %}
+{% from "_stepfields.html" import step_card, step_script with context %}
 {% block title %}Edit {{ flow.name }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
 <h1>Edit flow</h1>
-<p class="sub">Name, branch, description and the questions asked when a run starts.</p>
+<p class="sub readable">The name, the questions asked when a run starts, and
+  the steps themselves. Changes apply to <strong>runs started from now on</strong>
+  — work already handed out keeps the wording, the deadline and the person it
+  was given to.</p>
+
+{% if live %}
+<div class="proof need readable">
+  <strong>{{ live }} run(s) of this flow are still going.</strong>
+  You can change what each step says, who does it and how long it gets.
+  Steps that work has already been handed out for cannot be removed while
+  those runs are open — removing one would strand the task sitting on
+  somebody's desk.
+</div>
+{% endif %}
 
 <form method="post" action="/flows/{{ flow.id }}/edit" class="card" style="max-width:920px">
   <div class="row">
@@ -22,16 +36,64 @@
 
   {{ start_form_builder(field_types, flow.start_form_fields) }}
 
-  <div class="note-box">
-    <strong>Steps are not edited here.</strong>
-    A run already in progress points at its steps by number, so renumbering
-    them underneath live work would reroute tasks already on somebody's plate.
-    To change the steps, build a new version of the flow.
+  <h2 style="margin-top:24px">Steps</h2>
+  <div class="m readable" style="margin-bottom:10px">
+    <strong>After this step, open step number</strong> is where the flow
+    <em>goes</em>. <strong>Start this step's clock from step number</strong> is
+    only about <em>when this step is due</em>. They are different questions and
+    either can be left blank.
   </div>
+  <div id="steps">
+    {% for s in flow.steps %}
+    {{ step_card(doers, priorities, span_units, s, s.used_count > 0 and live) }}
+    {% endfor %}
+  </div>
+  <button type="button" class="btn ghost sm" onclick="addStep()">+ Add step</button>
 
   <div style="margin-top:20px">
     <button class="btn">Save flow</button>
     <a class="btn ghost" href="/flows/{{ flow.id }}">Cancel</a>
   </div>
 </form>
+
+<template id="tpl">
+{{ step_card(doers, priorities, span_units) }}
+</template>
+
+{# Switching off and deleting are separate things and the page says which is
+   which, because one is reversible and the other is not. #}
+<div class="card" style="max-width:920px;margin-top:20px">
+  <strong>Retire this flow</strong>
+  <div class="row" style="margin-top:12px;align-items:flex-end">
+    <form method="post" action="/flows/{{ flow.id }}/toggle">
+      <p class="m" style="margin:0 0 8px">
+        {% if flow.active %}Stops anyone starting a new run. Runs already
+        going carry on, and nothing is lost — you can switch it back on.
+        {% else %}This flow is switched off. No new runs can be started from
+        it.{% endif %}</p>
+      <button class="btn ghost">{{ 'Switch off' if flow.active else 'Switch back on' }}</button>
+    </form>
+  </div>
+
+  <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:14px">
+    {% if runs %}
+    <p class="m" style="margin:0">
+      <strong>This flow cannot be deleted.</strong> {{ runs }} run(s) have been
+      started from it, and their tasks, proof and audit trail belong to those
+      runs. Switch it off instead — that stops new runs without erasing what
+      already happened.</p>
+    {% else %}
+    <form method="post" action="/flows/{{ flow.id }}/delete"
+          onsubmit="return confirm('Delete “{{ flow.name }}” and its steps? This cannot be undone.')">
+      <p class="m" style="margin:0 0 8px">No run has ever been started from
+        this flow, so deleting it loses nothing but the template itself.
+        This cannot be undone.</p>
+      <input type="hidden" name="confirm" value="yes">
+      <button class="btn danger">Delete this flow</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{{ step_script(span_choices) }}
 {% endblock %}

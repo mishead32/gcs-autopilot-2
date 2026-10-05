@@ -29,7 +29,7 @@
 <h2>Templates</h2>
 {% if flows %}
 <div class="table-wrap"><table>
-  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Status</th></tr>
+  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Status</th><th></th></tr>
   {% for f in flows %}
   <tr>
     <td><a href="/flows/{{ f.id }}"><strong>{{ f.name }}</strong></a>
@@ -37,6 +37,12 @@
     <td>{{ f.branch.name if f.branch else 'All' }}</td>
     <td>{{ f.steps|length }}</td>
     <td><span class="chip {{ 'completed' if f.active else 'rejected' }}">{{ 'active' if f.active else 'off' }}</span></td>
+    {# Edit covers all of it — the questions, the steps, switching off and
+       deleting — so there is one door rather than four buttons here. #}
+    <td class="stickycol">{% if can_manage %}
+      <a class="btn sm ghost" href="/flows/{{ f.id }}/edit"
+         title="Change the steps, the start questions, or retire this flow">Edit</a>
+      {% endif %}</td>
   </tr>
   {% endfor %}
 </table></div>

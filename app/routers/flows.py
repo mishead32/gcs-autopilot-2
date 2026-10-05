@@ -92,7 +92,7 @@ def flow_list(request: Request, export: str = "", q: str = "",
         ])
 
     return templates.TemplateResponse(request, "flows.html", {
-        "q": text_q,
+        "q": text_q, "can_manage": user.has(Right.MANAGE_FLOW),
         "user": user, "flows": flows, "running": running,
         "progress": {i.id: flow_svc.flow_progress(i) for i in running},
     })
@@ -113,21 +113,14 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
     })
 
 
-@router.post("/flows/new")
-async def create_flow(request: Request, user: User = Depends(require_right(Right.MANAGE_FLOW)),
-                      db: Session = Depends(get_db)):
-    form = await request.form()
-    flow = Flow(
-        org_id=user.org_id,
-        branch_id=int(form["branch_id"]) if form.get("branch_id") else None,
-        name=form["name"].strip(),
-        description=(form.get("description") or "").strip() or None,
-        start_form=_read_start_form(form),
-    )
-    db.add(flow)
-    db.flush()
+def _read_steps(form) -> list[dict]:
+    """The step cards, as the columns a FlowStep stores.
 
-    # steps arrive as parallel arrays: step_title[], step_doer[], ...
+    One reader for building a flow and for editing one, so a field cannot
+    mean one thing on the way in and another thing later. Cards with no title
+    are skipped — an empty card somebody added and never filled in is not a
+    step. The order of the list IS the order of the flow.
+    """
     titles = form.getlist("step_title")
     doers = form.getlist("step_doer")
     tats = form.getlist("step_tat")
@@ -158,63 +151,96 @@ async def create_flow(request: Request, user: User = Depends(require_right(Right
         except ValueError:
             return None
 
-    pos = 0
+    out = []
     for i, title in enumerate(titles):
         if not title.strip():
             continue
-        pos += 1
-        db.add(FlowStep(
-            flow_id=flow.id,
-            position=pos,
-            title=title.strip(),
-            instructions=(instr[i] if i < len(instr) else "").strip() or None,
-            default_doer_id=int(doers[i]) if i < len(doers) and doers[i] else None,
-            tat_hours=int(tats[i]) if i < len(tats) and tats[i] else 24,
-            tat_unit=(tat_units[i] if i < len(tat_units)
-                      and tat_units[i] in clock.SPAN_UNITS else "hours"),
-            tat_value=int(tats[i]) if i < len(tats) and tats[i] else 24,
-            due_from_pos=_pos(dfroms, i) or None,
-            priority=Priority(prios[i]) if i < len(prios) and prios[i] else Priority.MEDIUM,
-            requires_audit=(audits[i] == "1") if i < len(audits) else False,
+        raw_id = (form.getlist("step_id")[i]
+                  if i < len(form.getlist("step_id")) else "").strip()
+        out.append({
+            "step_id": int(raw_id) if raw_id.isdigit() else None,
+            "position": len(out) + 1,
+            "title": title.strip(),
+            "instructions": (instr[i] if i < len(instr) else "").strip() or None,
+            "default_doer_id": int(doers[i]) if i < len(doers) and doers[i] else None,
+            "tat_hours": int(tats[i]) if i < len(tats) and tats[i] else 24,
+            "tat_unit": (tat_units[i] if i < len(tat_units)
+                         and tat_units[i] in clock.SPAN_UNITS else "hours"),
+            "tat_value": int(tats[i]) if i < len(tats) and tats[i] else 24,
+            "due_from_pos": _pos(dfroms, i) or None,
+            "priority": (Priority(prios[i]) if i < len(prios) and prios[i]
+                         else Priority.MEDIUM),
+            "requires_audit": (audits[i] == "1") if i < len(audits) else False,
             # proof is required unless the step explicitly says otherwise
-            requires_attachment=(proofs[i] != "0") if i < len(proofs) else True,
-            capture_fields=(fields[i] if i < len(fields) else "").strip() or None,
-            next_step_pos=_pos(nexts, i),
-            fail_step_pos=_pos(fails, i),
-            is_decision=(decides[i] == "1") if i < len(decides) else False,
-            pass_label=(yes_lbl[i] if i < len(yes_lbl) else "").strip() or None,
-            fail_label=(no_lbl[i] if i < len(no_lbl) else "").strip() or None,
-        ))
-
-    if pos == 0:
+            "requires_attachment": (proofs[i] != "0") if i < len(proofs) else True,
+            "capture_fields": (fields[i] if i < len(fields) else "").strip() or None,
+            "next_step_pos": _pos(nexts, i),
+            "fail_step_pos": _pos(fails, i),
+            "is_decision": (decides[i] == "1") if i < len(decides) else False,
+            "pass_label": (yes_lbl[i] if i < len(yes_lbl) else "").strip() or None,
+            "fail_label": (no_lbl[i] if i < len(no_lbl) else "").strip() or None,
+        })
+    if not out:
         raise HTTPException(400, "Add at least one step")
-    db.flush()
+    return out
 
-    # A route pointing at a step that does not exist would strand the run, so
-    # it is caught here rather than discovered by whoever is holding the bill.
-    valid = {s.position for s in db.scalars(
-        select(FlowStep).where(FlowStep.flow_id == flow.id)).all()}
-    for st in db.scalars(select(FlowStep).where(FlowStep.flow_id == flow.id)).all():
-        for label, target in (("goes to", st.next_step_pos),
-                              ("rejected route", st.fail_step_pos)):
+
+def _check_routes(rows: list[dict]) -> None:
+    """Every route must point at a step this flow actually has.
+
+    A route to a step that does not exist strands the run, and it is found by
+    whoever is holding the bill rather than by whoever built the flow — so it
+    is caught here, before anything is saved.
+    """
+    valid = {r["position"] for r in rows}
+    for r in rows:
+        where = f"Step {r['position']} ({r['title']})"
+        for label, target in (("“after this step, open step”", r["next_step_pos"]),
+                              ("second outcome", r["fail_step_pos"])):
             if target and target not in valid:
                 raise HTTPException(
-                    400, f"Step {st.position} ({st.title}): its {label} points at "
-                         f"step {target}, which this flow does not have. "
-                         f"Steps are numbered 1 to {max(valid)}.")
-        if st.due_from_pos and st.due_from_pos not in valid:
+                    400, f"{where}: its {label} points at step {target}, which "
+                         f"this flow does not have. Steps are numbered 1 to "
+                         f"{max(valid)}.")
+        if r["due_from_pos"] and r["due_from_pos"] not in valid:
             raise HTTPException(
-                400, f"Step {st.position} ({st.title}): its planned date is tied "
-                     f"to step {st.due_from_pos}, which this flow does not have.")
-        if st.due_from_pos == st.position:
+                400, f"{where}: its planned date is tied to step "
+                     f"{r['due_from_pos']}, which this flow does not have.")
+        if r["due_from_pos"] == r["position"]:
             raise HTTPException(
-                400, f"Step {st.position} ({st.title}) cannot take its planned "
-                     "date from itself.")
-        if st.is_decision and st.fail_step_pos is None:
+                400, f"{where} cannot take its planned date from itself.")
+        if r["is_decision"] and r["fail_step_pos"] is None:
             raise HTTPException(
-                400, f"Step {st.position} ({st.title}) is a decision step, so it "
-                     "needs a step number for the second outcome too "
-                     "(or 0 to end the flow there).")
+                400, f"{where} is a decision step, so it needs a step number "
+                     "for the second outcome too (or 0 to end the flow there).")
+
+
+STEP_COLUMNS = ("title", "instructions", "default_doer_id", "tat_hours",
+                "tat_unit", "tat_value", "due_from_pos", "priority",
+                "requires_audit", "requires_attachment", "capture_fields",
+                "next_step_pos", "fail_step_pos", "is_decision",
+                "pass_label", "fail_label", "position")
+
+
+@router.post("/flows/new")
+async def create_flow(request: Request, user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                      db: Session = Depends(get_db)):
+    form = await request.form()
+    rows = _read_steps(form)
+    _check_routes(rows)
+
+    flow = Flow(
+        org_id=user.org_id,
+        branch_id=int(form["branch_id"]) if form.get("branch_id") else None,
+        name=form["name"].strip(),
+        description=(form.get("description") or "").strip() or None,
+        start_form=_read_start_form(form),
+    )
+    db.add(flow)
+    db.flush()
+    for r in rows:
+        db.add(FlowStep(flow_id=flow.id,
+                        **{k: r[k] for k in STEP_COLUMNS}))
     db.commit()
     return RedirectResponse(f"/flows/{flow.id}", status_code=303)
 
@@ -238,17 +264,59 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
     })
 
 
+def _flow_or_404(db: Session, user: User, flow_id: int) -> Flow:
+    flow = db.get(Flow, flow_id)
+    if not flow or flow.org_id != user.org_id:
+        raise HTTPException(404, "Flow not found")
+    return flow
+
+
+def _run_counts(db: Session, flow: Flow) -> tuple[int, int]:
+    """How many runs this flow has ever had, and how many are still going.
+
+    The first decides whether it can be deleted, the second whether its steps
+    can be taken away. They are different questions: a flow whose runs all
+    finished is safe to restructure but still owns the history of what was
+    done, so it is never deleted out from under it.
+    """
+    total = len(db.scalars(select(FlowInstance.id).where(
+        FlowInstance.flow_id == flow.id)).all())
+    live = len(db.scalars(select(FlowInstance.id).where(
+        FlowInstance.flow_id == flow.id,
+        FlowInstance.completed_at.is_(None),
+        FlowInstance.cancelled_at.is_(None))).all())
+    return total, live
+
+
+def _mark_usage(db: Session, flow: Flow) -> None:
+    """Hang a used_count on each step: how much real work points at it.
+
+    A step nothing has ever been handed out for can be removed freely. One
+    that tasks point at cannot, because deleting it would orphan work that
+    is on somebody's desk or in somebody's history.
+    """
+    for st in flow.steps:
+        st.used_count = len(db.scalars(
+            select(Task.id).where(Task.flow_step_id == st.id)).all())
+
+
 @router.get("/flows/{flow_id}/edit", response_class=HTMLResponse)
 def edit_flow_form(flow_id: int, request: Request,
                    user: User = Depends(require_right(Right.MANAGE_FLOW)),
                    db: Session = Depends(get_db)):
-    flow = db.get(Flow, flow_id)
-    if not flow or flow.org_id != user.org_id:
-        raise HTTPException(404, "Flow not found")
+    flow = _flow_or_404(db, user, flow_id)
     branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)).all()
+    doers = db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True))
+        .order_by(User.name)).all()
+    runs, live = _run_counts(db, flow)
+    _mark_usage(db, flow)
     return templates.TemplateResponse(request, "flow_edit.html", {
         "user": user, "flow": flow, "branches": branches,
-        "field_types": FIELD_TYPES,
+        "field_types": FIELD_TYPES, "doers": doers,
+        "priorities": list(Priority),
+        "span_units": clock.SPAN_UNITS, "span_choices": clock.SPAN_CHOICES,
+        "runs": runs, "live": live,
     })
 
 
@@ -256,20 +324,55 @@ def edit_flow_form(flow_id: int, request: Request,
 async def edit_flow(flow_id: int, request: Request,
                     user: User = Depends(require_right(Right.MANAGE_FLOW)),
                     db: Session = Depends(get_db)):
-    """Change a flow's name, branch, description and start form.
+    """Change a flow's name, branch, description, start form and steps.
 
-    Steps are deliberately not editable here. A run in progress points at
-    its steps by position, so re-numbering them underneath a live run would
-    reroute work already on somebody's plate — that needs its own careful
-    screen rather than being bolted onto this one.
+    Every change is for FUTURE runs. A task that has already been handed out
+    carries its own copy of the title, the deadline and the person it went
+    to, so rewording a step never rewrites work somebody is already holding —
+    the same rule as editing a checklist rule.
+
+    The one thing that is refused: removing a step that work has already been
+    handed out for, while runs of this flow are still going. Those runs point
+    at their steps by number, and taking one away strands whatever is sitting
+    on that desk.
     """
-    flow = db.get(Flow, flow_id)
-    if not flow or flow.org_id != user.org_id:
-        raise HTTPException(404, "Flow not found")
+    flow = _flow_or_404(db, user, flow_id)
     form = await request.form()
     name = (form.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "Give the flow a name.")
+
+    # A form that says nothing about steps is not asking for them to be
+    # deleted — it is the name-and-questions form. Only a form that actually
+    # carries step cards is allowed to change the steps.
+    touching_steps = "step_title" in form
+    rows = _read_steps(form) if touching_steps else []
+    if touching_steps:
+        _check_routes(rows)
+
+    existing = {s.id: s for s in flow.steps} if touching_steps else {}
+    kept = {r["step_id"] for r in rows if r["step_id"] in existing}
+    _, live = _run_counts(db, flow)
+
+    # What is being removed, and whether it may be.
+    for step_id, step in existing.items():
+        if step_id in kept:
+            continue
+        used = len(db.scalars(
+            select(Task.id).where(Task.flow_step_id == step.id)).all())
+        if used and live:
+            raise HTTPException(
+                400, f"Step {step.position} ({step.title}) cannot be removed: "
+                     f"{used} task(s) were handed out for it and {live} run(s) "
+                     "of this flow are still going. Finish or stop those runs "
+                     "first, or change the step instead of removing it.")
+        if used:
+            raise HTTPException(
+                400, f"Step {step.position} ({step.title}) cannot be removed: "
+                     f"{used} task(s) were handed out for it and deleting it "
+                     "would erase them from the record. Change what it says "
+                     "instead.")
+
     flow.name = name
     flow.description = (form.get("description") or "").strip() or None
     flow.branch_id = int(form["branch_id"]) if form.get("branch_id") else None
@@ -278,17 +381,77 @@ async def edit_flow(flow_id: int, request: Request,
     # come back and add duplicate questions later.
     if flow.start_form:
         flow.start_fields = None
+
+    for step_id, step in existing.items():
+        if step_id not in kept:
+            db.delete(step)
+    for r in rows:
+        step = existing.get(r["step_id"])
+        if step is None:
+            db.add(FlowStep(flow_id=flow.id, **{k: r[k] for k in STEP_COLUMNS}))
+        else:
+            for col in STEP_COLUMNS:
+                setattr(step, col, r[col])
     db.commit()
+    flash.set(request, "info",
+              f"{flow.name} saved — {len(rows)} step(s). Runs already going "
+              "keep the steps they started with." if touching_steps
+              else f"{flow.name} saved.")
     return RedirectResponse(f"/flows/{flow.id}", status_code=303)
+
+
+@router.post("/flows/{flow_id}/toggle")
+def toggle_flow(flow_id: int, request: Request,
+                user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                db: Session = Depends(get_db)):
+    """Stop (or allow) new runs. Nothing already running is touched."""
+    flow = _flow_or_404(db, user, flow_id)
+    flow.active = not flow.active
+    db.commit()
+    flash.set(request, "info",
+              f"{flow.name} is {'on — new runs can be started' if flow.active else 'off — no new runs can be started'}.")
+    return RedirectResponse(f"/flows/{flow.id}", status_code=303)
+
+
+@router.post("/flows/{flow_id}/delete")
+def delete_flow(flow_id: int, request: Request, confirm: str = Form(""),
+                user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                db: Session = Depends(get_db)):
+    """Delete a template that has never been used.
+
+    A flow with runs behind it is never deleted, however the request is
+    worded: those runs' tasks, proof and audit trail are the record of work
+    that really happened, and a template is the cheapest thing in the
+    picture. Switching it off achieves what deleting it was meant to —
+    nobody can start it again — without erasing any of that.
+    """
+    flow = _flow_or_404(db, user, flow_id)
+    if confirm != "yes":
+        raise HTTPException(400, "Deleting a flow has to be confirmed.")
+    runs, _ = _run_counts(db, flow)
+    if runs:
+        raise HTTPException(
+            400, f"“{flow.name}” has {runs} run(s) behind it, so it cannot be "
+                 "deleted — their tasks and proof belong to those runs. "
+                 "Switch it off instead: no new run can be started from a "
+                 "flow that is off.")
+    name = flow.name
+    db.delete(flow)            # its steps go with it (cascade)
+    db.commit()
+    flash.set(request, "info", f"“{name}” deleted. It had never been run.")
+    return RedirectResponse("/flows", status_code=303)
 
 
 @router.post("/flows/{flow_id}/start")
 async def start_flow(flow_id: int, request: Request,
                      user: User = Depends(require_right(Right.CREATE_TASK)),
                      db: Session = Depends(get_db)):
-    flow = db.get(Flow, flow_id)
-    if not flow or flow.org_id != user.org_id:
-        raise HTTPException(404, "Flow not found")
+    flow = _flow_or_404(db, user, flow_id)
+    if not flow.active:
+        raise HTTPException(
+            400, f"“{flow.name}” is switched off, so no new run can be "
+                 "started from it. Switch it back on under Edit flow if it "
+                 "is still in use.")
     form = await request.form()
     reference = (form.get("reference") or "").strip()
     if not reference:

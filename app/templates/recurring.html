@@ -6,27 +6,94 @@
 <a class="btn ghost" href="/bulk?kind=checklist">Bulk import</a></div></div>
 <p class="sub">Rules spawn a fresh task automatically on schedule — no one has to remember.</p>
 {# The same search box as everywhere else: words from the thing, or its ID. #}
-<form method="get" action="/recurring" class="card searchbar">
-  <div class="fb-f fb-wide">
+{# Search and the three filters in one bar: picking a person and pressing
+   Search has to keep the words, and two separate forms quietly throw one
+   away each time. #}
+<form method="get" action="/recurring" class="card daterange">
+  <div class="fb-wide">
     <label>Search</label>
     <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
            placeholder="Words from the checklist task">
   </div>
+  <div>
+    <label>Employee</label>
+    <select name="doer"><option value="">Everyone</option>
+      {% for p in doers %}
+      <option value="{{ p.id }}" {{ 'selected' if doer_id == p.id }}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Company</label>
+    <select name="branch"><option value="">All companies</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if branch_id == b.id }}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Switched</label>
+    <select name="state">
+      <option value="">On and off</option>
+      <option value="on" {{ 'selected' if state == 'on' }}>On only</option>
+      <option value="off" {{ 'selected' if state == 'off' }}>Off only</option>
+    </select>
+  </div>
   <div class="acts">
     <button class="btn">Search</button>
-    {% if q %}<a class="btn ghost" href="/recurring">Clear</a>{% endif %}
+    <a class="btn ghost" href="/recurring">Clear</a>
   </div>
 </form>
-{% if q %}
-<p class="sub">Showing everything matching <strong>“{{ q }}”</strong>.</p>
+{% if q or doer_id or branch_id or state %}
+<p class="sub">Showing {{ rules|length }} rule(s)
+  {% if q %}matching <strong>“{{ q }}”</strong>{% endif %}
+  {%- if doer_id %} for
+    {%- for p in doers %}{% if p.id == doer_id %} <strong>{{ p.name }}</strong>{% endif %}{% endfor %}
+  {%- endif %}
+  {%- if branch_id %} in
+    {%- for b in branches %}{% if b.id == branch_id %} <strong>{{ b.name }}</strong>{% endif %}{% endfor %}
+  {%- endif %}.</p>
+{% endif %}
+
+{# The one cause of "the same task twice" that nothing else can catch: the
+   same job entered as two rules, usually a bulk import run twice. They are
+   two different rules, so they legitimately make two tasks a day. #}
+{% if dupes %}
+<div class="danger-box readable">
+  <strong>{{ dupes|length }} checklist item(s) look like they were added
+    twice.</strong>
+  <p style="margin:6px 0 0">Each pair below makes <em>two</em> tasks a day for
+    the same person. Switch one of each pair <strong>Off</strong> and the
+    double stops tomorrow — the tasks already made are not touched.</p>
+  <ul style="margin:8px 0 0">
+    {% for g in dupes %}
+    <li style="margin-bottom:4px">
+      <strong>{{ g[0].title }}</strong> — {{ g[0].doer.name }}
+      ({{ g|length }} copies:
+      {% for r in g %}<a href="/recurring/{{ r.id }}">#{{ r.id }}</a>{% if not loop.last %}, {% endif %}{% endfor %})
+    </li>
+    {% endfor %}
+  </ul>
+</div>
 {% endif %}
 
 
-<div class="grid g2">
+{# The form used to sit beside the list and take half the window, which left
+   every task title wrapping over three lines. It is behind a button now: it
+   is opened a few times a week, and the list is read every day. #}
+<details class="card" style="margin-bottom:14px">
+  <summary style="cursor:pointer;font-weight:600">+ New checklist item</summary>
+  <form method="post" action="/recurring" style="margin-top:12px">
+    {{ rule_fields(doers, branches, frequencies, priorities, today_iso) }}
+    <div style="margin-top:18px"><button class="btn">Create rule</button></div>
+  </form>
+</details>
+
+<div>
   <div>
     {% if rules %}
     <div class="table-wrap"><table>
-      <tr><th>Task</th><th>Doer</th><th>Priority</th><th>Schedule</th>
+      <tr><th>Task</th><th>Doer</th><th>Company</th><th>Priority</th><th>Schedule</th>
           <th>Due</th><th></th><th></th></tr>
       {% for r in rules %}
       <tr>
@@ -34,6 +101,7 @@
           <div style="color:var(--muted);font-size:12px">
             last spawned {{ r.last_spawned_on or 'never' }}</div></td>
         <td>{{ r.doer.name }}</td>
+        <td>{{ r.branch.name if r.branch else 'All companies' }}</td>
         <td><span class="chip {{ r.priority.value }}"
                   title="Counts as {{ PRIORITY_WEIGHT[r.priority] }} tasks in the score"
               >{{ r.priority.value }} {{ PRIORITY_WEIGHT[r.priority] }}×</span></td>
@@ -50,14 +118,9 @@
     <form method="post" action="/recurring/run" style="margin-top:14px">
       <button class="btn ghost sm">Run spawner now</button>
     </form>
-    {% else %}<div class="empty">No checklist items yet.</div>{% endif %}
+    {% else %}<div class="empty">Nothing matches. Clear the filters to see
+      every checklist item.</div>{% endif %}
   </div>
-
-  <form method="post" action="/recurring" class="card">
-    <strong>New checklist item</strong>
-    {{ rule_fields(doers, branches, frequencies, priorities, today_iso) }}
-    <div style="margin-top:18px"><button class="btn">Create rule</button></div>
-  </form>
 
 {{ rule_script() }}
 </div>

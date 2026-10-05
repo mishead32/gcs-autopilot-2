@@ -4,7 +4,7 @@
 <div class="page-head">
   <div><h1>{{ flow.name }}</h1></div>
   {% if user.has_manage_flow %}
-  <a class="btn ghost" href="/flows/{{ flow.id }}/edit">Edit flow &amp; start form</a>
+  <a class="btn ghost" href="/flows/{{ flow.id }}/edit">Edit steps &amp; questions</a>
   {% endif %}
 </div>
 <p class="sub">{{ flow.description or '' }} {% if flow.branch %}· {{ flow.branch.name }}{% endif %}</p>
@@ -18,7 +18,9 @@
         <div class="t">{{ s.position }}. {{ s.title }}</div>
         <div class="m">
           {{ s.default_doer.name if s.default_doer else 'Doer picked at run time' }}
-          · TAT {{ s.tat_label }}{% if s.due_from_pos %} from step {{ s.due_from_pos }}'s date{% endif %}
+          · TAT {{ s.tat_label }}{% if s.due_from_pos %}, counted from step
+          {{ s.due_from_pos }}'s planned date{% else %}, counted from when this
+          step opens{% endif %}
           · {{ s.priority.value }}
           {% if s.requires_audit %} · audited{% endif %}
         </div>
