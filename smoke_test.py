@@ -6609,5 +6609,44 @@ with _slS() as _d:
 
 
 
+# ==========================================================================
+print("\n== the Detective's buttons come back to the Detective ==")
+# The bug: pressing "Look again" landed people on the dashboard. The page
+# was never in the remembered-list table, so "back to the list" fell through
+# to whatever list had been opened last — which, for somebody who starts the
+# day on the dashboard, was the dashboard.
+from app import lastview as _lvD
+
+check("the detective page is one the software remembers",
+      _lvD.label_for("/detective") == "Task Detective AI",
+      _lvD.label_for("/detective"))
+check("so is the CMD board", _lvD.label_for("/cmd") == "the CMD board")
+
+admin.get("/")                                   # start on the dashboard
+admin.get("/detective?verdict=error")            # then open the detective
+for _u in ("/detective/retry", "/detective/run"):
+    _r = admin.post(_u, data={"limit": "25"}, follow_redirects=False)
+    _to = _r.headers.get("location", "")
+    check(f"{_u} comes back to the detective, not the dashboard",
+          _to.split("?")[0] == "/detective", _to)
+
+admin.get("/detective?verdict=error&q=404")
+_r = admin.post("/detective/retry", data={"limit": "25"}, follow_redirects=False)
+check("and the verdict tab and search survive the press",
+      _r.headers.get("location") == "/detective?verdict=error&q=404",
+      _r.headers.get("location"))
+
+# Even when the last thing opened was a different list entirely.
+admin.get("/tasks?scope=all&status=overdue")
+_r = admin.post("/detective/retry", data={"limit": "25"}, follow_redirects=False)
+check("a task list opened in between does not steal the redirect",
+      _r.headers.get("location", "").split("?")[0] == "/detective",
+      _r.headers.get("location"))
+_r = admin.post("/detective/run", data={"limit": "25"}, follow_redirects=False)
+check("the same for the backfill button",
+      _r.headers.get("location", "").split("?")[0] == "/detective",
+      _r.headers.get("location"))
+
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

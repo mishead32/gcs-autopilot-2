@@ -40,6 +40,12 @@ LIST_PAGES = [
     ("/recurring", "Checklist"),
     ("/flows", "FMS"),
     ("/help", "Help Desk"),
+    # These two were missing, and the symptom was not a lost filter but a
+    # lost page: pressing "Look again" on the Detective sent people to the
+    # dashboard, because the detective page had never been remembered and
+    # the fallback fell through to whatever list they last opened.
+    ("/detective", "Task Detective AI"),
+    ("/cmd", "the CMD board"),
     ("/reports/tasks", "the report"),
     ("/reports/audit", "the audit report"),
     ("/reports/score", "the EM score report"),

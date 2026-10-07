@@ -49,6 +49,19 @@ def _day(raw: str):
         return None
 
 
+
+def _back(request: Request) -> str:
+    """Back to the Detective page, with the verdict tab and filters intact.
+
+    lastview remembers one page across the whole site, so asking it for "the
+    last list" after pressing a button HERE can hand back the task list or
+    the dashboard — which is exactly what it did. The remembered address is
+    used only when it really is this page.
+    """
+    saved = lastview.url(request, "/detective")
+    return saved if saved.split("?")[0] == "/detective" else "/detective"
+
+
 @router.get("/detective", response_class=HTMLResponse)
 def detective_page(request: Request, verdict: str = "suspect",
                    source: str = "", doer: str = "", branch: str = "",
@@ -185,8 +198,7 @@ def run_detective(request: Request, background: BackgroundTasks,
     """
     if not detective.available():
         flash.set(request, "info", detective.why_not())
-        return RedirectResponse(lastview.url(request, "/detective"),
-                                status_code=303)
+        return RedirectResponse(_back(request), status_code=303)
     try:
         n = max(1, min(100, int(limit)))
     except ValueError:
@@ -203,7 +215,7 @@ def run_detective(request: Request, background: BackgroundTasks,
               f"Checking {len(todo)} task(s) in the background. "
               "Refresh in a minute to see what came back."
               if todo else "Every finished task has already been checked.")
-    return RedirectResponse(lastview.url(request, "/detective"), status_code=303)
+    return RedirectResponse(_back(request), status_code=303)
 
 
 @router.post("/detective/retry")
@@ -224,8 +236,7 @@ def retry_failed(request: Request, background: BackgroundTasks,
     """
     if not detective.available():
         flash.set(request, "info", detective.why_not())
-        return RedirectResponse(lastview.url(request, "/detective"),
-                                status_code=303)
+        return RedirectResponse(_back(request), status_code=303)
     try:
         n = max(1, min(100, int(limit)))
     except ValueError:
@@ -247,7 +258,7 @@ def retry_failed(request: Request, background: BackgroundTasks,
               f"Looking again at {len(todo)} task(s) that could not be "
               "checked. Refresh in a minute."
               if todo else "Nothing is waiting on a failed check.")
-    return RedirectResponse(lastview.url(request, "/detective"), status_code=303)
+    return RedirectResponse(_back(request), status_code=303)
 
 
 @router.post("/detective/task/{task_id}")
