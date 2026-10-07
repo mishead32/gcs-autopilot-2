@@ -6822,10 +6822,11 @@ with _slR2() as _d:
 
 # Google answering properly again: the queue drains with nobody pressing.
 _realcallR = _dR._call
-_dR._call = lambda parts, client=None: {"candidates": [{"content": {"parts": [
-    {"text": _jsR2.dumps({"verdict": "ok", "confidence": 80,
-                          "remark": "the proof matches the task",
-                          "looked_at": "a note"})}]}}]}
+# _call returns the model's TEXT now, whichever service answered, so the
+# stub returns text rather than one provider's envelope.
+_dR._call = lambda parts, client=None: _jsR2.dumps(
+    {"verdict": "ok", "confidence": 80,
+     "remark": "the proof matches the task", "looked_at": "a note"})
 # Never-checked work comes first, so to exercise the retry path the queue of
 # new work is emptied for the moment — which is the state the live site is
 # in: one task never checked, fifty-five stuck.
@@ -6966,6 +6967,131 @@ with _slQ() as _d:
 
 _dQ.AI_KEY, _dQ.AI_ENABLED = _keyQ, _onQ
 _dQ._quota_hit_on, _dQ.AI_DAILY_LIMIT = _hitQ, _capQ
+
+
+# ==========================================================================
+print("\n== the detective can use Cloudflare instead of Gemini ==")
+# Gemini's free allowance fell to about twenty checks a day. Cloudflare's
+# free allowance runs to hundreds, reads a screenshot, and commits to not
+# training on what is sent — which matters, because delegation work here
+# includes legal matters and complaints that name people.
+import json as _jsP, httpx as _hxP, base64 as _b64P
+from datetime import datetime as _dtP
+from app.db import SessionLocal as _slP
+from app.models import (Task as _TP, TaskSource as _SRP, TaskStatus as _STP,
+                        User as _UP, Attachment as _ATP, AiVerdict as _AVP)
+from app.services import detective as _dP
+from sqlalchemy import select as _spP
+
+_wasP = (_dP.AI_PROVIDER, _dP.CF_ACCOUNT, _dP.CF_TOKEN, _dP.AI_KEY,
+         _dP.AI_ENABLED, _dP._quota_hit_on, _dP.AI_DAILY_LIMIT)
+
+_ANSWERP = _jsP.dumps({"verdict": "unrelated", "confidence": 77,
+                       "remark": "The screenshot is a chat about a gym "
+                                 "membership, not the bus GPS.",
+                       "looked_at": "1 screenshot"})
+_PNGP = _b64P.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+from app.models import AiAudit as _AAP
+with _slP() as _d:
+    # A quota refusal stored earlier today closes the day for real, which is
+    # right but is not what this section is about.
+    for _old in _d.scalars(_spP(_AAP).where(
+            _AAP.verdict == _AVP.ERROR, _AAP.remark.like("%429%"))).all():
+        _old.remark = "(cleared before the provider checks)"
+    _d.commit()
+    _dP._quota_hit_on = None
+    _dP.AI_DAILY_LIMIT = _dP.spent_today(_d, 1) + 20
+    _bP = _d.scalar(_spP(_UP).where(_UP.email == "mis@gcs.local"))
+    _drP = _d.scalar(_spP(_UP).where(_UP.email == "amit@gcs.local"))
+    _tP = _TP(org_id=1, branch_id=_drP.branch_id,
+              title=f"SMOKE provider {RUN}: fit GPS to bus 4",
+              details="Send a photo of the fitted unit",
+              assigner_id=_bP.id, doer_id=_drP.id, source=_SRP.DELEGATION,
+              due_at=_dtP(2026, 10, 7, 18, 0), status=_STP.SUBMITTED,
+              submitted_at=_dtP(2026, 10, 7, 9, 0), completion_note="done")
+    _d.add(_tP)
+    _d.flush()
+    _d.add(_ATP(task_id=_tP.id, uploaded_by_id=_drP.id, filename="proof.png",
+                stored_name=f"smoke-{RUN}.png", content_type="image/png",
+                size=len(_PNGP), data=_PNGP, storage="db"))
+    _d.commit()
+    _tidP = _tP.id
+
+_sawP = {}
+def _cloudflareP(request):
+    _sawP["url"] = str(request.url)
+    _sawP["auth"] = request.headers.get("authorization")
+    _body = _jsP.loads(request.content)
+    _sawP["image"] = _body.get("image", "")
+    _sawP["system"] = _body["messages"][0]["content"]
+    _sawP["user"] = _body["messages"][1]["content"]
+    return _hxP.Response(200, json={"result": {"response": _ANSWERP},
+                                    "success": True})
+
+_dP.AI_PROVIDER, _dP.CF_ACCOUNT, _dP.CF_TOKEN = "cloudflare", "acct123", "tok456"
+_dP.AI_ENABLED, _dP._quota_hit_on = True, None
+_dP.AI_KEY = ""                       # no Gemini key at all: it must not matter
+
+check("with a Cloudflare account it is available even with no Gemini key",
+      _dP.available())
+check("and the model it records is Cloudflare's",
+      _dP.current_model().startswith("@cf/"), _dP.current_model())
+
+with _slP() as _d:
+    _rowP = _dP.review(_d, _d.get(_TP, _tidP),
+                       _hxP.Client(transport=_hxP.MockTransport(_cloudflareP)))
+check("it reaches the same verdict through Cloudflare",
+      _rowP.verdict == _AVP.UNRELATED, _rowP.verdict)
+check("and writes the same kind of remark",
+      "gym membership" in _rowP.remark, _rowP.remark[:60])
+check("the account id is in the address",
+      "/accounts/acct123/ai/run/" in _sawP["url"], _sawP["url"])
+check("the token is sent as a bearer token",
+      _sawP["auth"] == "Bearer tok456", _sawP["auth"])
+check("the screenshot really is sent, as a data URI",
+      _sawP["image"].startswith("data:image/png;base64,")
+      and len(_sawP["image"]) > 60, _sawP["image"][:40])
+check("the same instructions go with it",
+      "does this evidence show THIS task" in _sawP["system"])
+check("and so does the task, what it asked for and the note",
+      all(x in _sawP["user"] for x in ("fit GPS to bus 4", "fitted unit",
+                                       "done")),
+      _sawP["user"][:120])
+
+# A failure on one provider must read like a failure, not like a verdict.
+def _brokenP(request):
+    return _hxP.Response(401, text='{"errors":[{"message":"bad token"}]}')
+with _slP() as _d:
+    _badP = _dP.review(_d, _d.get(_TP, _tidP),
+                       _hxP.Client(transport=_hxP.MockTransport(_brokenP)))
+check("a rejected token is stored as 'could not check', not as an opinion",
+      _badP.verdict == _AVP.ERROR and "401" in _badP.remark, _badP.remark[:60])
+
+# Missing settings must say which ones, in words somebody can act on.
+_dP.CF_ACCOUNT = ""
+check("without its settings it is not available", not _dP.available())
+check("and it names the two settings that are missing",
+      "CF_ACCOUNT_ID" in _dP.why_not() and "CF_API_TOKEN" in _dP.why_not(),
+      _dP.why_not())
+_dP.CF_ACCOUNT = "acct123"
+
+# Switching back to Gemini must change nothing else.
+def _geminiP(request):
+    return _hxP.Response(200, json={"candidates": [{"content": {"parts": [
+        {"text": _ANSWERP}]}}]})
+_dP.AI_PROVIDER, _dP.AI_KEY, _dP._quota_hit_on = "gemini", "test-key", None
+with _slP() as _d:
+    _rowG2 = _dP.review(_d, _d.get(_TP, _tidP),
+                        _hxP.Client(transport=_hxP.MockTransport(_geminiP)))
+check("Gemini still works exactly as before",
+      _rowG2.verdict == _AVP.UNRELATED, _rowG2.verdict)
+check("and the model recorded says which service answered",
+      _rowG2.model.startswith("gemini"), _rowG2.model)
+
+(_dP.AI_PROVIDER, _dP.CF_ACCOUNT, _dP.CF_TOKEN, _dP.AI_KEY,
+ _dP.AI_ENABLED, _dP._quota_hit_on, _dP.AI_DAILY_LIMIT) = _wasP
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

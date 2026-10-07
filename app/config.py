@@ -50,6 +50,17 @@ BANNER = os.getenv("MIDAP_BANNER", "")
 # The key is read from the environment and never written to the database, a
 # template or a log — same rule as every other secret here.
 AI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+# WHICH service does the looking. Gemini reads a screenshot better, but its
+# free allowance is about twenty checks a day; Cloudflare's free allowance is
+# measured in "neurons" and runs to hundreds, and Cloudflare commits to not
+# training on what is sent — which matters, because delegation work here
+# includes legal matters and complaints that name people.
+AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+# Cloudflare Workers AI. The account id is on the right of the Cloudflare
+# dashboard; the token is made under AI → Workers AI → Use REST API.
+CF_ACCOUNT = os.getenv("CF_ACCOUNT_ID", "").strip()
+CF_TOKEN = os.getenv("CF_API_TOKEN", "").strip()
+CF_MODEL = os.getenv("CF_MODEL", "@cf/meta/llama-3.2-11b-vision-instruct").strip()
 # Google retires a model and the old name starts answering 404 — which is
 # what happened to gemini-2.5-flash. The name is settable here so a retirement
 # can be fixed from Render without a deploy, and the detective also follows
@@ -83,4 +94,5 @@ AI_SINCE = os.getenv("AI_CHECK_FROM", "2026-10-03").strip()
 # having no opinion. So the software stops at the line itself and picks the
 # work up again tomorrow, oldest first. Raise it the day somebody pays for a
 # bigger allowance; 0 means no limit.
-AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT", "20") or 0)
+AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT")
+                     or (20 if AI_PROVIDER == "gemini" else 200))

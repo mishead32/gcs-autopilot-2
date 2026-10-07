@@ -37,7 +37,8 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..config import (AI_KEY, AI_MODEL, AI_ENABLED, AI_MAX_FILES,
                       AI_MAX_FILE_MB, AI_TIMEOUT, AI_SOURCES, AI_SINCE,
-                      AI_DAILY_LIMIT, UPLOAD_DIR)
+                      AI_DAILY_LIMIT, AI_PROVIDER, CF_ACCOUNT, CF_TOKEN,
+                      CF_MODEL, UPLOAD_DIR)
 from ..models import AiAudit, AiVerdict, Attachment, Task, TaskSource
 
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -87,7 +88,11 @@ TEXTY = ("text/plain", "text/csv", "application/csv", "text/markdown")
 
 def available() -> bool:
     """Whether the detective can run at all."""
-    return bool(AI_ENABLED and AI_KEY)
+    if not AI_ENABLED:
+        return False
+    if AI_PROVIDER == "cloudflare":
+        return bool(CF_ACCOUNT and CF_TOKEN)
+    return bool(AI_KEY)
 
 
 # ------------------------------------------------------------- what it sees -
@@ -208,6 +213,13 @@ def why_not() -> str:
     if not AI_ENABLED:
         return ("Task Detective is switched off. Remove the AI_AUDIT setting "
                 "on the server, or set it to on, to switch it back.")
+    if AI_PROVIDER == "cloudflare":
+        if not (CF_ACCOUNT and CF_TOKEN):
+            return ("Task Detective is set to use Cloudflare but is missing "
+                    "its settings. Add CF_ACCOUNT_ID and CF_API_TOKEN in the "
+                    "server's environment settings. Until then nothing is "
+                    "sent anywhere.")
+        return ""
     if not AI_KEY:
         return ("Task Detective needs a Gemini API key. Add one as "
                 "GEMINI_API_KEY in the server's environment settings and it "
@@ -305,15 +317,15 @@ def _parts_for(task: Task, files: list[Attachment]) -> tuple[list[dict], int, in
 
 
 # ----------------------------------------------------------- the answer ----
-def _read_reply(payload: dict) -> dict:
-    """Pull our four fields out of whatever came back.
+def _read_reply(text: str) -> dict:
+    """Pull our four fields out of whatever the model wrote.
 
-    Models wrap JSON in prose and in ``` fences however firmly you ask them
-    not to, so this digs the object out rather than trusting the shape.
+    Takes the model's TEXT, not one service's envelope, so the same reader
+    serves every provider. Models wrap JSON in prose and in ``` fences
+    however firmly you ask them not to, so this digs the object out rather
+    than trusting the shape.
     """
-    try:
-        text = payload["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
+    if not (text or "").strip():
         raise ValueError("the reply had no text in it")
 
     body = text.strip()
@@ -358,7 +370,7 @@ _REPLACEMENT = re.compile(r"models/([A-Za-z0-9.\-_]+)")
 
 
 def current_model() -> str:
-    return _live_model
+    return CF_MODEL if AI_PROVIDER == "cloudflare" else _live_model
 
 
 def _retirement(status: int, text: str) -> str | None:
@@ -379,7 +391,7 @@ def _retirement(status: int, text: str) -> str | None:
     return names[-1] if names else None
 
 
-def _call(parts: list[dict], client: httpx.Client | None = None) -> dict:
+def _call_gemini(parts: list[dict], client: httpx.Client) -> str:
     global _live_model
     body = {
         "system_instruction": {"parts": [{"text": SYSTEM}]},
@@ -387,28 +399,83 @@ def _call(parts: list[dict], client: httpx.Client | None = None) -> dict:
         "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
                              "responseMimeType": "application/json"},
     }
+    for attempt in (1, 2):
+        r = client.post(API.format(model=_live_model), json=body,
+                        headers={"x-goog-api-key": AI_KEY,
+                                 "content-type": "application/json"})
+        if r.status_code == 200:
+            try:
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception:
+                raise ValueError("the reply had no text in it")
+        moved = _retirement(r.status_code, r.text) if attempt == 1 else None
+        if moved:
+            # Say it in the log, once, so whoever reads it knows the name in
+            # the settings is out of date even though nothing broke.
+            print(f"Task Detective: {_live_model} is retired, "
+                  f"using {moved} instead")
+            _live_model = moved
+            continue
+        # The message is kept because a rate limit, a bad key and a dead
+        # model need different answers from whoever reads it, and "it
+        # failed" tells them none of the three.
+        raise ValueError(f"the AI service answered {r.status_code}: "
+                         f"{r.text[:200]}")
+
+
+def _call_cloudflare(parts: list[dict], client: httpx.Client) -> str:
+    """The same question, asked of Cloudflare Workers AI.
+
+    Its vision model takes ONE image, as a base64 data URI beside the
+    messages — not a part among many. So the text is joined into a single
+    question and the first image goes with it; any others are named in the
+    text rather than silently dropped, because "no proof attached" about a
+    task with four screenshots is the worst answer this thing can give.
+    """
+    said: list[str] = []
+    image = None
+    for p in parts:
+        if "text" in p:
+            said.append(p["text"])
+        elif "inline_data" in p and image is None:
+            d = p["inline_data"]
+            image = f"data:{d.get('mime_type') or 'image/png'};base64,{d['data']}"
+        elif "inline_data" in p:
+            said.append("(a further image was attached and is not shown here)")
+
+    body = {"messages": [{"role": "system", "content": SYSTEM},
+                         {"role": "user", "content": "\n\n".join(said)}],
+            "temperature": 0, "max_tokens": 600}
+    if image:
+        body["image"] = image
+
+    r = client.post(
+        f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}"
+        f"/ai/run/{CF_MODEL}",
+        json=body, headers={"Authorization": f"Bearer {CF_TOKEN}",
+                            "content-type": "application/json"})
+    if r.status_code != 200:
+        raise ValueError(f"the AI service answered {r.status_code}: "
+                         f"{r.text[:200]}")
+    try:
+        out = r.json()["result"]
+    except Exception:
+        raise ValueError("the reply had no text in it")
+    # Cloudflare has used both shapes; take whichever came back rather than
+    # failing on a wrapper.
+    if isinstance(out, dict):
+        out = out.get("response") or out.get("text") or ""
+    return out if isinstance(out, str) else ""
+
+
+def _call(parts: list[dict], client: httpx.Client | None = None) -> str:
+    """Ask whichever service is configured, and return its plain text."""
     owned = client is None
     client = client or httpx.Client(timeout=AI_TIMEOUT)
     try:
-        for attempt in (1, 2):
-            r = client.post(API.format(model=_live_model), json=body,
-                            headers={"x-goog-api-key": AI_KEY,
-                                     "content-type": "application/json"})
-            if r.status_code == 200:
-                return r.json()
-            moved = _retirement(r.status_code, r.text) if attempt == 1 else None
-            if moved:
-                # Say it in the log, once, so whoever reads it knows the name
-                # in the settings is out of date even though nothing broke.
-                print(f"Task Detective: {_live_model} is retired, "
-                      f"using {moved} instead")
-                _live_model = moved
-                continue
-            # The message is kept because a rate limit, a bad key and a dead
-            # model need different answers from whoever reads it, and "it
-            # failed" tells them none of the three.
-            raise ValueError(f"the AI service answered {r.status_code}: "
-                             f"{r.text[:200]}")
+        if AI_PROVIDER == "cloudflare":
+            return _call_cloudflare(parts, client)
+        return _call_gemini(parts, client)
     finally:
         if owned:
             client.close()
