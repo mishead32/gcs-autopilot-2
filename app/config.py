@@ -62,3 +62,18 @@ AI_ENABLED = os.getenv("AI_AUDIT", "on").strip().lower() not in ("off", "0", "no
 AI_MAX_FILES = int(os.getenv("AI_MAX_FILES", "6") or 6)
 AI_MAX_FILE_MB = float(os.getenv("AI_MAX_FILE_MB", "4") or 4)
 AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "45") or 45)
+# WHICH work the detective looks at, and HOW FAR BACK.
+#
+# Delegation only to begin with: a checklist job is the same few words every
+# day and the proof is the same screenshot, so a machine reading them adds
+# little and spends the whole free allowance doing it. Delegation is where
+# the proof is different every time and where a wrong attachment actually
+# hides something. Widen it here when that stops being true — "delegation,
+# checklist,fms" is accepted.
+AI_SOURCES = tuple(
+    s.strip().lower() for s in
+    os.getenv("AI_SOURCES", "delegation").split(",") if s.strip())
+# Nothing finished before this date is looked at. Years of old work would
+# cost a fortune in allowance to check and tells nobody anything they can
+# still act on. Written YYYY-MM-DD; blank means no limit.
+AI_SINCE = os.getenv("AI_CHECK_FROM", "2026-10-03").strip()

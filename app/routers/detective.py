@@ -59,8 +59,13 @@ def detective_page(request: Request, verdict: str = "suspect",
     verdict = verdict if verdict in VERDICT_LABELS else "suspect"
     text_q = search.clean(q)
 
-    base = (select(AiAudit).join(Task, Task.id == AiAudit.task_id)
-            .where(AiAudit.org_id == user.org_id))
+    # Only the work the detective is set to watch. Rows from a wider setting
+    # — or from before the start date — stay in the database but off the
+    # page: a list of six hundred failed checks on work nothing will ever
+    # look at again is noise that buries the handful that matter.
+    base = detective.in_scope(
+        select(AiAudit).join(Task, Task.id == AiAudit.task_id)
+        .where(AiAudit.org_id == user.org_id))
 
     doer_id = int(doer) if doer.strip().isdigit() else None
     branch_id = int(branch) if branch.strip().isdigit() else None
@@ -115,11 +120,11 @@ def detective_page(request: Request, verdict: str = "suspect",
     # How much finished work has never been looked at — the honest headline
     # for a page that would otherwise imply it had seen everything.
     checked = select(AiAudit.task_id).where(AiAudit.org_id == user.org_id)
-    unchecked = db.scalar(
+    unchecked = db.scalar(detective.in_scope(
         select(func.count()).select_from(Task).where(
             Task.org_id == user.org_id,
             Task.submitted_at.is_not(None),
-            Task.id.not_in(checked))) or 0
+            Task.id.not_in(checked)))) or 0
 
     if xlsx.wants(export):
         return xlsx.one("task-detective", "Task Detective AI", [
@@ -156,6 +161,11 @@ def detective_page(request: Request, verdict: str = "suspect",
         "date_to": end.isoformat() if end else "",
         "unchecked": unchecked,
         "on": detective.available(), "why_not": detective.why_not(),
+        "scope": detective.scope_words(),
+        "work_types": [(k, lbl) for k, lbl in
+                       [("delegation", "Delegation"), ("checklist", "Checklist"),
+                        ("fms", "FMS")]
+                       if SOURCES[k] in detective.WATCHED],
         "labels": AI_VERDICT_LABELS,
     })
 
@@ -182,10 +192,10 @@ def run_detective(request: Request, background: BackgroundTasks,
     except ValueError:
         n = 25
     checked = select(AiAudit.task_id).where(AiAudit.org_id == user.org_id)
-    todo = list(db.scalars(
+    todo = list(db.scalars(detective.in_scope(
         select(Task.id).where(Task.org_id == user.org_id,
                               Task.submitted_at.is_not(None),
-                              Task.id.not_in(checked))
+                              Task.id.not_in(checked)))
         .order_by(Task.submitted_at.desc()).limit(n)).all())
     for task_id in todo:
         background.add_task(detective.review_quietly, task_id)
@@ -222,8 +232,9 @@ def retry_failed(request: Request, background: BackgroundTasks,
         n = 25
 
     newest: dict[int, AiAudit] = {}
-    for r in db.scalars(
-            select(AiAudit).where(AiAudit.org_id == user.org_id)
+    for r in db.scalars(detective.in_scope(
+            select(AiAudit).join(Task, Task.id == AiAudit.task_id)
+            .where(AiAudit.org_id == user.org_id))
             .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all():
         newest[r.task_id] = r
     todo = [r.task_id for r in sorted(

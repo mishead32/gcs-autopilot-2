@@ -11,7 +11,8 @@
     <h1>Task Detective AI</h1>
     <p class="sub readable">A second pair of eyes on finished work: it reads
       the task, the note and the attached screenshots, and says whether the
-      proof actually shows the job being done.</p>
+      proof actually shows the job being done.<br>
+      <strong>Watching {{ scope }}.</strong> Nothing else is sent anywhere.</p>
   </div>
   <div>
     {{ excel_btn(base ~ '&export=xlsx',
@@ -63,14 +64,19 @@
     <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
            placeholder="Words from the task, or from what the AI said">
   </div>
+  {# Only offered when the detective is watching more than one kind of work.
+     A dropdown whose other choices can only ever return nothing is worse
+     than no dropdown. #}
+  {% if work_types|length > 1 %}
   <div>
     <label>Work type</label>
     <select name="source"><option value="">All work</option>
-      {% for k, label in [('delegation','Delegation'),('checklist','Checklist'),('fms','FMS')] %}
+      {% for k, label in work_types %}
       <option value="{{ k }}" {{ 'selected' if source == k }}>{{ label }}</option>
       {% endfor %}
     </select>
   </div>
+  {% endif %}
   <div>
     <label>Employee</label>
     <select name="doer"><option value="">Everyone</option>

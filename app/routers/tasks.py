@@ -935,7 +935,7 @@ async def submit_task(task_id: int, request: Request,
     # a slow or dead AI service can never be the reason a doer's submission
     # appears to fail. The worst case is no remark, which is where this
     # software was last week.
-    if detective.available():
+    if detective.available() and detective.watches(task):
         background.add_task(detective.review_quietly, task.id)
 
     flash.set(request, "submitted" if task.requires_audit else "completed",

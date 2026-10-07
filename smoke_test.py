@@ -6510,5 +6510,104 @@ check("a doer cannot press it",
 _detR.AI_KEY, _detR.AI_ENABLED, _detR._live_model = _keyR, _onR, _modelR
 
 
+# ==========================================================================
+print("\n== the detective only looks at what it is set to ==")
+# Delegation only, and only work finished from 3 Oct on. A checklist job is
+# the same few words every day with the same screenshot; delegation is where
+# the proof differs every time. The rule has to hold in four places at once
+# — the hook on submission, the page, the backfill and the retry — because
+# two of them disagreeing is how a page says "308 never checked" about work
+# nothing will ever check.
+from datetime import datetime as _dtS, date as _dateS
+from app.db import SessionLocal as _slS
+from app.models import (Task as _TS, TaskSource as _SRS, TaskStatus as _STS,
+                        AiAudit as _AAS, AiVerdict as _AVS, User as _US)
+from app.services import detective as _detS
+from sqlalchemy import select as _spS
+
+check("it is watching delegation only",
+      [s.value for s in _detS.WATCHED] == ["delegation"],
+      [s.value for s in _detS.WATCHED])
+check("and starting from 3 Oct 2026",
+      _detS._since() == _dateS(2026, 10, 3), _detS._since())
+check("the page says so in words",
+      _detS.scope_words() == "Delegation work finished on or after 03 Oct 2026",
+      _detS.scope_words())
+
+with _slS() as _d:
+    _bS = _d.scalar(_spS(_US).where(_US.email == "mis@gcs.local"))
+    _dS = _d.scalar(_spS(_US).where(_US.email == "amit@gcs.local"))
+
+    def _mkS(src, sub):
+        t = _TS(org_id=1, branch_id=_dS.branch_id,
+                title=f"SMOKE scope {RUN} {src.value} {sub:%d%b%H%M}",
+                assigner_id=_bS.id, doer_id=_dS.id, source=src,
+                due_at=_dtS(2026, 10, 4, 18, 0), status=_STS.SUBMITTED,
+                submitted_at=sub)
+        _d.add(t)
+        return t
+
+    _casesS = [
+        ("delegation finished after the start date", _mkS(_SRS.DELEGATION, _dtS(2026, 10, 4, 10)), True),
+        ("delegation finished the day before it", _mkS(_SRS.DELEGATION, _dtS(2026, 10, 2, 23, 59)), False),
+        ("delegation finished on the start date itself", _mkS(_SRS.DELEGATION, _dtS(2026, 10, 3, 0, 1)), True),
+        ("a checklist job", _mkS(_SRS.RECURRING, _dtS(2026, 10, 5, 10)), False),
+        ("an FMS step", _mkS(_SRS.FLOW, _dtS(2026, 10, 5, 10)), False),
+    ]
+    _d.commit()
+    _idsS = [(n, t.id, w) for n, t, w in _casesS]
+    for _n, _t, _w in _casesS:
+        check(f"{_n} is {'watched' if _w else 'left alone'}",
+              _detS.watches(_t) == _w, _detS.watches(_t))
+    # The SQL form of the same rule has to pick exactly the same rows.
+    _gotS = set(_d.scalars(_detS.in_scope(
+        _spS(_TS.id).where(_TS.id.in_([i for _, i, _ in _idsS])))).all())
+    check("the query filter picks exactly the same tasks",
+          _gotS == {i for _, i, w in _idsS if w}, sorted(_gotS))
+
+    # Rows stored for work that is now out of scope stay in the database but
+    # off the page: six hundred failed checks on work nothing will look at
+    # again bury the handful that matter.
+    for _n, _i, _w in _idsS:
+        _d.add(_AAS(org_id=1, task_id=_i, verdict=_AVS.ERROR, confidence=0,
+                    remark=f"SMOKE old failure {RUN}", model="retired"))
+    _d.commit()
+
+_pageS = admin.get("/detective?verdict=all").text
+for _n, _i, _w in _idsS:
+    check(f"the page {'shows' if _w else 'hides'} {_n}",
+          (f'/tasks/{_i}"' in _pageS) == _w)
+check("the work-type filter is not offered when only one kind is watched",
+      "Work type" not in _pageS)
+check("and the page prints what it is watching",
+      "Watching Delegation work finished on or after 03 Oct 2026"
+      in " ".join(_pageS.split()))
+
+# Nothing out of scope is ever handed to the AI, whoever asks.
+_spentS = []
+_realS = _detS.review
+_detS.review = lambda db, task, client=None: _spentS.append(task.id)
+for _n, _i, _w in _idsS:
+    _detS.review_quietly(_i)
+_detS.review = _realS
+check("only the watched tasks were ever sent for checking",
+      set(_spentS) == {i for _, i, w in _idsS if w}, sorted(set(_spentS)))
+
+# And a checklist submission does not start a check at all.
+_clS = mgr.post("/tasks/new", data={
+    "title": f"SMOKE scope submit {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-28T23:59"})
+_clidS = int(_re.findall(r"/tasks/(\d+)/comment", _clS.text)[0])
+with _slS() as _d:
+    _d.get(_TS, _clidS).source = _SRS.RECURRING
+    _d.commit()
+_subS = submit(doer, _clidS, completion_note="done")
+check("a checklist task still submits normally", _subS.status_code == 200)
+with _slS() as _d:
+    check("and no AI check was made for it",
+          _detS.latest_for(_d, _clidS) is None)
+
+
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

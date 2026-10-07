@@ -28,6 +28,7 @@ import base64
 import json
 import re
 import time
+from datetime import date, datetime
 
 import httpx
 from sqlalchemy import select
@@ -35,8 +36,9 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..config import (AI_KEY, AI_MODEL, AI_ENABLED, AI_MAX_FILES,
-                      AI_MAX_FILE_MB, AI_TIMEOUT, UPLOAD_DIR)
-from ..models import AiAudit, AiVerdict, Attachment, Task
+                      AI_MAX_FILE_MB, AI_TIMEOUT, AI_SOURCES, AI_SINCE,
+                      UPLOAD_DIR)
+from ..models import AiAudit, AiVerdict, Attachment, Task, TaskSource
 
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -86,6 +88,51 @@ TEXTY = ("text/plain", "text/csv", "application/csv", "text/markdown")
 def available() -> bool:
     """Whether the detective can run at all."""
     return bool(AI_ENABLED and AI_KEY)
+
+
+# ------------------------------------------------------------- what it sees -
+# The detective does not look at everything, and the limits live here so the
+# page, the backfill, the retry and the hook that fires on submission all
+# agree about what is in and what is out. Two of them disagreeing is how a
+# page ends up saying "308 never checked" about work nothing will ever check.
+def _since() -> date | None:
+    try:
+        return date.fromisoformat(AI_SINCE) if AI_SINCE else None
+    except ValueError:
+        return None
+
+
+WATCHED = tuple(s for s in TaskSource if s.value in AI_SOURCES)
+
+
+def scope_words() -> str:
+    """What it is watching, in words, for the page to print."""
+    names = {TaskSource.DELEGATION: "Delegation",
+             TaskSource.RECURRING: "Checklist", TaskSource.FLOW: "FMS"}
+    kinds = " and ".join(names.get(s, s.value) for s in WATCHED) or "nothing"
+    start = _since()
+    return (f"{kinds} work finished on or after {start:%d %b %Y}"
+            if start else f"{kinds} work")
+
+
+def watches(task: Task) -> bool:
+    """Is this one task the detective's business?"""
+    if task.source not in WATCHED:
+        return False
+    start = _since()
+    if start and (task.submitted_at is None or task.submitted_at.date() < start):
+        return False
+    return True
+
+
+def in_scope(q):
+    """The same rule as a SQL filter, for a query over tasks."""
+    q = q.where(Task.source.in_(WATCHED)) if WATCHED else q.where(False)
+    start = _since()
+    if start:
+        q = q.where(Task.submitted_at >= datetime.combine(
+            start, datetime.min.time()))
+    return q
 
 
 def why_not() -> str:
@@ -348,7 +395,10 @@ def review_quietly(task_id: int) -> None:
     try:
         with SessionLocal() as db:
             task = db.get(Task, task_id)
-            if task is not None:
+            # Checked here as well as by every caller: this is the last gate
+            # before somebody's free allowance is spent, and a caller that
+            # forgets the rule should waste nothing.
+            if task is not None and watches(task):
                 review(db, task)
     except Exception:
         pass
