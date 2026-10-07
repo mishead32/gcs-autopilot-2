@@ -250,15 +250,9 @@ def retry_failed(request: Request, background: BackgroundTasks,
         flash.set(request, "info", detective.budget_words(db, user.org_id))
         return RedirectResponse(_back(request), status_code=303)
 
-    newest: dict[int, AiAudit] = {}
-    for r in db.scalars(detective.in_scope(
-            select(AiAudit).join(Task, Task.id == AiAudit.task_id)
-            .where(AiAudit.org_id == user.org_id))
-            .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all():
-        newest[r.task_id] = r
-    todo = [r.task_id for r in sorted(
-        (r for r in newest.values() if r.verdict == AiVerdict.ERROR),
-        key=lambda r: r.created_at, reverse=True)][:n]
+    # The same list the background top-up works through, so pressing the
+    # button and waiting for it to happen by itself cannot disagree.
+    todo = detective.retry_ids(db, user.org_id, n)
 
     for task_id in todo:
         background.add_task(detective.review_quietly, task_id)

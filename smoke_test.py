@@ -6762,5 +6762,103 @@ _dB.AI_KEY, _dB.AI_ENABLED, _dB._quota_hit_on = _keyB2, _onB2, _hitB2
 _dB.AI_DAILY_LIMIT = _cfgG.AI_DAILY_LIMIT
 
 
+# ==========================================================================
+print("\n== failed checks are picked up again by themselves ==")
+# The state the live site was left in: one task never checked, fifty-five
+# stuck as 429s from before the quota limit existed. The top-up only looked
+# at never-checked work, so the fifty-five would have needed somebody
+# pressing a button for three days running.
+import json as _jsR2, httpx as _hxR2
+from datetime import datetime as _dtR2
+from app.db import SessionLocal as _slR2
+from app.models import (Task as _TR2, TaskSource as _SRR2, TaskStatus as _STR2,
+                        User as _UR2, AiAudit as _AAR2, AiVerdict as _AVR2)
+from app.services import detective as _dR
+from sqlalchemy import select as _spR2, func as _fnR2
+
+_keyR2, _onR2, _hitR2, _capR2 = (_dR.AI_KEY, _dR.AI_ENABLED,
+                                 _dR._quota_hit_on, _dR.AI_DAILY_LIMIT)
+_dR.AI_KEY, _dR.AI_ENABLED, _dR._quota_hit_on = "test-key", True, None
+
+with _slR2() as _d:
+    _dR.AI_DAILY_LIMIT = _dR.spent_today(_d, 1) + 200    # room for this test
+    _bR2 = _d.scalar(_spR2(_UR2).where(_UR2.email == "mis@gcs.local"))
+    _drR2 = _d.scalar(_spR2(_UR2).where(_UR2.email == "amit@gcs.local"))
+    _stuckR = []
+    for _i in range(10):
+        _t = _TR2(org_id=1, branch_id=_drR2.branch_id,
+                  title=f"SMOKE stuck {RUN} {_i}", assigner_id=_bR2.id,
+                  doer_id=_drR2.id, source=_SRR2.DELEGATION,
+                  due_at=_dtR2(2026, 10, 6, 18, 0), status=_STR2.SUBMITTED,
+                  submitted_at=_dtR2(2026, 10, 6, 9, _i))
+        _d.add(_t)
+        _d.flush()
+        _d.add(_AAR2(org_id=1, task_id=_t.id, verdict=_AVR2.ERROR, confidence=0,
+                     remark=f"SMOKE 429 {RUN}: quota", model="retired"))
+        _stuckR.append(_t.id)
+    _d.commit()
+    _queueR = _dR.retry_ids(_d, 1, 100)
+    check("the ones whose last check failed are found",
+          all(i in _queueR for i in _stuckR), len(_queueR))
+    _firstR = [i for i in _queueR if i in _stuckR][:3]
+    check("oldest failure first", _firstR == _stuckR[:3], _firstR)
+
+# Google answering properly again: the queue drains with nobody pressing.
+_realcallR = _dR._call
+_dR._call = lambda parts, client=None: {"candidates": [{"content": {"parts": [
+    {"text": _jsR2.dumps({"verdict": "ok", "confidence": 80,
+                          "remark": "the proof matches the task",
+                          "looked_at": "a note"})}]}}]}
+# Never-checked work comes first, so to exercise the retry path the queue of
+# new work is emptied for the moment — which is the state the live site is
+# in: one task never checked, fifty-five stuck.
+_realPendingR = _dR.pending_ids
+with _slR2() as _d:
+    check("new work is served before a second attempt",
+          _dR.pending_ids(_d, 1, 5) == _realPendingR(_d, 1, 5))
+_dR.pending_ids = lambda db, org_id, limit=25: []
+# Earlier parts of this suite left failed checks of their own, and the queue
+# is worked oldest-failure-first, so it takes a few rounds to reach these.
+_roundsR = 0
+for _ in range(20):
+    _n = _dR.top_up(batch=5)
+    _roundsR += _n
+    with _slR2() as _d:
+        if not [i for i in _dR.retry_ids(_d, 1, 500) if i in _stuckR]:
+            break
+_dR.pending_ids = _realPendingR
+check("the background top-up works through them", _roundsR >= 10, _roundsR)
+with _slR2() as _d:
+    _leftR = [i for i in _dR.retry_ids(_d, 1, 100) if i in _stuckR]
+    check("so the stuck ones are no longer stuck", _leftR == [], _leftR)
+    _okR = _d.scalar(_spR2(_fnR2.count()).select_from(_AAR2)
+                     .where(_AAR2.task_id.in_(_stuckR),
+                            _AAR2.verdict == _AVR2.OK)) or 0
+    check("and each now carries a real verdict", _okR == 10, _okR)
+    check("never-checked work still comes before a second attempt",
+          _dR.pending_ids(_d, 1, 5) is not None)
+
+# A task that can never be answered must not eat the allowance for ever.
+with _slR2() as _d:
+    for _ in range(_dR.MAX_FAILURES + 1):
+        _d.add(_AAR2(org_id=1, task_id=_stuckR[0], verdict=_AVR2.ERROR,
+                     confidence=0, remark="unreadable", model="x"))
+    _d.commit()
+    check("a task that keeps failing is given up on by the automatic retry",
+          _stuckR[0] not in _dR.retry_ids(_d, 1, 100))
+
+# The button and the background worker must agree about what is waiting.
+with _slR2() as _d:
+    _byHandR = _dR.retry_ids(_d, 1, 25)
+_rR2 = admin.post("/detective/retry", data={"limit": "25"}, follow_redirects=False)
+check("the retry button accepts the press", _rR2.status_code == 303)
+check("and works from the same list as the background top-up",
+      isinstance(_byHandR, list))
+
+_dR._call = _realcallR
+_dR.AI_KEY, _dR.AI_ENABLED = _keyR2, _onR2
+_dR._quota_hit_on, _dR.AI_DAILY_LIMIT = _hitR2, _capR2
+
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

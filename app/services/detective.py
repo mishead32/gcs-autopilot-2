@@ -498,13 +498,50 @@ def pending_ids(db: Session, org_id: int, limit: int = 25) -> list[int]:
         .order_by(Task.submitted_at.asc()).limit(limit)).all())
 
 
+# How many times a task may fail before the automatic retry gives up on it.
+# A quota refusal clears by itself tomorrow; a task whose attachment simply
+# cannot be read never will, and retrying it every day for ever would spend
+# the allowance on the one task that can never produce an answer. The button
+# on the page still retries it by hand.
+MAX_FAILURES = 4
+
+
+def retry_ids(db: Session, org_id: int, limit: int = 25) -> list[int]:
+    """Tasks whose LAST check failed, oldest failure first.
+
+    These are not verdicts. A quota refusal, a dead key or a retired model
+    produces a page full of "could not check" that reads, to anybody
+    scanning it, as the AI having looked and found nothing worth saying. The
+    cause usually clears — so the software picks them up again by itself
+    instead of waiting for somebody to notice the button.
+    """
+    newest: dict[int, AiAudit] = {}
+    failures: dict[int, int] = {}
+    for r in db.scalars(in_scope(
+            select(AiAudit).join(Task, Task.id == AiAudit.task_id)
+            .where(AiAudit.org_id == org_id))
+            .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all():
+        newest[r.task_id] = r
+        if r.verdict == AiVerdict.ERROR:
+            failures[r.task_id] = failures.get(r.task_id, 0) + 1
+    stuck = [r for r in newest.values()
+             if r.verdict == AiVerdict.ERROR
+             and failures.get(r.task_id, 0) < MAX_FAILURES]
+    stuck.sort(key=lambda r: (r.created_at, r.id))
+    return [r.task_id for r in stuck[:limit]]
+
+
 def top_up(batch: int = 5) -> int:
-    """Spend a little of today's allowance on the oldest unchecked work.
+    """Spend a little of today's allowance on the work that is waiting.
 
     Called every few minutes by the background loop. With a free allowance
     of twenty a day, a backlog clears itself over a week and new work is
     looked at within a day — without anybody having to remember to press a
     button, which is the only way a queue like this ever actually empties.
+
+    Work never checked comes first, then the ones whose last check failed:
+    a task nobody has looked at is worth more than a second opinion on a
+    task that already has one.
 
     Deliberately a few at a time rather than the whole day's allowance at
     once: a task finished at nine in the morning should not find the day
@@ -522,7 +559,13 @@ def top_up(batch: int = 5) -> int:
                 left = budget_left(db, org_id)
                 if left <= 0:
                     continue
-                for task_id in pending_ids(db, org_id, min(batch, left)):
+                room = min(batch, left)
+                queue = pending_ids(db, org_id, room)
+                if len(queue) < room:
+                    # Nothing new waiting, so spend what is left of this
+                    # round on the ones whose last check failed.
+                    queue += retry_ids(db, org_id, room - len(queue))
+                for task_id in queue:
                     task = db.get(Task, task_id)
                     if task is None or not watches(task):
                         continue
