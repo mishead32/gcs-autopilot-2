@@ -175,6 +175,8 @@ def detective_page(request: Request, verdict: str = "suspect",
         "unchecked": unchecked,
         "on": detective.available(), "why_not": detective.why_not(),
         "scope": detective.scope_words(),
+        "budget": detective.budget_words(db, user.org_id),
+        "budget_left": detective.budget_left(db, user.org_id),
         "work_types": [(k, lbl) for k, lbl in
                        [("delegation", "Delegation"), ("checklist", "Checklist"),
                         ("fms", "FMS")]
@@ -203,12 +205,14 @@ def run_detective(request: Request, background: BackgroundTasks,
         n = max(1, min(100, int(limit)))
     except ValueError:
         n = 25
-    checked = select(AiAudit.task_id).where(AiAudit.org_id == user.org_id)
-    todo = list(db.scalars(detective.in_scope(
-        select(Task.id).where(Task.org_id == user.org_id,
-                              Task.submitted_at.is_not(None),
-                              Task.id.not_in(checked)))
-        .order_by(Task.submitted_at.desc()).limit(n)).all())
+    # Never queue more than the day's allowance covers: the surplus would
+    # come back 429 and be stored as "could not check", which is the exact
+    # mess this limit exists to prevent.
+    n = min(n, detective.budget_left(db, user.org_id))
+    if n <= 0:
+        flash.set(request, "info", detective.budget_words(db, user.org_id))
+        return RedirectResponse(_back(request), status_code=303)
+    todo = detective.pending_ids(db, user.org_id, n)
     for task_id in todo:
         background.add_task(detective.review_quietly, task_id)
     flash.set(request, "info",
@@ -241,6 +245,10 @@ def retry_failed(request: Request, background: BackgroundTasks,
         n = max(1, min(100, int(limit)))
     except ValueError:
         n = 25
+    n = min(n, detective.budget_left(db, user.org_id))
+    if n <= 0:
+        flash.set(request, "info", detective.budget_words(db, user.org_id))
+        return RedirectResponse(_back(request), status_code=303)
 
     newest: dict[int, AiAudit] = {}
     for r in db.scalars(detective.in_scope(

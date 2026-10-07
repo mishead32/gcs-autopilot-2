@@ -12,7 +12,8 @@
     <p class="sub readable">A second pair of eyes on finished work: it reads
       the task, the note and the attached screenshots, and says whether the
       proof actually shows the job being done.<br>
-      <strong>Watching {{ scope }}.</strong> Nothing else is sent anywhere.</p>
+      <strong>Watching {{ scope }}.</strong> Nothing else is sent anywhere.
+      {% if budget %}<br><span class="m">{{ budget }}</span>{% endif %}</p>
   </div>
   <div>
     {{ excel_btn(base ~ '&export=xlsx',
@@ -108,7 +109,8 @@
   <div>
     <strong>{{ unchecked }} finished task(s) have never been checked.</strong>
     <div class="m">Older work, and anything finished while this was switched
-      off. Checking runs in the background.</div>
+      off. A few of the oldest are checked by themselves every few minutes,
+      within the day's allowance — this button only hurries it along.</div>
   </div>
   <div class="acts">
     <select name="limit" style="width:auto">

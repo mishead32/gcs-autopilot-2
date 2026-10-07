@@ -5626,8 +5626,17 @@ _tgr = mgr.post("/tasks/new", data={
 _tid = int(_re.findall(r"/tasks/(\d+)/comment", _tgr.text)[0])
 submit(doer, _tid, completion_note="done")
 
+# These checks are about what the detective MAKES of a reply, not about the
+# day's allowance, so the cap is lifted for them and put back afterwards.
+# Left on, the twenty-first of them would silently be skipped rather than
+# answered, and the failure would look like a verdict bug.
+_capG = _detG.AI_DAILY_LIMIT
+_detG.AI_DAILY_LIMIT = 0
+
+
 def _runG(reply, status=200, task_id=None):
     h = _fakeG(reply, status)
+    _detG._quota_hit_on = None
     with _hxG.Client(transport=_hxG.MockTransport(h)) as c:
         with _slG() as _d:
             row = _detG.review(_d, _d.get(_TG, task_id or _tid), client=c)
@@ -5785,6 +5794,8 @@ check("nor on a task that does not exist",
       _detG.review_quietly(999999) is None)
 _detG.AI_KEY = _cfgG.AI_KEY = ""
 _detG.AI_ENABLED = _cfgG.AI_ENABLED = True
+_detG.AI_DAILY_LIMIT = _capG
+_detG._quota_hit_on = None
 
 # ==========================================================================
 print("\n== one checklist job, shown once ==")
@@ -6646,6 +6657,109 @@ _r = admin.post("/detective/run", data={"limit": "25"}, follow_redirects=False)
 check("the same for the backfill button",
       _r.headers.get("location", "").split("?")[0] == "/detective",
       _r.headers.get("location"))
+
+
+# ==========================================================================
+print("\n== the day's allowance is spent, not overrun ==")
+# Google's free tier is about twenty requests a day. Past it every call is a
+# 429, each one stored as "could not check" — a page full of failures that
+# reads as "the AI looked and had nothing to say". The software has to stop
+# at the line itself, and pick the queue up tomorrow.
+import json as _jsB, httpx as _hxB
+from datetime import datetime as _dtB2
+from app.db import SessionLocal as _slB2
+from app.models import (Task as _TB2, TaskSource as _SRB2, TaskStatus as _STB2,
+                        User as _UB2, AiAudit as _AAB2, AiVerdict as _AVB2)
+from app.services import detective as _dB
+from sqlalchemy import select as _spB2, func as _fnB2
+
+_GOODB = {"candidates": [{"content": {"parts": [{"text": _jsB.dumps(
+    {"verdict": "ok", "confidence": 80, "remark": "the register photo matches",
+     "looked_at": "1 photo"})}]}}]}
+_callsB = []
+def _googleB(request):
+    _callsB.append(1)
+    if len(_callsB) > 7:                   # Google stops answering after seven
+        return _hxB.Response(429, text='{"error":{"code":429,"message":"quota"}}')
+    return _hxB.Response(200, json=_GOODB)
+
+_keyB2, _onB2, _hitB2 = _dB.AI_KEY, _dB.AI_ENABLED, _dB._quota_hit_on
+_dB.AI_KEY, _dB.AI_ENABLED, _dB._quota_hit_on = "test-key", True, None
+_clientB = _hxB.Client(transport=_hxB.MockTransport(_googleB))
+
+with _slB2() as _d:
+    _bossB2 = _d.scalar(_spB2(_UB2).where(_UB2.email == "mis@gcs.local"))
+    _doerB2 = _d.scalar(_spB2(_UB2).where(_UB2.email == "amit@gcs.local"))
+    _before = _dB.spent_today(_d, 1)
+    _madeB = []
+    for _i in range(30):
+        _t = _TB2(org_id=1, branch_id=_doerB2.branch_id,
+                  title=f"SMOKE budget {RUN} {_i}", assigner_id=_bossB2.id,
+                  doer_id=_doerB2.id, source=_SRB2.DELEGATION,
+                  due_at=_dtB2(2026, 10, 6, 18, 0), status=_STB2.SUBMITTED,
+                  submitted_at=_dtB2(2026, 10, 6, 9, _i))
+        _d.add(_t)
+        _madeB.append(_t)
+    _d.commit()
+    _idsB2 = [t.id for t in _madeB]
+
+    check("the shipped limit is Google's free allowance",
+          _cfgG.AI_DAILY_LIMIT == 20, _cfgG.AI_DAILY_LIMIT)
+    # Earlier checks in this suite have already spent "today", so the limit
+    # is set to leave exactly ten — enough for the stub to answer seven and
+    # then refuse, which is the behaviour under test.
+    _dB.AI_DAILY_LIMIT = _dB.spent_today(_d, 1) + 10
+    _leftB = _dB.budget_left(_d, 1)
+    check("the day starts with an allowance", _leftB == 10, _leftB)
+
+    # Hand it thirty tasks when only a handful can get through.
+    for _t in _madeB:
+        _dB.review(_d, _t, _clientB)
+
+    _storedB = _d.scalar(_spB2(_fnB2.count()).select_from(_AAB2)
+                         .where(_AAB2.org_id == 1)) or 0
+    check("it stopped calling Google the moment the quota was refused",
+          len(_callsB) == 8, len(_callsB))
+    check("so thirty tasks did not become thirty failed checks",
+          _storedB - _before == 8, (_before, _storedB))
+    _errsB = _d.scalar(_spB2(_fnB2.count()).select_from(_AAB2)
+                       .where(_AAB2.verdict == _AVB2.ERROR,
+                              _AAB2.org_id == 1)) or 0
+    check("exactly one 429 is on record, not one per task", _errsB >= 1)
+    check("the allowance now reads as spent", _dB.budget_left(_d, 1) == 0)
+    check("a task skipped for allowance is NOT filed as a failed check",
+          len(_dB.pending_ids(_d, 1, 100)) > 0,
+          len(_dB.pending_ids(_d, 1, 100)))
+    check("review returns nothing rather than storing when there is no budget",
+          _dB.review(_d, _d.get(_TB2, _idsB2[-1]), _clientB) is None)
+    check("the page says where the day stands",
+          "used up" in _dB.budget_words(_d, 1), _dB.budget_words(_d, 1))
+
+    # The queue is worked oldest first, or the oldest never get looked at.
+    _dB._quota_hit_on = None
+    _queueB = _dB.pending_ids(_d, 1, 5)
+    _subsB = [_d.get(_TB2, i).submitted_at for i in _queueB]
+    check("the queue comes back oldest first", _subsB == sorted(_subsB), _subsB)
+
+# The buttons must not queue more than the allowance covers.
+_dB._quota_hit_on = _clkB.today() if False else None
+with _slB2() as _d:
+    _leftNow = _dB.budget_left(_d, 1)
+_rB = admin.post("/detective/run", data={"limit": "100"}, follow_redirects=False)
+check("the backfill button accepts the press", _rB.status_code == 303)
+_dB._quota_hit_on = _clkB.today()         # pretend Google has said no today
+_rB = admin.post("/detective/run", data={"limit": "100"}, follow_redirects=False)
+check("with no allowance left it does not queue anything",
+      _rB.status_code == 303, _rB.status_code)
+_rB = admin.post("/detective/retry", data={"limit": "100"}, follow_redirects=False)
+check("nor does the retry button", _rB.status_code == 303)
+_dB._quota_hit_on = None
+
+# And the top-up drains the queue by itself, a few at a time.
+_dB.AI_KEY = ""                            # no key: top_up must do nothing
+check("the top-up does nothing without a key", _dB.top_up() == 0)
+_dB.AI_KEY, _dB.AI_ENABLED, _dB._quota_hit_on = _keyB2, _onB2, _hitB2
+_dB.AI_DAILY_LIMIT = _cfgG.AI_DAILY_LIMIT
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

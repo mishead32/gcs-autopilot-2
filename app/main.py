@@ -22,6 +22,7 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       detective as detective_router,
                       cmd as cmd_router)
 from .services import recurring
+from .services import detective
 from .templating import templates
 from . import lastview
 
@@ -46,6 +47,13 @@ async def _daily_spawn():
                 last_done = today
                 if created:
                     print(f"Checklist for {today}: created {created} task(s)")
+            # And a few of the oldest unchecked tasks handed to the
+            # detective, every tick, within the day's allowance. The free
+            # allowance is about twenty a day, so a backlog only ever clears
+            # if something spends it without being asked to.
+            looked = await asyncio.to_thread(detective.top_up)
+            if looked:
+                print(f"Task Detective: checked {looked} task(s)")
         except asyncio.CancelledError:
             raise
         except Exception as exc:

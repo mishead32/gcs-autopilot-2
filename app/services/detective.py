@@ -31,13 +31,13 @@ import time
 from datetime import date, datetime
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import clock
 from ..config import (AI_KEY, AI_MODEL, AI_ENABLED, AI_MAX_FILES,
                       AI_MAX_FILE_MB, AI_TIMEOUT, AI_SOURCES, AI_SINCE,
-                      UPLOAD_DIR)
+                      AI_DAILY_LIMIT, UPLOAD_DIR)
 from ..models import AiAudit, AiVerdict, Attachment, Task, TaskSource
 
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -133,6 +133,47 @@ def in_scope(q):
         q = q.where(Task.submitted_at >= datetime.combine(
             start, datetime.min.time()))
     return q
+
+
+# ---------------------------------------------------------- the day's budget -
+# Google's free allowance is about twenty requests a day. Past it, every call
+# comes back 429 and gets stored as "could not check" — a page full of
+# failures that reads as "the AI looked and had nothing to say". So the
+# software counts, stops at the line, and leaves the rest for tomorrow.
+#
+# A task skipped for budget is NOT given a row. It stays in "never checked",
+# which is the honest state and the thing the daily top-up looks for.
+_quota_hit_on: date | None = None     # the day Google said no more
+
+
+def spent_today(db: Session, org_id: int) -> int:
+    start = datetime.combine(clock.today(), datetime.min.time())
+    return db.scalar(
+        select(func.count()).select_from(AiAudit)
+        .where(AiAudit.org_id == org_id, AiAudit.created_at >= start)) or 0
+
+
+def budget_left(db: Session, org_id: int) -> int:
+    """How many more checks may be made today. A large number means no cap."""
+    if _quota_hit_on == clock.today():
+        return 0                       # Google has already said no for today
+    if not AI_DAILY_LIMIT:
+        return 1_000_000
+    return max(0, AI_DAILY_LIMIT - spent_today(db, org_id))
+
+
+def budget_words(db: Session, org_id: int) -> str:
+    """One sentence for the page about where the day's allowance stands."""
+    if not AI_DAILY_LIMIT:
+        return ""
+    used = spent_today(db, org_id)
+    left = budget_left(db, org_id)
+    if left:
+        return (f"{used} of {AI_DAILY_LIMIT} checks used today. "
+                f"{left} left — the rest of the queue is picked up tomorrow, "
+                "oldest first.")
+    return (f"Today's {AI_DAILY_LIMIT} checks are used up. Checking starts "
+            "again after midnight, oldest first — nothing is lost.")
 
 
 def why_not() -> str:
@@ -347,13 +388,22 @@ def _call(parts: list[dict], client: httpx.Client | None = None) -> dict:
 
 
 # -------------------------------------------------------------- the run ----
-def review(db: Session, task: Task, client: httpx.Client | None = None) -> AiAudit:
+def review(db: Session, task: Task,
+           client: httpx.Client | None = None) -> AiAudit | None:
     """Check one finished task and store what was found.
 
-    Always returns a row, even when the check failed: a stored "could not
-    check" is a fact somebody can act on, while silence looks identical to
-    "nothing wrong here".
+    Returns a row even when the check failed — a stored "could not check" is
+    a fact somebody can act on, while silence looks identical to "nothing
+    wrong here".
+
+    Returns None, and stores NOTHING, when the day's allowance is gone. That
+    is not a failed check and must not be filed as one: the task stays in
+    "never checked", which is both the truth and what tomorrow's top-up
+    looks for.
     """
+    if budget_left(db, task.org_id) <= 0:
+        return None
+
     started = time.monotonic()
     files = list(db.scalars(
         select(Attachment).where(Attachment.task_id == task.id)
@@ -373,6 +423,12 @@ def review(db: Session, task: Task, client: httpx.Client | None = None) -> AiAud
         row.remark = found["remark"]
         row.looked_at = found["looked_at"]
     except Exception as e:
+        # Google saying "you are over quota" is about the day, not about this
+        # task. Stop for the day rather than spending the next hundred tasks
+        # collecting the same message.
+        global _quota_hit_on
+        if "429" in str(e):
+            _quota_hit_on = clock.today()
         row.verdict = AiVerdict.ERROR
         row.confidence = 0
         row.remark = str(e)[:2000]
@@ -426,3 +482,54 @@ def latest_map(db: Session, task_ids: list[int]) -> dict[int, AiAudit]:
     for r in rows:
         out[r.task_id] = r          # later rows overwrite earlier ones
     return out
+
+
+def pending_ids(db: Session, org_id: int, limit: int = 25) -> list[int]:
+    """Finished work in scope that has never been checked, oldest first.
+
+    Oldest first on purpose: a backlog worked newest-first leaves the oldest
+    tasks permanently last in the queue and never checked at all.
+    """
+    checked = select(AiAudit.task_id).where(AiAudit.org_id == org_id)
+    return list(db.scalars(in_scope(
+        select(Task.id).where(Task.org_id == org_id,
+                              Task.submitted_at.is_not(None),
+                              Task.id.not_in(checked)))
+        .order_by(Task.submitted_at.asc()).limit(limit)).all())
+
+
+def top_up(batch: int = 5) -> int:
+    """Spend a little of today's allowance on the oldest unchecked work.
+
+    Called every few minutes by the background loop. With a free allowance
+    of twenty a day, a backlog clears itself over a week and new work is
+    looked at within a day — without anybody having to remember to press a
+    button, which is the only way a queue like this ever actually empties.
+
+    Deliberately a few at a time rather than the whole day's allowance at
+    once: a task finished at nine in the morning should not find the day
+    already spent on last week's backlog.
+    """
+    from ..db import SessionLocal
+    from ..models import Organization
+
+    if not available():
+        return 0
+    done = 0
+    try:
+        with SessionLocal() as db:
+            for org_id in db.scalars(select(Organization.id)).all():
+                left = budget_left(db, org_id)
+                if left <= 0:
+                    continue
+                for task_id in pending_ids(db, org_id, min(batch, left)):
+                    task = db.get(Task, task_id)
+                    if task is None or not watches(task):
+                        continue
+                    if review(db, task) is None:
+                        break           # allowance ran out mid-batch
+                    done += 1
+    except Exception as exc:
+        # Never let this kill the loop it runs in.
+        print(f"Task Detective top-up failed: {exc!r}")
+    return done

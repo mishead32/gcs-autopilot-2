@@ -77,3 +77,10 @@ AI_SOURCES = tuple(
 # cost a fortune in allowance to check and tells nobody anything they can
 # still act on. Written YYYY-MM-DD; blank means no limit.
 AI_SINCE = os.getenv("AI_CHECK_FROM", "2026-10-03").strip()
+# How many checks a day. Google's free tier is about twenty requests a day
+# on Flash, and going past it earns a 429 for every call after — which is
+# stored as "could not check" and looks, on the page, exactly like the AI
+# having no opinion. So the software stops at the line itself and picks the
+# work up again tomorrow, oldest first. Raise it the day somebody pays for a
+# bigger allowance; 0 means no limit.
+AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT", "20") or 0)
