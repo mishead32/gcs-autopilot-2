@@ -6425,5 +6425,90 @@ check("only delegation and checklist are on the board",
       set(_bB.position) == {"delegation", "recurring"}, sorted(_bB.position))
 
 
+# ==========================================================================
+print("\n== the detective survives a retired model ==")
+# What actually happened on the live site: Google retired gemini-2.5-flash,
+# every call came back 404, and seven hundred tasks were stored as "could
+# not check" — which on the page looked like the AI simply had no opinion.
+import json as _jsR, httpx as _hxR
+from app.services import detective as _detR
+from app.models import AiVerdict as _AVR, AiAudit as _AAR
+from app.db import SessionLocal as _slR
+from sqlalchemy import select as _spR
+
+_GONE_R = _jsR.dumps({"error": {"code": 404, "message":
+    "This model models/gemini-2.5-flash is no longer available to new users. "
+    "Please update your code to use models/gemini-3.8-flash for the latest "
+    "features"}})
+_GOOD_R = {"candidates": [{"content": {"parts": [{"text": _jsR.dumps(
+    {"verdict": "ok", "confidence": 90, "remark": "The register photo matches.",
+     "looked_at": "1 photo"})}]}}]}
+
+_keyR, _onR, _modelR = _detR.AI_KEY, _detR.AI_ENABLED, _detR._live_model
+_detR.AI_KEY, _detR.AI_ENABLED = "test-key", True
+_detR._live_model = "gemini-2.5-flash"
+
+_triedR = []
+def _googleR(request):
+    _triedR.append(str(request.url).split("/models/")[1].split(":")[0])
+    if _triedR[-1] == "gemini-2.5-flash":
+        return _hxR.Response(404, text=_GONE_R)
+    return _hxR.Response(200, json=_GOOD_R)
+
+_cR = _hxR.Client(transport=_hxR.MockTransport(_googleR))
+_outR = _detR._read_reply(_detR._call([{"text": "x"}], _cR))
+check("a retired model is retried with the name Google gives back",
+      _triedR == ["gemini-2.5-flash", "gemini-3.8-flash"], _triedR)
+check("and the check goes through", _outR["verdict"] == _AVR.OK, _outR["verdict"])
+check("the new name sticks", _detR.current_model() == "gemini-3.8-flash",
+      _detR.current_model())
+_triedR.clear()
+_detR._read_reply(_detR._call([{"text": "y"}], _cR))
+check("so the next check does not pay for the 404 again",
+      _triedR == ["gemini-3.8-flash"], _triedR)
+
+# A 404 that is not a retirement must stay an error — chasing a name out of
+# any old message would send every check to a model nobody chose.
+def _plainR(request):
+    return _hxR.Response(404, text='{"error":{"message":"nope"}}')
+try:
+    _detR._call([{"text": "z"}],
+                _hxR.Client(transport=_hxR.MockTransport(_plainR)))
+    check("a plain 404 is still an error", False, "no error raised")
+except ValueError as _eR:
+    check("a plain 404 is still an error", "404" in str(_eR))
+check("and it did not move the model off the working one",
+      _detR.current_model() == "gemini-3.8-flash", _detR.current_model())
+
+# The failed ones can be retried as a batch — one at a time is not an option
+# when a single cause broke hundreds.
+_detR.AI_KEY = ""                    # make a check fail, on purpose
+_tgR = mgr.post("/tasks/new", data={
+    "title": f"SMOKE retry {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-30T23:59"})
+_tidR = int(_re.findall(r"/tasks/(\d+)/comment", _tgR.text)[0])
+submit(doer, _tidR, completion_note="done")
+with _slR() as _d:
+    _detR.review(_d, _d.get(_TG, _tidR))
+    _lastR = _detR.latest_for(_d, _tidR)
+    check("a check with no key is stored as 'could not check'",
+          _lastR.verdict == _AVR.ERROR, _lastR.verdict)
+
+_pgR = admin.get("/detective?verdict=error").text
+check("the page offers to look again at the failed ones",
+      "could not be checked" in _pgR and "/detective/retry" in _pgR)
+_rR = admin.post("/detective/retry", data={"limit": "25"})
+check("the retry button works with no key, and says why",
+      _rR.status_code == 200, _rR.status_code)
+
+_detR.AI_KEY = "test-key"
+_rR = admin.post("/detective/retry", data={"limit": "25"})
+check("and with a key it accepts the batch", _rR.status_code == 200)
+check("a doer cannot press it",
+      doer.post("/detective/retry", data={"limit": "25"}).status_code in (403, 404))
+
+_detR.AI_KEY, _detR.AI_ENABLED, _detR._live_model = _keyR, _onR, _modelR
+
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

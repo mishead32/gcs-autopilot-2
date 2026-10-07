@@ -196,6 +196,49 @@ def run_detective(request: Request, background: BackgroundTasks,
     return RedirectResponse(lastview.url(request, "/detective"), status_code=303)
 
 
+@router.post("/detective/retry")
+def retry_failed(request: Request, background: BackgroundTasks,
+                 limit: str = Form("25"),
+                 user: User = Depends(manager_up),
+                 db: Session = Depends(get_db)):
+    """Look again at the tasks whose last check failed.
+
+    A whole batch can fail for one reason that has since been fixed — the
+    key was missing, the free allowance ran out for the minute, or Google
+    retired the model and every call came back 404. Those are not verdicts
+    and they should not sit there as if they were, so they can be retried as
+    a batch rather than one at a time.
+
+    Only the tasks whose NEWEST check failed: one that failed and was later
+    looked at properly has an answer already.
+    """
+    if not detective.available():
+        flash.set(request, "info", detective.why_not())
+        return RedirectResponse(lastview.url(request, "/detective"),
+                                status_code=303)
+    try:
+        n = max(1, min(100, int(limit)))
+    except ValueError:
+        n = 25
+
+    newest: dict[int, AiAudit] = {}
+    for r in db.scalars(
+            select(AiAudit).where(AiAudit.org_id == user.org_id)
+            .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all():
+        newest[r.task_id] = r
+    todo = [r.task_id for r in sorted(
+        (r for r in newest.values() if r.verdict == AiVerdict.ERROR),
+        key=lambda r: r.created_at, reverse=True)][:n]
+
+    for task_id in todo:
+        background.add_task(detective.review_quietly, task_id)
+    flash.set(request, "info",
+              f"Looking again at {len(todo)} task(s) that could not be "
+              "checked. Refresh in a minute."
+              if todo else "Nothing is waiting on a failed check.")
+    return RedirectResponse(lastview.url(request, "/detective"), status_code=303)
+
+
 @router.post("/detective/task/{task_id}")
 def recheck(task_id: int, request: Request, background: BackgroundTasks,
             user: User = Depends(manager_up), db: Session = Depends(get_db)):

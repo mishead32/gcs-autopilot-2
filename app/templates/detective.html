@@ -115,6 +115,28 @@
 </form>
 {% endif %}
 
+{% if counts.error %}
+{# A batch that all failed for one reason — a missing key, a rate limit, a
+   model Google retired — is not a batch of verdicts, and leaving it looking
+   like one is how a page quietly stops meaning anything. #}
+<form method="post" action="/detective/retry" class="card searchbar">
+  <div>
+    <strong>{{ counts.error }} task(s) could not be checked.</strong>
+    <div class="m">Usually one cause for the lot — no key, the free
+      allowance for the minute, or a model that was retired. Fix the cause,
+      then look again.</div>
+  </div>
+  <div class="acts">
+    <select name="limit" style="width:auto">
+      <option value="25">25 at a time</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+    <button class="btn" {{ 'disabled' if not on }}>Look again</button>
+  </div>
+</form>
+{% endif %}
+
 <div class="sect">
   <div class="sect-head"><h2>{{ verdict_tabs|selectattr('0','equalto',verdict)|map(attribute='1')|first }}</h2>
     <span class="count {{ 'bad' if verdict in ('suspect','unrelated','no_proof') and rows }}">{{ rows|length }}</span></div>

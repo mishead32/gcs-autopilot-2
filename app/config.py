@@ -50,7 +50,11 @@ BANNER = os.getenv("MIDAP_BANNER", "")
 # The key is read from the environment and never written to the database, a
 # template or a log — same rule as every other secret here.
 AI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash").strip()
+# Google retires a model and the old name starts answering 404 — which is
+# what happened to gemini-2.5-flash. The name is settable here so a retirement
+# can be fixed from Render without a deploy, and the detective also follows
+# the replacement the error message names, so it keeps working either way.
+AI_MODEL = os.getenv("AI_MODEL", "gemini-3.8-flash").strip()
 AI_ENABLED = os.getenv("AI_AUDIT", "on").strip().lower() not in ("off", "0", "no")
 # How many attached files to show it, and how large a file to bother sending.
 # A phone photo is a couple of megabytes; six of them is a slow request and a

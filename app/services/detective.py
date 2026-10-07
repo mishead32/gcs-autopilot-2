@@ -232,27 +232,68 @@ def _read_reply(payload: dict) -> dict:
     }
 
 
+# The model actually in use. It starts as whatever was configured and moves
+# only when Google tells us the configured one is gone — see _call. Module
+# level on purpose: once one check has been told the new name, every later
+# check uses it, instead of every single one paying for the same 404.
+_live_model = AI_MODEL
+
+# "models/gemini-2.5-flash is no longer available ... use models/gemini-3.8-flash"
+_REPLACEMENT = re.compile(r"models/([A-Za-z0-9.\-_]+)")
+
+
+def current_model() -> str:
+    return _live_model
+
+
+def _retirement(status: int, text: str) -> str | None:
+    """The model Google says to use instead, if that is what went wrong.
+
+    Google retires a model and the old name answers 404 with the new name in
+    the message. Reading it means a retirement costs one failed check rather
+    than every check until somebody notices — which is exactly what happened
+    the first time: seven hundred stored "could not check" rows, all the same
+    404, while the page looked like the AI simply had no opinion.
+    """
+    if status != 404:
+        return None
+    low = text.lower()
+    if "no longer available" not in low and "not found" not in low:
+        return None
+    names = [n for n in _REPLACEMENT.findall(text) if n != _live_model]
+    return names[-1] if names else None
+
+
 def _call(parts: list[dict], client: httpx.Client | None = None) -> dict:
+    global _live_model
     body = {
         "system_instruction": {"parts": [{"text": SYSTEM}]},
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
                              "responseMimeType": "application/json"},
     }
-    url = API.format(model=AI_MODEL)
     owned = client is None
     client = client or httpx.Client(timeout=AI_TIMEOUT)
     try:
-        r = client.post(url, json=body,
-                        headers={"x-goog-api-key": AI_KEY,
-                                 "content-type": "application/json"})
-        if r.status_code != 200:
-            # The message is kept because a rate limit and a bad key need
-            # different answers from whoever reads it, and "it failed" tells
-            # them neither.
+        for attempt in (1, 2):
+            r = client.post(API.format(model=_live_model), json=body,
+                            headers={"x-goog-api-key": AI_KEY,
+                                     "content-type": "application/json"})
+            if r.status_code == 200:
+                return r.json()
+            moved = _retirement(r.status_code, r.text) if attempt == 1 else None
+            if moved:
+                # Say it in the log, once, so whoever reads it knows the name
+                # in the settings is out of date even though nothing broke.
+                print(f"Task Detective: {_live_model} is retired, "
+                      f"using {moved} instead")
+                _live_model = moved
+                continue
+            # The message is kept because a rate limit, a bad key and a dead
+            # model need different answers from whoever reads it, and "it
+            # failed" tells them none of the three.
             raise ValueError(f"the AI service answered {r.status_code}: "
                              f"{r.text[:200]}")
-        return r.json()
     finally:
         if owned:
             client.close()
@@ -271,7 +312,7 @@ def review(db: Session, task: Task, client: httpx.Client | None = None) -> AiAud
         select(Attachment).where(Attachment.task_id == task.id)
         .order_by(Attachment.id)).all())
 
-    row = AiAudit(org_id=task.org_id, task_id=task.id, model=AI_MODEL,
+    row = AiAudit(org_id=task.org_id, task_id=task.id, model=current_model(),
                   files_seen=len(files))
     try:
         if not available():
@@ -279,6 +320,7 @@ def review(db: Session, task: Task, client: httpx.Client | None = None) -> AiAud
         parts, seen, images = _parts_for(task, files)
         row.files_seen, row.images_seen = seen, images
         found = _read_reply(_call(parts, client))
+        row.model = current_model()       # it may have moved mid-call
         row.verdict = found["verdict"]
         row.confidence = found["confidence"]
         row.remark = found["remark"]
