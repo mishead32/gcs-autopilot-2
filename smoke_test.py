@@ -5639,6 +5639,14 @@ def _runG(reply, status=200, task_id=None):
     _detG._quota_hit_on = None
     with _hxG.Client(transport=_hxG.MockTransport(h)) as c:
         with _slG() as _d:
+            # One of these checks deliberately makes Google answer 429, and
+            # a stored 429 closes the day for real. These are about what the
+            # detective MAKES of a reply, so the day is reopened each time.
+            for _old in _d.scalars(_sel(_AAG).where(
+                    _AAG.verdict == _AVG.ERROR,
+                    _AAG.remark.like("%429%"))).all():
+                _old.remark = "(cleared for the next check)"
+            _d.commit()
             row = _detG.review(_d, _d.get(_TG, task_id or _tid), client=c)
             _d.refresh(row)
             return h, row
@@ -6794,10 +6802,19 @@ with _slR2() as _d:
         _d.add(_t)
         _d.flush()
         _d.add(_AAR2(org_id=1, task_id=_t.id, verdict=_AVR2.ERROR, confidence=0,
-                     remark=f"SMOKE 429 {RUN}: quota", model="retired"))
+                     remark=f"SMOKE {RUN}: answered 404, model retired",
+                     model="retired"))
         _stuckR.append(_t.id)
     _d.commit()
     _queueR = _dR.retry_ids(_d, 1, 100)
+    # Any quota refusal stored earlier today would close the day for real,
+    # which is correct behaviour but not what this section is about.
+    for _old in _d.scalars(_spR2(_AAR2).where(
+            _AAR2.verdict == _AVR2.ERROR,
+            _AAR2.remark.like("%429%"))).all():
+        _old.remark = "(cleared for this check)"
+    _d.commit()
+    _dR._quota_hit_on = None
     check("the ones whose last check failed are found",
           all(i in _queueR for i in _stuckR), len(_queueR))
     _firstR = [i for i in _queueR if i in _stuckR][:3]
@@ -6858,6 +6875,97 @@ check("and works from the same list as the background top-up",
 _dR._call = _realcallR
 _dR.AI_KEY, _dR.AI_ENABLED = _keyR2, _onR2
 _dR._quota_hit_on, _dR.AI_DAILY_LIMIT = _hitR2, _capR2
+
+
+# ==========================================================================
+print("\n== one quota refusal stops the day, even across a restart ==")
+# The 429s kept coming back after the daily limit was added, because the
+# "Google said no" flag lived in memory. On a free host the service sleeps
+# and restarts all day: every restart forgot the refusal, tried again, and
+# stored another 429. The record of what Google said is in the database, so
+# that is where the answer has to be read from.
+import httpx as _hxQ
+from datetime import datetime as _dtQ
+from app.db import SessionLocal as _slQ
+from app.models import (Task as _TQ, TaskSource as _SRQ, TaskStatus as _STQ,
+                        User as _UQ, AiAudit as _AAQ, AiVerdict as _AVQ)
+from app.services import detective as _dQ
+from sqlalchemy import select as _spQ, func as _fnQ
+
+_keyQ, _onQ, _hitQ, _capQ = (_dQ.AI_KEY, _dQ.AI_ENABLED,
+                             _dQ._quota_hit_on, _dQ.AI_DAILY_LIMIT)
+_dQ.AI_KEY, _dQ.AI_ENABLED, _dQ._quota_hit_on = "test-key", True, None
+
+with _slQ() as _d:
+    for _old in _d.scalars(_spQ(_AAQ).where(
+            _AAQ.verdict == _AVQ.ERROR,
+            _AAQ.remark.like("%429%"))).all():
+        _old.remark = "(cleared before this check)"
+    _d.commit()
+    _dQ._quota_hit_on = None
+    _dQ.AI_DAILY_LIMIT = _dQ.spent_today(_d, 1) + 50      # room to spare
+    _bQ = _d.scalar(_spQ(_UQ).where(_UQ.email == "mis@gcs.local"))
+    _drQ = _d.scalar(_spQ(_UQ).where(_UQ.email == "amit@gcs.local"))
+    _madeQ = []
+    for _i in range(6):
+        _t = _TQ(org_id=1, branch_id=_drQ.branch_id,
+                 title=f"SMOKE restart {RUN} {_i}", assigner_id=_bQ.id,
+                 doer_id=_drQ.id, source=_SRQ.DELEGATION,
+                 due_at=_dtQ(2026, 10, 7, 18, 0), status=_STQ.SUBMITTED,
+                 submitted_at=_dtQ(2026, 10, 7, 9, _i))
+        _d.add(_t)
+        _madeQ.append(_t)
+    _d.commit()
+    _idsQ = [t.id for t in _madeQ]
+
+    _callsQ = []
+    def _refuseQ(request):
+        _callsQ.append(1)
+        return _hxQ.Response(
+            429, text='{"error":{"code":429,"message":"You exceeded your '
+                      'current quota, please check your plan and billing"}}')
+    _cQ = _hxQ.Client(transport=_hxQ.MockTransport(_refuseQ))
+
+    _beforeQ = _dQ.spent_today(_d, 1)
+    _dQ.review(_d, _d.get(_TQ, _idsQ[0]), _cQ)
+    check("the first refusal is recorded", len(_callsQ) == 1, len(_callsQ))
+    check("and it closes the day", _dQ.budget_left(_d, 1) == 0)
+
+    # The service restarts — repeatedly, as a free host does.
+    _dQ._quota_hit_on = None
+    check("the day stays closed after a restart", _dQ.budget_left(_d, 1) == 0)
+    for _i in _idsQ[1:]:
+        _dQ.review(_d, _d.get(_TQ, _i), _cQ)
+        _dQ._quota_hit_on = None          # restart again before each one
+    check("so Google is asked exactly once, not once per restart",
+          len(_callsQ) == 1, len(_callsQ))
+    _afterQ = _dQ.spent_today(_d, 1)
+    check("and exactly one 429 is on the page, not six",
+          _afterQ - _beforeQ == 1, (_beforeQ, _afterQ))
+    check("the page explains the wait rather than showing a wall of errors",
+          "free allowance for today is used up" in _dQ.budget_words(_d, 1),
+          _dQ.budget_words(_d, 1))
+
+    # A quota refusal is the day's fault, never the task's: it must not count
+    # towards giving up on that task for ever.
+    for _ in range(_dQ.MAX_FAILURES + 2):
+        _d.add(_AAQ(org_id=1, task_id=_idsQ[0], verdict=_AVQ.ERROR,
+                    confidence=0, model="x",
+                    remark="the AI service answered 429: quota"))
+    _d.commit()
+    _dQ._quota_hit_on = None
+    check("a task refused on quota many times is still retried later",
+          _idsQ[0] in _dQ.retry_ids(_d, 1, 500))
+    # Whereas a task that genuinely cannot be read is given up on.
+    for _ in range(_dQ.MAX_FAILURES + 1):
+        _d.add(_AAQ(org_id=1, task_id=_idsQ[1], verdict=_AVQ.ERROR,
+                    confidence=0, model="x", remark="the attachment is broken"))
+    _d.commit()
+    check("but one that genuinely cannot be answered is dropped",
+          _idsQ[1] not in _dQ.retry_ids(_d, 1, 500))
+
+_dQ.AI_KEY, _dQ.AI_ENABLED = _keyQ, _onQ
+_dQ._quota_hit_on, _dQ.AI_DAILY_LIMIT = _hitQ, _capQ
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

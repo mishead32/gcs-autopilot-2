@@ -146,6 +146,29 @@ def in_scope(q):
 _quota_hit_on: date | None = None     # the day Google said no more
 
 
+def _refused_today(db: Session, org_id: int) -> bool:
+    """Has Google already refused us today, on quota?
+
+    Read from the DATABASE, not from memory. The in-memory flag is lost
+    every time the service restarts — and on a free host it restarts all day
+    long, every sleep and every deploy. Each restart forgot the refusal,
+    tried again, and stored another 429, which is why the page kept filling
+    with them however carefully the day's checks were counted.
+
+    The stored failures are the record of what Google said. Reading them
+    back is the only version of this that survives a restart.
+    """
+    if _quota_hit_on == clock.today():
+        return True                    # already known in this process
+    start = datetime.combine(clock.today(), datetime.min.time())
+    return db.scalar(
+        select(AiAudit.id).where(
+            AiAudit.org_id == org_id,
+            AiAudit.created_at >= start,
+            AiAudit.verdict == AiVerdict.ERROR,
+            AiAudit.remark.like("%429%")).limit(1)) is not None
+
+
 def spent_today(db: Session, org_id: int) -> int:
     start = datetime.combine(clock.today(), datetime.min.time())
     return db.scalar(
@@ -155,7 +178,7 @@ def spent_today(db: Session, org_id: int) -> int:
 
 def budget_left(db: Session, org_id: int) -> int:
     """How many more checks may be made today. A large number means no cap."""
-    if _quota_hit_on == clock.today():
+    if _refused_today(db, org_id):
         return 0                       # Google has already said no for today
     if not AI_DAILY_LIMIT:
         return 1_000_000
@@ -164,6 +187,10 @@ def budget_left(db: Session, org_id: int) -> int:
 
 def budget_words(db: Session, org_id: int) -> str:
     """One sentence for the page about where the day's allowance stands."""
+    if _refused_today(db, org_id):
+        return ("Google's free allowance for today is used up — it refused "
+                "further checks. Checking starts again after midnight, "
+                "oldest first. Nothing is lost and nothing needs pressing.")
     if not AI_DAILY_LIMIT:
         return ""
     used = spent_today(db, org_id)
@@ -522,7 +549,11 @@ def retry_ids(db: Session, org_id: int, limit: int = 25) -> list[int]:
             .where(AiAudit.org_id == org_id))
             .order_by(AiAudit.created_at.asc(), AiAudit.id.asc())).all():
         newest[r.task_id] = r
-        if r.verdict == AiVerdict.ERROR:
+        # A quota refusal says nothing about the task — it is the day's
+        # allowance, and it clears by itself. Counting it towards "this task
+        # can never be answered" would quietly abandon a week of perfectly
+        # good work for the sin of having been in the queue on a busy day.
+        if r.verdict == AiVerdict.ERROR and "429" not in (r.remark or ""):
             failures[r.task_id] = failures.get(r.task_id, 0) + 1
     stuck = [r for r in newest.values()
              if r.verdict == AiVerdict.ERROR
