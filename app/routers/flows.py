@@ -167,7 +167,9 @@ def _read_steps(form) -> list[dict]:
             "tat_unit": (tat_units[i] if i < len(tat_units)
                          and tat_units[i] in clock.SPAN_UNITS else "hours"),
             "tat_value": int(tats[i]) if i < len(tats) and tats[i] else 24,
-            "due_from_pos": _pos(dfroms, i) or None,
+            # Not `or None`: 0 is a real answer here — "count from when the
+            # run was started" — and would otherwise be read as "not set".
+            "due_from_pos": _pos(dfroms, i),
             "priority": (Priority(prios[i]) if i < len(prios) and prios[i]
                          else Priority.MEDIUM),
             "requires_audit": (audits[i] == "1") if i < len(audits) else False,
@@ -204,11 +206,11 @@ def _check_routes(rows: list[dict]) -> None:
                          f"{max(valid)}.")
         if r["due_from_pos"] and r["due_from_pos"] not in valid:
             raise HTTPException(
-                400, f"{where}: its planned date is tied to step "
+                400, f"{where}: its clock is set to start from step "
                      f"{r['due_from_pos']}, which this flow does not have.")
         if r["due_from_pos"] == r["position"]:
             raise HTTPException(
-                400, f"{where} cannot take its planned date from itself.")
+                400, f"{where} cannot start its clock from itself.")
         if r["is_decision"] and r["fail_step_pos"] is None:
             raise HTTPException(
                 400, f"{where} is a decision step, so it needs a step number "

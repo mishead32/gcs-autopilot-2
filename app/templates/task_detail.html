@@ -84,9 +84,9 @@
       <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
         {% else %}
       <div class="proof need">
-        <strong>Proof is required for this task.</strong>
-        Attach a photo, screenshot or file below — or paste a screenshot with
-        Ctrl+V — before you submit.
+        <strong>Proof and a note are required for this task.</strong>
+        Write a line saying what you did, and attach a photo, screenshot or
+        file below — or paste a screenshot with Ctrl+V — before you submit.
       </div>
         {% endif %}
       {% endif %}
@@ -94,8 +94,9 @@
         {% for f in capture_fields %}
         <label>{{ f }}</label><input name="field_{{ f }}" value="{{ captured.get(f,'') }}">
         {% endfor %}
-        <label>Completion note</label>
-        <textarea name="completion_note" placeholder="What did you do? Any issues?"></textarea>
+        <label>Completion note{% if task.requires_attachment %} — required{% endif %}</label>
+        <textarea name="completion_note" {{ 'required' if task.requires_attachment }}
+                  placeholder="What did you do? Any issues?"></textarea>
         {% set blocked = task.requires_attachment and not task.attachments %}
         {% if decision_step %}
         <div class="decide">

@@ -936,7 +936,8 @@ r = mgr.post("/tasks/new", data={
     "branch_id": "", "priority": "medium", "due_at": "2026-12-31T18:00"})
 pid = int(re.findall(r"/tasks/(\d+)/comment", r.text)[0])
 body = doer.get(f"/tasks/{pid}").text
-check("a new task requires proof with nothing ticked", "Proof is required" in body)
+check("a new task requires proof with nothing ticked",
+      "Proof and a note are required" in body)
 check("the submit button is disabled until proof is there", "disabled" in body)
 r = doer.post(f"/tasks/{pid}/submit", data={"completion_note": "done"})
 check("submitting with no attachment is refused", r.status_code == 400, r.status_code)
@@ -2037,7 +2038,10 @@ _t2, _p2 = _open_step(_oiid)
 with _SLP() as _d:
     _doer2 = _d.get(_TP, _t2).doer.email
 _who = login(_doer2)
-attach(_who, _t2); _who.post(f"/tasks/{_t2}/submit", data={})
+attach(_who, _t2)
+# A task that needs proof needs a note with it now, so the submits in this
+# suite carry one — exactly as a doer's would.
+_who.post(f"/tasks/{_t2}/submit", data={"completion_note": "done"})
 _t3, _p3 = _open_step(_oiid)
 check("and walks to the next step in order", _p3 == (_p2 or 0) + 1,
       f"{_p2} -> {_p3}")
@@ -2068,7 +2072,7 @@ _tid2 = int(re.search(r"/tasks/(\d+)", str(_r2.url)).group(1))
 _a = login("amit@gcs.local")
 attach(_a, _tid2)
 check("submitting says so", "Marked complete" in _a.post(
-    f"/tasks/{_tid2}/submit", data={}).text)
+    f"/tasks/{_tid2}/submit", data={"completion_note": "done"}).text)
 
 check("the toast is switched off for reduced motion",
       "prefers-reduced-motion" in _c.get("/static/app.css").text)
@@ -2155,14 +2159,19 @@ with _SLP() as _d:
 _t, _pos = _open_step(_i2id)
 with _SLP() as _d:
     _due1 = _d.get(_TKT, _t).due_at
-check("step 1 is due about two days out",
-      1 <= (_due1 - _ck.now()).days <= 2, str(_due1))
+# In HOURS, not .days. A two-day deadline that lands on a Sunday is pulled
+# back to the Saturday, which leaves a gap of one day minus a few
+# microseconds — and .days floors that to 0, so the check failed on the one
+# day of the week the shift actually happens.
+check("step 1 is due a day or two out",
+      23 <= (_due1 - _ck.now()).total_seconds() / 3600 <= 49, str(_due1))
 amit.post(f"/tasks/{_t}/submit", data={})
 _t, _pos = _open_step(_i2id)
 with _SLP() as _d:
     _due2 = _d.get(_TKT, _t).due_at
 check("step 2 is due about a week out",
-      6 <= (_due2 - _ck.now()).days <= 8, str(_due2))
+      6 * 24 - 1 <= (_due2 - _ck.now()).total_seconds() / 3600 <= 8 * 24 + 1,
+      str(_due2))
 amit.post(f"/tasks/{_t}/submit", data={})
 _t, _pos = _open_step(_i2id)
 with _SLP() as _d:
@@ -2637,7 +2646,7 @@ _mk4 = mgr.post("/tasks/new", data={
 _pf = int(_re.findall(r"/tasks/(\d+)/comment", _mk4.text)[-1])
 _pbox = doer.get(f"/tasks/{_pf}/mark")
 check("a task needing proof says so in the box",
-      "Proof is required" in _pbox.text)
+      "Proof and a note are required" in _pbox.text)
 check("and its button starts switched off", "disabled" in _pbox.text)
 _noproof = doer.post(f"/tasks/{_pf}/submit",
                      data={"completion_note": "no proof", "return_to": _back})
@@ -7092,6 +7101,223 @@ check("and the model recorded says which service answered",
 
 (_dP.AI_PROVIDER, _dP.CF_ACCOUNT, _dP.CF_TOKEN, _dP.AI_KEY,
  _dP.AI_ENABLED, _dP._quota_hit_on, _dP.AI_DAILY_LIMIT) = _wasP
+
+
+# ==========================================================================
+print("\n== one service's quota is not the other's ==")
+# The day somebody switches services is exactly the day this matters: a
+# morning of Google 429s must not close the afternoon on Cloudflare. The
+# move made to escape the quota would be blocked by the quota it escaped.
+from datetime import datetime as _dtV
+from app.db import SessionLocal as _slV
+from app.models import (Task as _TV, TaskSource as _SRV, TaskStatus as _STV,
+                        User as _UV, AiAudit as _AAV, AiVerdict as _AVV)
+from app.services import detective as _dV
+from sqlalchemy import select as _spV
+import json as _jsV, httpx as _hxV
+
+_wasV = (_dV.AI_PROVIDER, _dV.AI_KEY, _dV.CF_ACCOUNT, _dV.CF_TOKEN,
+         _dV.AI_ENABLED, _dV._quota_hit_on, _dV._quota_hit_by,
+         _dV.AI_DAILY_LIMIT)
+
+check("a Cloudflare model is recognised as Cloudflare's",
+      _dV.provider_of("@cf/meta/llama-3.2-11b-vision-instruct") == "cloudflare")
+check("and a Gemini one as Google's",
+      _dV.provider_of("gemini-3.8-flash") == "gemini")
+check("an empty model name is not mistaken for Cloudflare",
+      _dV.provider_of("") == "gemini")
+
+with _slV() as _d:
+    _bV = _d.scalar(_spV(_UV).where(_UV.email == "mis@gcs.local"))
+    _drV = _d.scalar(_spV(_UV).where(_UV.email == "amit@gcs.local"))
+    _tV = _TV(org_id=1, branch_id=_drV.branch_id,
+              title=f"SMOKE switch {RUN}", assigner_id=_bV.id, doer_id=_drV.id,
+              source=_SRV.DELEGATION, due_at=_dtV(2026, 10, 7, 18, 0),
+              status=_STV.SUBMITTED, submitted_at=_dtV(2026, 10, 7, 9, 0),
+              completion_note="done")
+    _d.add(_tV)
+    _d.flush()
+    # this morning's Google quota refusal, stored today
+    _d.add(_AAV(org_id=1, task_id=_tV.id, verdict=_AVV.ERROR, confidence=0,
+                remark="the AI service answered 429: quota",
+                model="gemini-3.8-flash"))
+    _d.commit()
+    _tidV = _tV.id
+
+    _dV.AI_ENABLED, _dV._quota_hit_on, _dV._quota_hit_by = True, None, ""
+    _dV.AI_PROVIDER, _dV.AI_KEY = "gemini", "test-key"
+    check("Google's refusal closes the day on Google",
+          _dV.budget_left(_d, 1) == 0)
+
+    _geminiSpentV = _dV.spent_today(_d, 1)      # counted while on Gemini
+    _dV.AI_PROVIDER, _dV.CF_ACCOUNT, _dV.CF_TOKEN = "cloudflare", "a", "t"
+    _dV.AI_DAILY_LIMIT = 200
+    check("but the day is open on Cloudflare", _dV.budget_left(_d, 1) > 0,
+          _dV.budget_left(_d, 1))
+    # Earlier checks in this suite made a couple of Cloudflare calls, so what
+    # matters is that GOOGLE's morning is not among what Cloudflare has spent.
+    _cfSpentV = _dV.spent_today(_d, 1)
+    check("and Google's morning does not come out of Cloudflare's allowance",
+          _cfSpentV < _geminiSpentV, (_geminiSpentV, _cfSpentV))
+
+    _ANSV = _jsV.dumps({"verdict": "weak", "confidence": 40,
+                        "remark": "The note says only 'done'.",
+                        "looked_at": "a note"})
+    _rowV = _dV.review(_d, _d.get(_TV, _tidV), _hxV.Client(
+        transport=_hxV.MockTransport(
+            lambda r: _hxV.Response(200, json={"result": {"response": _ANSV},
+                                               "success": True}))))
+    check("so a task stuck on Google gets a real verdict the same day",
+          _rowV.verdict == _AVV.WEAK, _rowV.verdict)
+    check("recorded against the service that answered",
+          _dV.provider_of(_rowV.model) == "cloudflare", _rowV.model)
+    check("and that one check is what Cloudflare's allowance has spent",
+          _dV.spent_today(_d, 1) == _cfSpentV + 1,
+          (_cfSpentV, _dV.spent_today(_d, 1)))
+
+    # And a Cloudflare refusal closes Cloudflare, not Google.
+    _dV.review(_d, _d.get(_TV, _tidV), _hxV.Client(
+        transport=_hxV.MockTransport(
+            lambda r: _hxV.Response(429, text='{"error":"over quota"}'))))
+    check("a Cloudflare refusal closes the day on Cloudflare",
+          _dV.budget_left(_d, 1) == 0)
+    _dV.AI_PROVIDER, _dV._quota_hit_by = "gemini", ""
+    _dV.AI_DAILY_LIMIT = 1000
+    check("while Google's own day is judged on Google's own failures",
+          _dV.budget_left(_d, 1) == 0)      # Google refused this morning too
+
+(_dV.AI_PROVIDER, _dV.AI_KEY, _dV.CF_ACCOUNT, _dV.CF_TOKEN,
+ _dV.AI_ENABLED, _dV._quota_hit_on, _dV._quota_hit_by,
+ _dV.AI_DAILY_LIMIT) = _wasV
+
+
+# ==========================================================================
+print("\n== an FMS step needs proof AND a note, like the other two ==")
+# "Done" with a screenshot of something else is what the detective exists
+# to catch. A screenshot with NO note is the same problem one step earlier:
+# the auditor has to guess what the picture is meant to prove, and the AI
+# has nothing to compare it against.
+import io as _ioN, re as _reN
+from app.db import SessionLocal as _slN
+from app.models import (Flow as _FlN, FlowInstance as _FiN, Task as _TN,
+                        TaskStatus as _STN)
+from sqlalchemy import select as _spN
+
+def _errN(r):
+    _m = _reN.search(r'margin-bottom:0">(.*?)</p>', " ".join(r.text.split()))
+    return _m.group(1) if _m else ""
+
+_flowN = {"name": f"SMOKE proof+note {RUN}", "description": "", "branch_id": "",
+          "step_title": ["Collect the bill", "Pay it"], "step_doer": ["6", "6"],
+          "step_tat_unit": ["days", "days"], "step_tat": ["2", "7"],
+          "step_priority": ["medium", "medium"],
+          "step_instructions": ["", ""], "step_fields": ["", ""],
+          "step_audit": ["0", "0"], "step_proof": ["1", "1"],
+          "step_decision": ["0", "0"], "step_yes": ["", ""],
+          "step_next": ["", "0"], "step_no": ["", ""], "step_fail": ["", ""],
+          # step 2's clock runs from when the RUN was started
+          "step_due_from": ["", "0"]}
+admin.post("/flows/new", data=_flowN)
+with _slN() as _d:
+    _fN = _d.scalar(_spN(_FlN).where(_FlN.name == f"SMOKE proof+note {RUN}"))
+    _fidN = _fN.id
+    check("a step still asks for proof by default",
+          _fN.steps[0].requires_attachment)
+    check("and the clock anchor 'when the run started' is stored, not dropped",
+          _fN.steps[1].due_from_pos == 0, _fN.steps[1].due_from_pos)
+
+admin.post(f"/flows/{_fidN}/start", data={"reference": f"SMOKE PN-{RUN}"})
+with _slN() as _d:
+    _instN = _d.scalar(_spN(_FiN).where(_FiN.reference == f"SMOKE PN-{RUN}"))
+    _instidN, _startedN = _instN.id, _instN.started_at
+    _t1N = _d.scalar(_spN(_TN).where(_TN.flow_instance_id == _instidN))
+    _t1idN = _t1N.id
+    check("the step task carries the proof requirement",
+          _t1N.requires_attachment)
+
+_rN = doer.post(f"/tasks/{_t1idN}/submit", data={"completion_note": ""})
+check("no proof and no note is refused", _rN.status_code == 400)
+check("and it asks for the proof first",
+      "needs proof attached" in _errN(_rN), _errN(_rN)[:70])
+
+attach(doer, _t1idN)
+_rN = doer.post(f"/tasks/{_t1idN}/submit", data={"completion_note": "   "})
+check("proof with a blank note is still refused", _rN.status_code == 400,
+      _rN.status_code)
+check("and it says a note is what is missing",
+      "note saying what you did" in _errN(_rN), _errN(_rN)[:70])
+with _slN() as _d:
+    check("nothing was submitted while it was refused",
+          _d.get(_TN, _t1idN).submitted_at is None)
+
+_rN = doer.post(f"/tasks/{_t1idN}/submit",
+                data={"completion_note": "Collected from accounts"})
+check("proof and a note go through", _rN.status_code == 200, _rN.status_code)
+with _slN() as _d:
+    check("and the note is kept",
+          _d.get(_TN, _t1idN).completion_note == "Collected from accounts")
+
+# The same rule on delegation, so there is one rule and not three.
+_dgN = mgr.post("/tasks/new", data={
+    "title": f"SMOKE note rule {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-29T23:59"})
+_dgidN = int(_re.findall(r"/tasks/(\d+)/comment", _dgN.text)[0])
+attach(doer, _dgidN)
+check("a delegation task with proof but no note is refused too",
+      doer.post(f"/tasks/{_dgidN}/submit",
+                data={"completion_note": ""}).status_code == 400)
+check("and goes through with one",
+      doer.post(f"/tasks/{_dgidN}/submit",
+                data={"completion_note": "sent to CMD"}).status_code == 200)
+
+# A task that needs no proof is not forced to carry a note either: there is
+# nothing for the note to explain.
+_npN = mgr.post("/tasks/new", data={
+    "title": f"SMOKE no proof {RUN}", "details": "", "doer_id": "6",
+    "branch_id": "", "priority": "low", "due_at": "2026-12-29T23:59",
+    "requires_attachment": "0"})
+_npidN = int(_re.findall(r"/tasks/(\d+)/comment", _npN.text)[0])
+check("a task that needs no proof can still be closed with no note",
+      doer.post(f"/tasks/{_npidN}/submit",
+                data={"completion_note": ""}).status_code == 200)
+
+print("\n== a step's clock can run from the start of the run ==")
+with _slN() as _d:
+    _allN = _d.scalars(_spN(_TN).where(_TN.flow_instance_id == _instidN)
+                       .order_by(_TN.id)).all()
+    _t2N = _allN[-1]
+    _gapN = (_t2N.due_at - _startedN).total_seconds() / 86400
+check("step 2 is due a week after the RUN began, not a week after step 1",
+      6.5 <= _gapN <= 7.5, _gapN)
+
+# And the three anchors are genuinely different moments.
+from app.services import flows as _flsvcN
+from app.models import FlowStep as _FSN
+with _slN() as _d:
+    _instO = _d.get(_FiN, _instidN)
+    _s1N = _d.scalar(_spN(_FSN).where(_FSN.flow_id == _fidN, _FSN.position == 1))
+    _s2N = _d.scalar(_spN(_FSN).where(_FSN.flow_id == _fidN, _FSN.position == 2))
+    _s1N.due_from_pos = None
+    _openN = _flsvcN._deadline_base(_d, _instO, _s1N)
+    _s1N.due_from_pos = 0
+    _runN = _flsvcN._deadline_base(_d, _instO, _s1N)
+    _s2N.due_from_pos = 1
+    _stepN = _flsvcN._deadline_base(_d, _instO, _s2N)
+    _d.rollback()
+check("'when this step opens' means now", abs((_openN - _ck.now()).total_seconds()) < 60)
+check("'when the run started' means the run's own start",
+      _runN == _startedN, (str(_runN), str(_startedN)))
+check("and 'step 1's planned date' means exactly that",
+      _stepN == _allN[0].due_at, (str(_stepN), str(_allN[0].due_at)))
+
+# The builder offers the choices rather than asking for a number.
+_pageN = admin.get("/flows/new").text
+check("the step form offers the anchor as a list",
+      'name="step_due_from"' in _pageN and "when this step opens" in _pageN)
+check("including the start of the run",
+      "when the run was started" in _pageN)
+check("and the old 'type a step number' box is gone",
+      'name="step_due_from" min="1"' not in _pageN)
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

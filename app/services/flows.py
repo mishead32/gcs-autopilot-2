@@ -35,12 +35,20 @@ from . import notify, holidays
 def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
     """The moment this step's turnaround is counted from.
 
-    Normally that is now — the step has just opened. But a step can be tied
-    to an earlier step's PLANNED date instead, so a chain hanging off one
-    date does not drift every time somebody closes a step late.
+    Three answers, and the flow says which it wants:
+
+      nothing   — now, because the step has just opened. The usual case.
+      0         — when the RUN was started: the moment somebody filled in
+                  the start form. A chain measured from there keeps its
+                  dates however long an earlier step took, which is what
+                  people mean by "within a week of the bill arriving".
+      a number  — that step's PLANNED date, so a chain hanging off one date
+                  does not drift every time somebody closes a step late.
     """
-    if not step.due_from_pos:
+    if step.due_from_pos is None:
         return clock.now()
+    if step.due_from_pos == 0:
+        return inst.started_at or clock.now()
     earlier = [t for t in inst.tasks
                if t.flow_step and t.flow_step.position == step.due_from_pos]
     if not earlier:

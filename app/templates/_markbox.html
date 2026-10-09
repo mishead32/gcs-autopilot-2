@@ -32,9 +32,9 @@
     <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
       {% else %}
     <div class="proof need needbox">
-      <strong>Proof is required for this task.</strong>
-      Choose a file below, or take a screenshot and press Ctrl+V — then the
-      button turns on.
+      <strong>Proof and a note are required for this task.</strong>
+      Write a line saying what you did, then choose a file below or take a
+      screenshot and press Ctrl+V — then the button turns on.
     </div>
       {% endif %}
     {% endif %}
@@ -44,8 +44,9 @@
     <input name="field_{{ f }}" value="{{ captured.get(f, '') }}">
     {% endfor %}
 
-    <label>Note</label>
-    <textarea name="completion_note" rows="3"
+    <label>Note{% if task.requires_attachment %} — required{% endif %}</label>
+    <textarea name="completion_note" rows="3" class="marknote"
+              {{ 'required' if task.requires_attachment }}
               placeholder="What did you do? Any issues?"></textarea>
 
     {% if UPLOADS_ON() %}

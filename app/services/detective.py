@@ -148,11 +148,22 @@ def in_scope(q):
 #
 # A task skipped for budget is NOT given a row. It stays in "never checked",
 # which is the honest state and the thing the daily top-up looks for.
-_quota_hit_on: date | None = None     # the day Google said no more
+_quota_hit_on: date | None = None     # the day the service said no more
+_quota_hit_by: str = ""               # and which service said it
+
+
+def provider_of(model: str) -> str:
+    """Which service a stored check was made against.
+
+    Read off the model name, because that is what every row already keeps:
+    Cloudflare's names all begin with @cf/, Google's do not. Nothing has to
+    be migrated for an old row to answer this.
+    """
+    return "cloudflare" if (model or "").startswith("@cf/") else "gemini"
 
 
 def _refused_today(db: Session, org_id: int) -> bool:
-    """Has Google already refused us today, on quota?
+    """Has the service in use already refused us today, on quota?
 
     Read from the DATABASE, not from memory. The in-memory flag is lost
     every time the service restarts — and on a free host it restarts all day
@@ -160,25 +171,35 @@ def _refused_today(db: Session, org_id: int) -> bool:
     tried again, and stored another 429, which is why the page kept filling
     with them however carefully the day's checks were counted.
 
-    The stored failures are the record of what Google said. Reading them
-    back is the only version of this that survives a restart.
+    Counted PER SERVICE. Google refusing this morning says nothing about
+    Cloudflare, and without this the day somebody switches services is a day
+    nothing gets checked — the move made to escape the quota would be
+    blocked by the quota it was escaping.
     """
-    if _quota_hit_on == clock.today():
+    if _quota_hit_on == clock.today() and _quota_hit_by == AI_PROVIDER:
         return True                    # already known in this process
     start = datetime.combine(clock.today(), datetime.min.time())
-    return db.scalar(
-        select(AiAudit.id).where(
+    rows = db.scalars(
+        select(AiAudit.model).where(
             AiAudit.org_id == org_id,
             AiAudit.created_at >= start,
             AiAudit.verdict == AiVerdict.ERROR,
-            AiAudit.remark.like("%429%")).limit(1)) is not None
+            AiAudit.remark.like("%429%"))).all()
+    return any(provider_of(m) == AI_PROVIDER for m in rows)
 
 
 def spent_today(db: Session, org_id: int) -> int:
+    """Checks made today AGAINST THE SERVICE IN USE.
+
+    Per service, because the allowances are separate: a morning spent on
+    Google's twenty should not come out of Cloudflare's two hundred the
+    moment somebody switches.
+    """
     start = datetime.combine(clock.today(), datetime.min.time())
-    return db.scalar(
-        select(func.count()).select_from(AiAudit)
-        .where(AiAudit.org_id == org_id, AiAudit.created_at >= start)) or 0
+    rows = db.scalars(
+        select(AiAudit.model).where(AiAudit.org_id == org_id,
+                                    AiAudit.created_at >= start)).all()
+    return sum(1 for m in rows if provider_of(m) == AI_PROVIDER)
 
 
 def budget_left(db: Session, org_id: int) -> int:
@@ -520,9 +541,9 @@ def review(db: Session, task: Task,
         # Google saying "you are over quota" is about the day, not about this
         # task. Stop for the day rather than spending the next hundred tasks
         # collecting the same message.
-        global _quota_hit_on
+        global _quota_hit_on, _quota_hit_by
         if "429" in str(e):
-            _quota_hit_on = clock.today()
+            _quota_hit_on, _quota_hit_by = clock.today(), AI_PROVIDER
         row.verdict = AiVerdict.ERROR
         row.confidence = 0
         row.remark = str(e)[:2000]

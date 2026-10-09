@@ -897,7 +897,19 @@ async def submit_task(task_id: int, request: Request,
             "screenshot with Ctrl+V — then submit again.")
 
     form = await request.form()
-    task.completion_note = (form.get("completion_note") or "").strip() or None
+    note = (form.get("completion_note") or "").strip()
+    # A task worth attaching proof to is worth a line saying what was done.
+    # The proof on its own is a picture with no claim attached: the auditor
+    # has to work out what it is meant to show, and the AI check has nothing
+    # to compare the picture against. One sentence is enough, and people
+    # were typing "done" anyway — this only stops the blank ones.
+    if task.requires_attachment and not note:
+        raise HTTPException(
+            400,
+            "Write a short note saying what you did before submitting. "
+            "One line is enough — the person checking this needs to know "
+            "what the attachment is meant to show.")
+    task.completion_note = note or None
 
     # A decision step ends in one of two outcomes and the doer picks which.
     # Anything else is recorded as a pass, so an ordinary step routes the

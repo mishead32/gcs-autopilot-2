@@ -133,7 +133,13 @@
       var need = form.querySelector('.needbox');
       if (need) {
         need.className = 'proof ok';
-        need.textContent = 'Proof attached — you can submit.';
+        // Not "you can submit": the note is required too, and a box that
+        // says you are ready when you are not is how somebody presses the
+        // button, gets refused, and loses what they typed.
+        var note = form.querySelector('.marknote');
+        need.textContent = (note && !note.value.trim())
+          ? 'Proof attached — now write a short note, then submit.'
+          : 'Proof attached — you can submit.';
       }
       form.querySelectorAll('.markacts button[disabled]').forEach(function (b) {
         b.disabled = false;

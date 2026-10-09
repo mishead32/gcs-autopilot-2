@@ -79,16 +79,27 @@
       rework.</div>
 
     <div class="row" style="margin-top:12px">
-      <div style="max-width:320px"><label>Start this step's clock from step number</label>
-        <input type="number" name="step_due_from" min="1"
-               value="{{ step.due_from_pos if step and step.due_from_pos else '' }}"
-               placeholder="blank — from the moment this step opens">
+      <div style="max-width:420px"><label>Start this step's clock from</label>
+        {# A list, not a number. "Count the TAT from 2" told nobody what 2
+           meant, and the one answer people most often wanted — count from
+           when the run was started — could not be typed at all. #}
+        <select name="step_due_from" class="duefrom">
+          <option value="" {{ 'selected' if not step or step.due_from_pos is none }}
+            >when this step opens</option>
+          <option value="0" {{ 'selected' if step and step.due_from_pos == 0 }}
+            >when the run was started (the start form was submitted)</option>
+          {% for n in range(1, 16) %}
+          <option value="{{ n }}" class="stepopt" data-pos="{{ n }}"
+            {{ 'selected' if step and step.due_from_pos == n }}
+            {{ 'hidden' if not (step and step.due_from_pos == n) }}
+            >step {{ n }}'s planned date</option>
+          {% endfor %}
+        </select>
         <div class="m" style="margin-top:4px">
           Nothing to do with <em>where the flow goes</em> — only with
-          <em>when this step is due</em>. Blank means the TAT above starts
-          counting the moment this step opens. Put a step number here and it
-          counts from <em>that</em> step's planned date instead, so a late
-          step earlier in the chain does not push every deadline after it.
+          <em>when this step is due</em>. The TAT above is counted from
+          whichever moment you pick here, so a step earlier in the chain
+          running late does not push every deadline after it.
         </div>
       </div>
     </div>
@@ -112,8 +123,26 @@
 var SPAN_CHOICES = {{ span_choices|tojson }};
 
 function renumber(){
-  document.querySelectorAll('#steps .stepcard').forEach(function(card, i){
+  var cards = document.querySelectorAll('#steps .stepcard');
+  cards.forEach(function(card, i){
     card.querySelector('.num').textContent = i + 1;
+  });
+  // The "start this step's clock from" list only offers steps that exist,
+  // and never this step itself. Offering step 7 in a four-step flow is how
+  // somebody saves a flow that is refused on the way out, and offering a
+  // step its own number is a deadline that depends on itself.
+  cards.forEach(function(card, i){
+    var sel = card.querySelector('.duefrom');
+    if (!sel) return;
+    card.querySelectorAll('.duefrom .stepopt').forEach(function(opt){
+      var pos = Number(opt.dataset.pos);
+      var ok = pos <= cards.length && pos !== (i + 1);
+      opt.hidden = !ok;
+      opt.disabled = !ok;
+      // A choice that has just become impossible — a step was removed — is
+      // reset rather than left selected and silently refused on save.
+      if (!ok && sel.value === opt.value) sel.value = '';
+    });
   });
 }
 
