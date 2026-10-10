@@ -893,3 +893,139 @@ table.cmdtable td.warm{color:var(--warn);font-weight:600}
   .mrow.mhdr{display:none}
   .mcell .l{font-size:10px}
 }
+
+/* ===================================================== the sign-in page ==
+   Everything here is scoped to .login-page, so it cannot reach any screen
+   behind the login. The motion is three drifting blobs and a staggered
+   entrance; both are transform/opacity only, so they stay smooth on the
+   oldest machine in the office, and both stop dead for anyone whose system
+   asks for reduced motion. */
+
+body.anon{background:var(--brand)}
+body.anon main{max-width:none;margin:0;padding:0;animation:none}
+
+.login-page{display:grid;grid-template-columns:1.05fr .95fr;
+  min-height:100vh;min-height:100dvh;background:var(--bg)}
+
+/* ---- left: the decoration ---- */
+.lp-art{position:relative;overflow:hidden;display:flex;align-items:center;
+  padding:56px 54px;color:#fff;
+  background:linear-gradient(145deg,#0a3a63 0%,var(--brand) 45%,#1a74bd 100%)}
+.lp-art .blob{position:absolute;border-radius:50%;filter:blur(46px);
+  opacity:.55;will-change:transform}
+.lp-art .b1{width:420px;height:420px;top:-110px;left:-90px;
+  background:#3ea0ff;animation:drift1 19s ease-in-out infinite}
+.lp-art .b2{width:360px;height:360px;bottom:-120px;right:-70px;
+  background:#16d1b5;opacity:.38;animation:drift2 23s ease-in-out infinite}
+.lp-art .b3{width:300px;height:300px;top:42%;left:46%;
+  background:#7b5cff;opacity:.34;animation:drift3 27s ease-in-out infinite}
+.lp-art .grid{position:absolute;inset:0;opacity:.17;
+  background-image:linear-gradient(rgba(255,255,255,.5) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(255,255,255,.5) 1px,transparent 1px);
+  background-size:46px 46px;
+  -webkit-mask-image:radial-gradient(ellipse at 30% 40%,#000,transparent 72%);
+  mask-image:radial-gradient(ellipse at 30% 40%,#000,transparent 72%)}
+
+@keyframes drift1{50%{transform:translate(120px,90px) scale(1.14)}}
+@keyframes drift2{50%{transform:translate(-100px,-70px) scale(1.18)}}
+@keyframes drift3{33%{transform:translate(-90px,60px) scale(1.1)}
+                  66%{transform:translate(70px,-80px) scale(.92)}}
+
+.lp-art-in{position:relative;z-index:1;max-width:430px}
+/* The global h2 is a small grey uppercase section label; this one is a
+   headline, so every one of those is overridden rather than inherited. */
+.lp-art-in h2{font-size:34px;line-height:1.15;margin:20px 0 14px;
+  color:#fff;font-weight:700;text-transform:none;letter-spacing:-.6px;
+  animation:riseIn .6s .12s cubic-bezier(.22,.8,.3,1) both}
+.lp-art-in p{font-size:15.5px;line-height:1.6;color:rgba(255,255,255,.8);
+  margin:0 0 26px;animation:riseIn .6s .2s cubic-bezier(.22,.8,.3,1) both}
+.lp-points{list-style:none;margin:0;padding:0;display:grid;gap:11px}
+.lp-points li{display:flex;align-items:center;gap:11px;font-size:14px;
+  color:rgba(255,255,255,.92);
+  animation:riseIn .55s cubic-bezier(.22,.8,.3,1) both}
+.lp-points li:nth-child(1){animation-delay:.28s}
+.lp-points li:nth-child(2){animation-delay:.36s}
+.lp-points li:nth-child(3){animation-delay:.44s}
+.lp-points i{flex-shrink:0;width:22px;height:22px;border-radius:50%;
+  display:grid;place-items:center;font-style:normal;font-size:11px;
+  background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.3)}
+
+.mark{width:54px;height:54px;border-radius:15px;display:grid;place-items:center;
+  font-weight:800;font-size:19px;letter-spacing:.5px;
+  background:rgba(255,255,255,.17);border:1px solid rgba(255,255,255,.28);
+  box-shadow:0 10px 30px rgba(0,0,0,.2);
+  animation:markIn .7s cubic-bezier(.22,1.2,.3,1) both}
+@keyframes markIn{from{opacity:0;transform:translateY(14px) rotate(-10deg) scale(.8)}
+                  to{opacity:1;transform:none}}
+
+/* ---- right: the form ---- */
+.lp-form{display:flex;align-items:center;justify-content:center;
+  padding:48px 34px;background:var(--bg)}
+.lp-box{width:100%;max-width:380px;
+  animation:riseIn .5s .06s cubic-bezier(.22,.8,.3,1) both}
+.lp-box h1{font-size:27px;letter-spacing:-.5px;margin:0 0 6px}
+.lp-box .sub{color:var(--muted);margin:0 0 26px;font-size:14px}
+.lp-mini{display:none;align-items:center;gap:11px;font-weight:700;
+  font-size:16px;color:var(--brand);margin-bottom:22px}
+.mark.sm{width:38px;height:38px;border-radius:11px;font-size:14px;
+  background:var(--brand);color:#fff;border-color:transparent;
+  box-shadow:0 6px 16px rgba(15,76,129,.3)}
+
+.lp-fields .fld{animation:riseIn .5s cubic-bezier(.22,.8,.3,1) both}
+.lp-fields .fld:nth-child(1){animation-delay:.14s}
+.lp-fields .fld:nth-child(2){animation-delay:.22s}
+.lp-fields .fld:nth-child(3){animation-delay:.3s;margin-top:22px}
+.lp-fields label{margin-bottom:6px}
+.lp-fields input{padding:12px 13px;border-radius:9px;font-size:14.5px;
+  background:var(--card);
+  transition:border-color .16s, box-shadow .16s, transform .16s}
+.lp-fields input:focus{outline:none;border-color:var(--brand-2);
+  box-shadow:0 0 0 4px rgba(22,104,173,.14);transform:translateY(-1px)}
+.lp-fields .fld + .fld{margin-top:16px}
+
+.lp-go{position:relative;overflow:hidden;padding:12px 16px;border-radius:9px;
+  font-size:14.5px;font-weight:600;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));
+  box-shadow:0 8px 20px rgba(15,76,129,.26)}
+.lp-go:hover:not([disabled]){transform:translateY(-2px);
+  box-shadow:0 12px 26px rgba(15,76,129,.34)}
+/* A highlight that sweeps across on hover. Decorative only. */
+.lp-go:after{content:"";position:absolute;top:0;left:-130%;width:60%;height:100%;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent);
+  transform:skewX(-20deg)}
+.lp-go:hover:after{animation:sweep .75s ease both}
+@keyframes sweep{to{left:140%}}
+.lp-go .spin{display:none;position:absolute;top:50%;right:16px;margin-top:-7px;
+  width:14px;height:14px;border-radius:50%;border:2px solid rgba(255,255,255,.4);
+  border-top-color:#fff;animation:spin .7s linear infinite}
+.lp-go.busy .spin{display:block}
+.lp-go.busy{opacity:.85}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.lp-foot{margin:26px 0 0;font-size:12px;color:var(--muted);text-align:center;
+  animation:riseIn .5s .38s cubic-bezier(.22,.8,.3,1) both}
+
+/* A wrong password should be felt, not just read. */
+.err.shake{animation:shake .4s cubic-bezier(.36,.07,.19,.97) both}
+@keyframes shake{10%,90%{transform:translateX(-2px)}
+                 20%,80%{transform:translateX(4px)}
+                 30%,50%,70%{transform:translateX(-6px)}
+                 40%,60%{transform:translateX(6px)}}
+
+/* ---- phone: the decoration becomes a header strip ---- */
+@media (max-width:880px){
+  .login-page{grid-template-columns:1fr}
+  .lp-art{display:none}
+  .lp-mini{display:flex}
+  /* Without the panel beside it the page is a lot of flat grey, so the
+     brand colour comes back as a soft wash behind the top of the form. */
+  .lp-form{padding:34px 22px;min-height:100vh;min-height:100dvh;
+    background:radial-gradient(120% 55% at 50% -8%,rgba(22,104,173,.17),transparent 70%),
+               var(--bg)}
+  .lp-box h1{font-size:24px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .login-page *{animation:none!important}
+  .lp-fields input,.lp-go{transition:none!important}
+}

@@ -5979,9 +5979,19 @@ with _slK() as _d:
 
 # And through the real engine: start a flow whose first step would land on
 # the closed day, and read the task's planned date.
+# The step is given a twenty-day TAT and the day it lands on is made a
+# holiday, so the move is to a working day comfortably in the future. A
+# shorter TAT would land the shifted deadline in the past — which the rule
+# deliberately refuses, since nobody should be handed a deadline they were
+# already late for — and the check would be measuring that refusal instead.
+_landJ = (_clock.now() + _tdJ(days=20)).date()
+with _slK() as _d:
+    if not _d.scalar(_spK(_HolJ).where(_HolJ.org_id == 1, _HolJ.day == _landJ)):
+        _d.add(_HolJ(org_id=1, branch_id=None, day=_landJ, name="SMOKE landing day"))
+        _d.commit()
 _mkJ = {"name": f"SMOKE closed-day flow {RUN}", "description": "", "branch_id": "",
-        "step_title": ["Only step"], "step_doer": [""], "step_tat_unit": ["hours"],
-        "step_tat": ["24"], "step_priority": ["medium"], "step_instructions": [""],
+        "step_title": ["Only step"], "step_doer": [""], "step_tat_unit": ["days"],
+        "step_tat": ["20"], "step_priority": ["medium"], "step_instructions": [""],
         "step_fields": [""], "step_audit": ["0"], "step_proof": ["1"],
         "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
         "step_no": [""], "step_fail": [""], "step_due_from": [""]}
@@ -5998,6 +6008,8 @@ with _slK() as _d:
     check("and that date is not a day the company is closed",
           not _holJ.is_closed(_d, 1, _tJ.due_at.date(), _tJ.branch_id),
           str(_tJ.due_at))
+    check("it moved earlier than the closed day, never later",
+          _tJ.due_at.date() < _landJ, str(_tJ.due_at))
 
 print("\n== the Checklist page can be filtered ==")
 _recPage = admin.get("/recurring").text
@@ -7318,6 +7330,40 @@ check("including the start of the run",
       "when the run was started" in _pageN)
 check("and the old 'type a step number' box is gone",
       'name="step_due_from" min="1"' not in _pageN)
+
+
+
+print("\n== the sign-in page ==")
+# A first impression, so it has to look like something — but it is also the
+# one page that absolutely must work, so the checks are: the form still
+# posts and signs people in, nothing decorative is required to do it, and
+# anybody who has asked their machine not to animate gets a still page.
+_lgC = TestClient(app)
+_lgP = _lgC.get("/login").text
+check("it still asks for an email and a password",
+      'name="email"' in _lgP and 'name="password"' in _lgP)
+check("and still posts to /login", 'action="/login"' in _lgP)
+check("the brand panel is there", 'class="lp-art"' in _lgP)
+check("with the drifting shapes", _lgP.count('class="blob') >= 3)
+check("the panel is hidden from screen readers, being decoration only",
+      'aria-hidden="true"' in _lgP)
+check("the form fields have autocomplete, so password managers fill them",
+      'autocomplete="current-password"' in _lgP)
+_lgCss = open("app/static/app.css", encoding="utf-8").read()
+check("every piece of the new page is scoped to the sign-in page",
+      _lgCss.count(".login-page") >= 2 and ".lp-art{" in _lgCss)
+check("and all of its motion stops for reduced-motion",
+      ".login-page *{animation:none!important}" in _lgCss)
+check("the page still fits a phone", "@media (max-width:880px)" in _lgCss)
+_lgBad = _lgC.post("/login", data={"email": "mis@gcs.local",
+                                   "password": "definitely-wrong"})
+check("a wrong password is refused and says so",
+      "Invalid" in _lgBad.text, _lgBad.status_code)
+check("and the refusal is shaken, not just printed", 'class="err shake"' in _lgBad.text)
+_lgOk = _lgC.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"},
+                  follow_redirects=False)
+check("the right password still signs you in", _lgOk.status_code in (302, 303),
+      _lgOk.status_code)
 
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

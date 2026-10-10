@@ -1,17 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="login-wrap">
-  <h1 style="text-align:center;margin-bottom:6px">{{ APP_NAME }}</h1>
-  <p class="sub" style="text-align:center">Operations autopilot — flows, delegation, scoring</p>
-  <div class="card">
-    {% if error %}<div class="err">{{ error }}</div>{% endif %}
-    <form method="post" action="/login">
-      <label>Email</label>
-      <input type="email" name="email" required autofocus>
-      <label>Password</label>
-      <input type="password" name="password" required>
-      <div style="margin-top:18px"><button class="btn" style="width:100%">Sign in</button></div>
-    </form>
-  </div>
+{# Two panels. The left one is decoration and says what this is; the right one
+   is the only thing that has to work, so on a phone the decoration collapses
+   to a thin header strip and the form keeps the whole screen. #}
+<div class="login-page">
+
+  <section class="lp-art" aria-hidden="true">
+    {# Three slow-drifting blobs behind a fine grid. Pure CSS — no images, no
+       canvas, nothing to download, and it costs nothing on an old office PC
+       because only transform and opacity are animated. #}
+    <span class="blob b1"></span>
+    <span class="blob b2"></span>
+    <span class="blob b3"></span>
+    <span class="grid"></span>
+
+    <div class="lp-art-in">
+      <div class="mark"><span>GA</span></div>
+      <h2>{{ APP_NAME }}</h2>
+      <p>Every task, every follow-up and every score in one place — so nothing
+         waits on somebody remembering it.</p>
+      <ul class="lp-points">
+        <li><i>✓</i> Checklist, delegation and FMS running together</li>
+        <li><i>✓</i> Follow-ups that chase themselves</li>
+        <li><i>✓</i> Scores built from what people actually did</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lp-form">
+    <div class="lp-box">
+      <div class="lp-mini"><span class="mark sm"><span>GA</span></span>{{ APP_NAME }}</div>
+      <h1>Welcome back</h1>
+      <p class="sub">Sign in to pick up where you left off.</p>
+
+      {% if error %}<div class="err shake">{{ error }}</div>{% endif %}
+
+      <form method="post" action="/login" class="lp-fields">
+        <div class="fld"><label>Email</label>
+          <input type="email" name="email" required autofocus
+                 autocomplete="username" placeholder="you@company.com"></div>
+        <div class="fld"><label>Password</label>
+          <input type="password" name="password" required
+                 autocomplete="current-password" placeholder="••••••••"></div>
+        <div class="fld">
+          <button class="btn lp-go" style="width:100%">
+            <span>Sign in</span>
+            {# Shown only once the form is on its way, so a slow connection
+               looks like it is doing something rather than like a dead click. #}
+            <i class="spin"></i>
+          </button>
+        </div>
+      </form>
+
+      <p class="lp-foot">Trouble signing in? Ask your admin to reset your password.</p>
+    </div>
+  </section>
+
 </div>
+
+<script>
+// The button says it is working. Disabled only AFTER the browser has taken
+// the submit, or the form would never be sent.
+(function(){
+  var f = document.querySelector('.lp-fields');
+  if (!f) return;
+  f.addEventListener('submit', function(){
+    var b = f.querySelector('.lp-go');
+    setTimeout(function(){ b.classList.add('busy'); }, 0);
+  });
+})();
+</script>
 {% endblock %}
