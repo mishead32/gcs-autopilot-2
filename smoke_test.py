@@ -7365,6 +7365,38 @@ _lgOk = _lgC.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234
 check("the right password still signs you in", _lgOk.status_code in (302, 303),
       _lgOk.status_code)
 
+# The 3D scene. It is decoration, so what is checked is that it exists, that
+# it is built out of real depth rather than a flat picture of it, and above
+# all that NOTHING on the page needs it: the form posts with the script dead,
+# the scene is hidden from screen readers, and it all stops for reduced
+# motion and on a phone.
+check("there is a 3D scene", 'class="scene3d"' in _lgP)
+check("with a cube of six faces", _lgP.count('class="f ') == 6)
+check("and plates floating at depth", _lgP.count('class="plate') == 3)
+check("the scene has a perspective, or it is only a flat drawing",
+      "perspective:900px" in _lgCss)
+check("the cube's faces really stand in space",
+      "transform-style:preserve-3d" in _lgCss and "translateZ(85px)" in _lgCss)
+check("the card sits on its own stage", 'class="lp-stage"' in _lgP
+      and ".lp-stage{" in _lgCss)
+check("and has a surface, so a tilt can be seen at all",
+      ".lp-stage .lp-box{max-width:none;background:var(--card)" in _lgCss)
+_lgJs = _lgP[_lgP.find("<script>", _lgP.find("lp-foot")):]
+check("the tilt is eased on an animation frame, not written per mouse event",
+      "requestAnimationFrame" in _lgJs and "mousemove" in _lgJs)
+check("and it is clamped, so a wide monitor cannot fold the card in half",
+      "function cap(" in _lgJs)
+check("it does not run for anyone asking for reduced motion",
+      "prefers-reduced-motion" in _lgJs)
+check("nor without a real pointer, which a finger is not",
+      "pointer: fine" in _lgJs)
+check("the 3D is switched off on a phone",
+      ".lp-stage{perspective:none}" in _lgCss)
+check("and off for reduced motion",
+      ".scene3d,.cube,.plate{animation:none!important}" in _lgCss)
+check("none of it is loaded from anywhere — no library, no image",
+      "<img" not in _lgP and "cdn" not in _lgP.lower())
+
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
