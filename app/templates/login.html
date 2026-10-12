@@ -6,13 +6,25 @@
 <div class="login-page">
 
   <section class="lp-art" aria-hidden="true">
-    {# Three slow-drifting blobs behind a fine grid. Pure CSS — no images, no
-       canvas, nothing to download, and it costs nothing on an old office PC
-       because only transform and opacity are animated. #}
+    {# Three slow-drifting blobs behind a fine grid, and on top of them a real
+       3D scene: a rotating wireframe cube and three plates floating at
+       different depths. All CSS 3D transforms — no images, no canvas, no
+       library to download — so it costs nothing on an old office PC. #}
     <span class="blob b1"></span>
     <span class="blob b2"></span>
     <span class="blob b3"></span>
     <span class="grid"></span>
+
+    <div class="scene3d">
+      <div class="cube">
+        <span class="f fz"></span><span class="f fzb"></span>
+        <span class="f fx"></span><span class="f fxb"></span>
+        <span class="f fy"></span><span class="f fyb"></span>
+      </div>
+      <span class="plate p1"></span>
+      <span class="plate p2"></span>
+      <span class="plate p3"></span>
+    </div>
 
     <div class="lp-art-in">
       <div class="mark"><span>GA</span></div>
@@ -27,7 +39,9 @@
     </div>
   </section>
 
-  <section class="lp-form">
+  {# The stage gives the card depth to move in. Without a perspective on the
+     parent, a rotateX is just a squash. #}
+  <section class="lp-form"><div class="lp-stage">
     <div class="lp-box">
       <div class="lp-mini"><span class="mark sm"><span>GA</span></span>{{ APP_NAME }}</div>
       <h1>Welcome back</h1>
@@ -54,19 +68,60 @@
 
       <p class="lp-foot">Trouble signing in? Ask your admin to reset your password.</p>
     </div>
-  </section>
+  </div></section>
 
 </div>
 
 <script>
-// The button says it is working. Disabled only AFTER the browser has taken
-// the submit, or the form would never be sent.
 (function(){
   var f = document.querySelector('.lp-fields');
   if (!f) return;
+
+  // The button says it is working. Disabled only AFTER the browser has taken
+  // the submit, or the form would never be sent.
   f.addEventListener('submit', function(){
     var b = f.querySelector('.lp-go');
     setTimeout(function(){ b.classList.add('busy'); }, 0);
+  });
+
+  // The card leans towards the pointer. Decoration: if this never runs the
+  // page is identical apart from the lean, so no field, button or message
+  // depends on it.
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine  = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  var stage = document.querySelector('.lp-stage');
+  var box   = document.querySelector('.lp-box');
+  if (still || !fine || !stage || !box) return;
+
+  var tx = 0, ty = 0, cx = 0, cy = 0, run = 0;
+  // The angles are eased towards the pointer instead of being snapped to it,
+  // on one animation frame rather than on every mouse event — a mouse fires
+  // far more often than the screen redraws, and writing a transform per event
+  // is how a login page makes a cheap laptop's fan spin up.
+  function frame(){
+    cx += (tx - cx) * 0.09;
+    cy += (ty - cy) * 0.09;
+    box.style.transform = 'rotateY(' + cx.toFixed(2) + 'deg) rotateX(' +
+                          cy.toFixed(2) + 'deg) translateZ(0)';
+    if (Math.abs(tx - cx) > 0.01 || Math.abs(ty - cy) > 0.01) {
+      run = requestAnimationFrame(frame);
+    } else { run = 0; }
+  }
+  // Clamped, because the pointer goes a long way past the edges of a card
+  // 380px wide: without this, a mouse at the far side of a wide monitor asks
+  // for a thirty-degree lean and the card folds in half.
+  function cap(v, max){ return v < -max ? -max : (v > max ? max : v); }
+  function aim(e){
+    var r = stage.getBoundingClientRect();
+    tx = cap(((e.clientX - r.left) / r.width  - 0.5) * 16, 12);  // left/right
+    ty = cap(((e.clientY - r.top)  / r.height - 0.5) * -11, 9);  // up/down
+    if (!run) run = requestAnimationFrame(frame);
+  }
+  window.addEventListener('mousemove', aim);
+  // Back to flat when the pointer leaves the window, so a card left tilted
+  // is never what somebody comes back to.
+  document.addEventListener('mouseleave', function(){
+    tx = 0; ty = 0; if (!run) run = requestAnimationFrame(frame);
   });
 })();
 </script>
