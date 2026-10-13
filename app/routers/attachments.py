@@ -22,7 +22,7 @@ from ..config import UPLOAD_DIR
 from ..db import get_db
 from ..deps import current_user, can_view_task
 from ..models import Task, TaskStatus, Attachment, User, Right
-from ..services import storage
+from ..services import storage, shrink
 
 router = APIRouter()
 
@@ -123,20 +123,23 @@ async def attach_local(task_id: int, files: list[UploadFile] = File(default=[]),
         if not f.filename:
             continue
         data = await f.read()
-        err = storage.check(f.filename, f.content_type or "", len(data))
+        # Shrunk before it is checked, so a photo a little over the limit is
+        # accepted rather than refused for size it was never going to keep.
+        data, ctype, fname = shrink.shrink(data, f.content_type or "", f.filename)
+        err = storage.check(fname, ctype, len(data))
         if err:
             raise HTTPException(400, err)
         if storage.mode() == "db":
             db.add(Attachment(task_id=task.id, uploaded_by_id=user.id,
-                              filename=f.filename[:250],
-                              stored_name=storage.safe_key(task.id, f.filename),
-                              size=len(data), content_type=f.content_type or "",
+                              filename=fname[:250],
+                              stored_name=storage.safe_key(task.id, fname),
+                              size=len(data), content_type=ctype,
                               storage="db", data=data))
         else:
-            key = storage.save_local(task.id, f.filename, data)
+            key = storage.save_local(task.id, fname, data)
             db.add(Attachment(task_id=task.id, uploaded_by_id=user.id,
-                              filename=f.filename[:250], stored_name=key,
-                              size=len(data), content_type=f.content_type or "",
+                              filename=fname[:250], stored_name=key,
+                              size=len(data), content_type=ctype,
                               storage="local"))
         saved += 1
     db.commit()
@@ -159,20 +162,21 @@ async def attach_one(task_id: int, file: UploadFile = File(...),
 
     data = await file.read()
     name = (file.filename or "pasted.png").strip()
-    err = storage.check(name, file.content_type or "", len(data))
+    data, ctype, name = shrink.shrink(data, file.content_type or "", name)
+    err = storage.check(name, ctype, len(data))
     if err:
         raise HTTPException(400, err)
 
     if storage.mode() == "db":
         att = Attachment(task_id=task.id, uploaded_by_id=user.id,
                          filename=name[:250], stored_name=storage.safe_key(task.id, name),
-                         size=len(data), content_type=file.content_type or "",
+                         size=len(data), content_type=ctype,
                          storage="db", data=data)
     else:
         key = storage.save_local(task.id, name, data)
         att = Attachment(task_id=task.id, uploaded_by_id=user.id,
                          filename=name[:250], stored_name=key, size=len(data),
-                         content_type=file.content_type or "", storage="local")
+                         content_type=ctype, storage="local")
     db.add(att)
     db.commit()
     return {"id": att.id, "filename": att.filename, "size": att.size,
@@ -187,8 +191,29 @@ def _from_db(att: Attachment, inline: bool) -> Response:
     return Response(
         content=att.data,
         media_type=att.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'{disposition}; filename="{att.filename}"'},
+        headers={"Content-Disposition": f'{disposition}; filename="{att.filename}"',
+                 **_cache_headers(att)},
     )
+
+
+def _cache_headers(att: Attachment) -> dict:
+    """Tell the browser to keep the file instead of asking for it again.
+
+    This is the single biggest saving on the bill, and it was the real cause
+    of the outage: an attachment never changes once uploaded — a new file gets
+    a new row and a new address — yet without these headers every person who
+    opened a task list pulled every thumbnail down again, all day, every day.
+
+    "private" because these are company documents: only the person's own
+    browser may keep a copy, never a shared cache along the way. Thirty days
+    is long enough to matter and short enough that a deleted file stops being
+    shown reasonably soon.
+    """
+    return {
+        "Cache-Control": "private, max-age=2592000",
+        # A fingerprint, so a browser that does ask gets a 304 and no bytes.
+        "ETag": f'"a{att.id}-{att.size or 0}"',
+    }
 
 
 def _fetch(attachment_id: int, user: User, db: Session) -> Attachment:
@@ -212,7 +237,7 @@ def download(attachment_id: int, user: User = Depends(current_user),
     path = UPLOAD_DIR / att.stored_name
     if not path.exists():
         raise HTTPException(404, "That file is no longer on the server")
-    return FileResponse(path, filename=att.filename)
+    return FileResponse(path, filename=att.filename, headers=_cache_headers(att))
 
 
 @router.get("/attachments/{attachment_id}/view")
@@ -230,7 +255,8 @@ def view(attachment_id: int, user: User = Depends(current_user),
     path = UPLOAD_DIR / att.stored_name
     if not path.exists():
         raise HTTPException(404, "That file is no longer on the server")
-    return FileResponse(path, media_type=att.content_type or None)
+    return FileResponse(path, media_type=att.content_type or None,
+                        headers=_cache_headers(att))
 
 
 @router.post("/attachments/{attachment_id}/delete")

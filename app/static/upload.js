@@ -102,16 +102,94 @@
     });
   }
 
-  function sendOne(file) {
-    var r = row(file.name);
+  /* ------------------------------------------------------- make it smaller ---
+   * A phone photo is three to five megabytes and the only thing anyone does
+   * with it is glance at it. Shrinking it HERE, before it is sent, is worth
+   * far more than shrinking it on the server: the staff member's upload is
+   * ten times quicker on a weak signal, and the full-size photo never crosses
+   * the network at all.
+   *
+   * 1600px on the longest edge keeps a bill number in a screenshot readable,
+   * which is the one thing that must not be lost — proof nobody can read is
+   * not proof. The server shrinks too, as a safety net for browsers that
+   * cannot do this; neither side ever returns something larger than it got.
+   */
+  var MAX_EDGE = 1600;
+  var SHRINKABLE = { 'image/jpeg': 1, 'image/jpg': 1, 'image/png': 1, 'image/webp': 1 };
 
-    if (file.size > maxMb * 1024 * 1024) {
-      r.say((file.size / 1048576).toFixed(1) + ' MB — over the ' + maxMb + ' MB limit', 'bad');
-      return Promise.resolve(false);
+  function toBlob(canvas, type, q) {
+    return new Promise(function (resolve) {
+      if (canvas.toBlob) canvas.toBlob(function (b) { resolve(b); }, type, q);
+      else resolve(null);
+    });
+  }
+
+  function shrink(file) {
+    if (!SHRINKABLE[file.type] || !window.createImageBitmap || !document.createElement('canvas').getContext) {
+      return Promise.resolve(file);
     }
+    // createImageBitmap applies the phone's rotation tag for us, so portrait
+    // photos do not arrive on their side.
+    return createImageBitmap(file, { imageOrientation: 'from-image' })
+      .then(function (bmp) {
+        var scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+        var w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+        var cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        var cx = cv.getContext('2d');
+        // White underneath, or a transparent screenshot turns black as a JPEG.
+        cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
+        cx.drawImage(bmp, 0, 0, w, h);
+        bmp.close && bmp.close();
 
+        var png = file.type === 'image/png';
+        return toBlob(cv, png ? 'image/png' : 'image/jpeg', 0.82)
+          .then(function (b) {
+            // A large PNG is a photo in the wrong clothes; JPEG stores it far
+            // better. Small PNGs are logos and line art — left alone.
+            if (png && b && b.size > 600 * 1024) {
+              return toBlob(cv, 'image/jpeg', 0.85).then(function (j) {
+                return (j && j.size < b.size) ? { blob: j, jpeg: true } : { blob: b, jpeg: false };
+              });
+            }
+            return { blob: b, jpeg: !png };
+          });
+      })
+      .then(function (r) {
+        if (!r.blob || r.blob.size >= file.size) return file;   // never bigger
+        var name = file.name;
+        if (r.jpeg && !/\.jpe?g$/i.test(name)) {
+          name = (name.replace(/\.[^.]+$/, '') || 'image') + '.jpg';
+        }
+        return new File([r.blob], name, { type: r.jpeg ? 'image/jpeg' : file.type });
+      })
+      .catch(function () { return file; });   // anything odd: send the original
+  }
+
+  function mb(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+
+  function sendOne(original) {
+    var r = row(original.name);
+    r.say('preparing');
+
+    // The size limit is applied to what will actually be stored, not to what
+    // came off the camera — so a 9 MB photo that shrinks to 400 KB is
+    // accepted instead of refused for weight it was never going to keep.
+    return shrink(original).then(function (file) {
+      if (file.size > maxMb * 1024 * 1024) {
+        r.say(mb(file.size) + ' — over the ' + maxMb + ' MB limit', 'bad');
+        return false;
+      }
+      if (file !== original) {
+        var pct = Math.round((1 - file.size / original.size) * 100);
+        if (pct >= 5) r.say('shrunk ' + mb(original.size) + ' to ' + mb(file.size));
+      }
+      return send(file, r);
+    });
+  }
+
+  function send(file, r) {
     var type = file.type || 'application/octet-stream';
-    r.say('starting');
 
     var job;
     if (mode === 's3') {
@@ -147,9 +225,14 @@
   function handle(files, viaFetch) {
     if (!files || !files.length) return;
 
-    // Files picked from the disk with no bucket: the plain form post is
-    // simplest and needs no JavaScript to succeed. Pastes can't use it.
-    if (mode !== 's3' && !viaFetch) {
+    // Files picked from the disk with no bucket used to go by plain form
+    // post, which is simplest — but a form post sends the photo untouched, at
+    // full size, which is the whole thing we are trying to stop. So a browser
+    // that can shrink sends through fetch instead; one that cannot falls back
+    // to the form, where the server shrinks it on arrival. With JavaScript
+    // off entirely the form is still there and still works.
+    var canShrink = !!(window.createImageBitmap && window.File);
+    if (mode !== 's3' && !viaFetch && !canShrink) {
       if (localForm) { localForm.submit(); return; }
     }
 

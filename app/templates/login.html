@@ -93,6 +93,9 @@
   var box   = document.querySelector('.lp-box');
   if (still || !fine || !stage || !box) return;
 
+  // The breathing stops the moment somebody touches the form.
+  box.addEventListener('focusin', function(){ box.classList.add('still'); });
+
   var tx = 0, ty = 0, cx = 0, cy = 0, run = 0;
   // The angles are eased towards the pointer instead of being snapped to it,
   // on one animation frame rather than on every mouse event — a mouse fires

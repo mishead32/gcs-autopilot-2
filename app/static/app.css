@@ -1112,6 +1112,10 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
    directly; the idle breath would overwrite that, so it is dropped the
    moment a transform is set inline. */
 .lp-stage .lp-box[style*="transform"]{animation:cardIn .75s cubic-bezier(.22,.9,.3,1) both}
+/* And it stops for good once somebody is actually typing. A card that keeps
+   drifting under the cursor while you fill in a password is charming for one
+   second and irritating for the rest. */
+.lp-stage .lp-box.still{animation:none}
 
 /* Fields and button come forward out of the card rather than sitting on it. */
 .lp-fields input,.lp-go{transform:translateZ(0)}

@@ -7398,5 +7398,109 @@ check("none of it is loaded from anywhere — no library, no image",
       "<img" not in _lgP and "cdn" not in _lgP.lower())
 
 
+print("\n== proof photos are shrunk before they are stored ==")
+# The outage: 361 MB of full-size phone photos sitting INSIDE the database,
+# pulled back out over the internet on every single view, uncached. Five
+# gigabytes of transfer gone in eleven days and the company stopped. So a
+# photo is now cut down before it is ever stored, and the browser is told to
+# keep its copy instead of asking again.
+import io as _ioS, random as _rndS
+from app.services import shrink as _shr
+
+def _photoS(w, h, fmt="JPEG", mode="RGB", **kw):
+    from PIL import Image as _Im
+    im = _Im.new(mode, (w, h), (190, 175, 160) if mode == "RGB" else (190, 175, 160, 255))
+    px = im.load(); _rndS.seed(7)
+    for y in range(0, h, 2):
+        for x in range(0, w, 2):
+            v = (_rndS.randint(0, 255), _rndS.randint(0, 255), _rndS.randint(0, 255))
+            px[x, y] = v if mode == "RGB" else v + (255,)
+    b = _ioS.BytesIO(); im.save(b, fmt, **kw); return b.getvalue()
+
+_bigS = _photoS(4032, 3024, quality=92)
+check("the test photo is a realistic phone photo", len(_bigS) > 4_000_000,
+      f"{len(_bigS)/1048576:.1f} MB")
+_outS, _ctS, _fnS = _shr.shrink(_bigS, "image/jpeg", "proof.jpg")
+check("a 9 MB photo is cut down by at least 80%",
+      len(_outS) < len(_bigS) * 0.2, _shr.saved_label(len(_bigS), len(_outS)))
+from PIL import Image as _ImS
+check("and capped at 1600px on its longest edge",
+      max(_ImS.open(_ioS.BytesIO(_outS)).size) == 1600,
+      str(_ImS.open(_ioS.BytesIO(_outS)).size))
+check("it is still a jpeg with its own name", _ctS == "image/jpeg" and _fnS == "proof.jpg")
+
+# A photo the phone wrote sideways must be stored the right way up: the
+# rotation note is lost in re-encoding, so it has to be applied for real.
+_exS = _ImS.new("RGB", (2000, 1000), (20, 20, 20))
+_bS = _ioS.BytesIO(); _eS = _exS.getexif(); _eS[274] = 6
+_exS.save(_bS, "JPEG", quality=90, exif=_eS.tobytes())
+_rotS, _, _ = _shr.shrink(_bS.getvalue(), "image/jpeg", "sideways.jpg")
+_wS, _hS = _ImS.open(_ioS.BytesIO(_rotS)).size
+check("a photo tagged 'rotate 90' is stored upright, not on its side", _hS > _wS,
+      f"{_wS}x{_hS}")
+
+# Nothing may be lost or damaged on the way through.
+check("a PDF passes through untouched",
+      _shr.shrink(b"%PDF-1.4 bill", "application/pdf", "bill.pdf")[0] == b"%PDF-1.4 bill")
+check("a spreadsheet passes through untouched",
+      _shr.shrink(b"PK\x03\x04xl", "application/vnd.openxmlformats-officedocument"
+                  ".spreadsheetml.sheet", "a.xlsx")[0] == b"PK\x03\x04xl")
+check("a file that is not really an image passes through untouched",
+      _shr.shrink(b"\xff\xd8 not a jpeg", "image/jpeg", "x.jpg")[0] == b"\xff\xd8 not a jpeg")
+check("an iPhone HEIC passes through untouched",
+      _shr.shrink(b"heic-bytes", "image/heic", "IMG.heic")[0] == b"heic-bytes")
+
+# The promise that matters most: never hand back something BIGGER.
+_tinyS = _photoS(60, 60, "PNG")
+check("a small image is never made bigger",
+      len(_shr.shrink(_tinyS, "image/png", "t.png")[0]) <= len(_tinyS))
+_lineS = _ImS.new("RGBA", (300, 300), (0, 0, 0, 0)); _lineS.putpixel((9, 9), (255, 0, 0, 255))
+_bL = _ioS.BytesIO(); _lineS.save(_bL, "PNG")
+check("and line art with transparency stays a PNG",
+      _shr.shrink(_bL.getvalue(), "image/png", "logo.png")[1] == "image/png")
+
+# A big screenshot is a photo in the wrong clothes — PNG stores it terribly.
+_shotS = _photoS(2400, 1400, "PNG")
+_sOut, _sCt, _sFn = _shr.shrink(_shotS, "image/png", "screen.png")
+check("a heavy PNG screenshot is re-saved as a jpeg", _sCt == "image/jpeg", _sCt)
+check("and renamed so it opens in the right program", _sFn.endswith(".jpg"), _sFn)
+check("which makes it much smaller", len(_sOut) < len(_shotS) * 0.6,
+      _shr.saved_label(len(_shotS), len(_sOut)))
+
+# End to end, through the real upload route.
+_upC = TestClient(app)
+_upC.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+with _slK() as _d:
+    _upT = _d.scalar(_spK(_TJ).where(_TJ.doer_id.isnot(None)))
+    _upTid = _upT.id
+_upR = _upC.post(f"/tasks/{_upTid}/attach/upload",
+                 files={"file": ("proof.jpg", _bigS, "image/jpeg")})
+check("a 9 MB photo is accepted by the upload route", _upR.status_code == 200,
+      _upR.status_code)
+_upJ = _upR.json()
+check("and what gets stored is a fraction of what arrived",
+      _upJ["size"] < len(_bigS) * 0.2,
+      _shr.saved_label(len(_bigS), _upJ["size"]))
+
+# And the browser is told to keep it rather than ask again every page view.
+_vR = _upC.get(f"/attachments/{_upJ['id']}/view")
+check("the file is served", _vR.status_code == 200, _vR.status_code)
+check("with an instruction to cache it",
+      "max-age" in _vR.headers.get("cache-control", ""),
+      _vR.headers.get("cache-control"))
+check("kept to the one person's own browser, not a shared one",
+      "private" in _vR.headers.get("cache-control", ""))
+check("and a fingerprint so a re-check costs no bytes", _vR.headers.get("etag"))
+
+_ujs = open("app/static/upload.js", encoding="utf-8").read()
+check("the browser shrinks it too, before it is ever sent",
+      "createImageBitmap" in _ujs and "MAX_EDGE" in _ujs)
+check("applying the phone's rotation as it does so",
+      "imageOrientation" in _ujs)
+check("and never sending something larger than the original",
+      "r.blob.size >= file.size" in _ujs)
+check("a browser that cannot shrink still falls back to the plain form",
+      "canShrink" in _ujs and "localForm.submit()" in _ujs)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
