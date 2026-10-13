@@ -93,13 +93,17 @@
 {# ---------------------------------------------------------------- 2 ---- #}
 <div class="mhead"><h2>Audit</h2>
   <span class="m">Of the work in this period that needs checking, how much
-    the auditors have cleared</span></div>
+    the auditors have cleared. The first four numbers add up:
+    <strong>needs audit = not finished yet + done + pending</strong>.
+    "Cleared" is measured only against work that has actually been handed
+    in, because an auditor cannot check what nobody has submitted.</span></div>
 
 <div class="matrix">
   <div class="mrow mhdr">
     <div class="mname"></div>
     <div class="mcell"><div class="l">Total tasks</div></div>
     <div class="mcell"><div class="l">Needs audit</div></div>
+    <div class="mcell"><div class="l">Not finished yet</div></div>
     <div class="mcell"><div class="l">Audit done</div></div>
     <div class="mcell"><div class="l">Audit pending</div></div>
     <div class="mcell"><div class="l">Cleared</div></div>
@@ -112,6 +116,12 @@
     {{ cell(board.total_in_period[key], 'in period',
             '/tasks?scope=all&status=all&source=' ~ q) }}
     {{ cell(a.total, 'need audit') }}
+    {# The column that was missing, and without it the row did not add up:
+       "98 need audit, 34 done, 0 pending" left 64 unaccounted for and read
+       like a fault. Those 64 are simply still with the doer — an auditor
+       cannot check work nobody has handed in yet. #}
+    {{ cell(a.waiting, 'still with the doer',
+            '/tasks?scope=all&status=pending&source=' ~ q) }}
     {{ cell(a.done, 'done', '/tasks?scope=all&status=audit_done&source=' ~ q, 'ok') }}
     {{ cell(a.pending, 'waiting on auditor',
             '/tasks?scope=all&status=audit_pending&source=' ~ q,

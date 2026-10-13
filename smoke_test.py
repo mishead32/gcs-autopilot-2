@@ -7502,5 +7502,65 @@ check("and never sending something larger than the original",
 check("a browser that cannot shrink still falls back to the plain form",
       "canShrink" in _ujs and "localForm.submit()" in _ujs)
 
+print("\n== the CMD board's audit row adds up ==")
+# The complaint, and it was fair: "98 need audit, 34 done, 0 pending — why is
+# pending zero?" The counts were right; the row was missing its fourth number.
+# The other 64 were still with the DOER, not waiting on an auditor, and that
+# column was computed and never printed, so the row looked broken.
+from app.services import cmdboard as _cbA
+from app.models import (Task as _TA, TaskSource as _TsA, TaskStatus as _TstA,
+                        AuditState as _AsA, User as _UA, Priority as _PrA)
+from datetime import timedelta as _tdA
+
+_sA, _eA, _lblA = _cbA.window("this_month")
+with _slK() as _d:
+    _admA = _d.scalar(_spK(_UA).where(_UA.email == "mis@gcs.local"))
+    _doA = _d.scalar(_spK(_UA).where(_UA.email == "amit@gcs.local"))
+    _base = _cbA.build(_d, 1, _sA, _eA).audit["delegation"]
+    _b0 = (_base.total, _base.waiting, _base.done, _base.pending)
+    _dayA = _sA + _tdA(days=5, hours=10)
+    _tagA = f"SMOKE audit row {RUN}"
+
+    def _mkA(n, state, submitted, needs=True):
+        for i in range(n):
+            _d.add(_TA(org_id=1, branch_id=_doA.branch_id, title=f"{_tagA} {state} {i}",
+                       assigner_id=_admA.id, doer_id=_doA.id, priority=_PrA.MEDIUM,
+                       source=_TsA.DELEGATION, due_at=_dayA, requires_audit=needs,
+                       audit_state=state, submitted_at=_dayA if submitted else None,
+                       status=_TstA.COMPLETED if submitted else _TstA.PENDING))
+
+    _mkA(34, _AsA.COMPLETED, True)            # the auditor has cleared these
+    _mkA(64, _AsA.NOT_REQUIRED, False)        # the doer has not handed these in
+    _mkA(7, _AsA.PENDING, True)               # handed in, sitting on the auditor
+    _mkA(12, _AsA.NOT_REQUIRED, False, needs=False)   # never need an audit at all
+    _d.commit()
+
+    _aA = _cbA.build(_d, 1, _sA, _eA).audit["delegation"]
+    _dT, _dW, _dD, _dP = (_aA.total - _b0[0], _aA.waiting - _b0[1],
+                          _aA.done - _b0[2], _aA.pending - _b0[3])
+
+check("work the doer has not handed in is counted on its own", _dW == 64, _dW)
+check("cleared audits are counted", _dD == 34, _dD)
+check("and audits actually sitting on an auditor are counted", _dP == 7, _dP)
+check("the four numbers add up — this is what the complaint was about",
+      _dT == _dW + _dD + _dP, f"{_dT} vs {_dW}+{_dD}+{_dP}={_dW + _dD + _dP}")
+check("a task that never needs an audit is not in 'needs audit'", _dT == 105, _dT)
+
+# The percentage must be measured against finished work only. Judging an
+# auditor on work nobody has submitted would be nonsense.
+check("'cleared' is measured against finished work, not everything",
+      _aA.done_pct == round(_aA.done / (_aA.done + _aA.pending) * 100, 1),
+      _aA.done_pct)
+
+_cmdP = admin.get("/cmd").text
+check("the page shows the missing column", "Not finished yet" in _cmdP)
+check("and says in words that the row adds up",
+      "needs audit = not finished yet + done + pending" in _cmdP)
+check("the Excel export carries it too",
+      '"DEL not finished yet"' in open("app/routers/cmd.py", encoding="utf-8").read()
+      or "DEL not finished yet" in open("app/routers/cmd.py", encoding="utf-8").read())
+_xlA = admin.get("/cmd?export=xlsx")
+check("and the export still builds", _xlA.status_code == 200, _xlA.status_code)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

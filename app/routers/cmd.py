@@ -47,9 +47,16 @@ def cmd_board(request: Request, period: str = "this_month",
             ("CL today", lambda r: r[1].position["recurring"].today),
             ("CL upcoming", lambda r: r[1].position["recurring"].upcoming),
             ("DEL tasks in period", lambda r: r[1].total_in_period["delegation"]),
+            # Needs-audit and not-finished-yet are exported too, so the
+            # sheet adds up the same way the page does: needs audit =
+            # not finished yet + done + pending.
+            ("DEL needs audit", lambda r: r[1].audit["delegation"].total),
+            ("DEL not finished yet", lambda r: r[1].audit["delegation"].waiting),
             ("DEL audit done", lambda r: r[1].audit["delegation"].done),
             ("DEL audit pending", lambda r: r[1].audit["delegation"].pending),
             ("CL tasks in period", lambda r: r[1].total_in_period["recurring"]),
+            ("CL needs audit", lambda r: r[1].audit["recurring"].total),
+            ("CL not finished yet", lambda r: r[1].audit["recurring"].waiting),
             ("CL audit done", lambda r: r[1].audit["recurring"].done),
             ("CL audit pending", lambda r: r[1].audit["recurring"].pending),
             ("DEL follow-up done", lambda r: r[1].chase["delegation"].done),
