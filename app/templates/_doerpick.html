@@ -1,93 +1,51 @@
 {# Choosing who does the work — one person, or several.
 
-   A plain <select multiple> is the obvious answer and the wrong one: on a
-   phone it is a cramped scrolling box, and on a desktop people lose their
-   whole selection to one stray click. A list of checkboxes cannot be
-   mis-clicked, reads the same on every device, needs no JavaScript to
-   work, and shows at a glance who is already picked.
+   Pick a name from the list, it drops into the box as a tag with a cross on
+   it, and the list moves on to whoever is left. Click the cross to take
+   somebody out. That is the whole control.
 
-   Picking several does NOT make one shared task. It makes one task each,
-   with the same title and deadline — so every person attaches their own
-   proof, gets their own audit, and is scored on their own work. Nobody is
-   ever marked late for something a colleague did not do.
+   Underneath every one of these is a real <select multiple>. The tags are
+   drawn on top of it and nothing else: with the script dead the browser's
+   own multi-select is still there, still named, still posts the same values.
+   A hiring form that stops working because one file failed to load is not a
+   trade worth making.
+
+   Picking several people does NOT make one shared task. It makes one task
+   each — same title, same deadline, separate proof, separate audit,
+   separate score. Nobody is ever marked late for what a colleague did not
+   do.
+
+   mirror= names a hidden field that gets the same ids comma-joined. The FMS
+   step builder needs that: the server reads every step field as a parallel
+   list lined up by position, so a box posting three values for one step and
+   none for the next would silently shift every later step's settings onto
+   the wrong step. One hidden value per step keeps the columns straight.
 #}
 {% macro doer_picker(doers, selected=[], name="doer_id", label="Assign to",
-                     one_only=false, hint="") %}
-<div class="doerpick{{ ' single' if one_only }}" data-one="{{ '1' if one_only else '' }}">
-  <label>{{ label }}
-    <span class="m picked" style="font-weight:400"></span></label>
-  {% if hint %}<div class="m" style="margin:-2px 0 6px">{{ hint }}</div>{% endif %}
+                     one_only=false, hint="", mirror="", add_text="Add a person") %}
+<div class="doerpick{{ ' single' if one_only }}" data-one="{{ '1' if one_only else '' }}"
+     data-add="{{ add_text }}">
+  <label>{{ label }} <span class="m picked" style="font-weight:400"></span></label>
+  {% if hint %}<div class="m dp-hint">{{ hint }}</div>{% endif %}
 
-  <div class="dp-tools">
-    <input type="search" class="dp-find" placeholder="Type a name to find them"
-           aria-label="Search people">
-    {% if not one_only %}
-    <button type="button" class="btn ghost sm dp-none">Clear all</button>
-    {% endif %}
-  </div>
-
-  <div class="dp-list">
+  <select {% if name %}name="{{ name }}"{% endif %} class="dp-src"
+          {{ 'multiple' if not one_only }} size="6">
+    {% if one_only %}<option value="">— nobody yet —</option>{% endif %}
     {% for d in doers %}
-    <label class="dp-row">
-      <input type="{{ 'radio' if one_only else 'checkbox' }}" name="{{ name }}"
-             value="{{ d.id }}" {{ 'checked' if d.id in selected }}>
-      <span class="nm">{{ d.name }}</span>
-      <span class="m">{{ d.role.value }}{% if d.branch %} · {{ d.branch.name }}{% endif %}</span>
-    </label>
+    <option value="{{ d.id }}"
+            data-sub="{{ d.role.value }}{% if d.branch %} · {{ d.branch.name }}{% endif %}"
+            {{ 'selected' if d.id in selected }}>{{ d.name }}</option>
     {% endfor %}
-  </div>
+  </select>
+
+  {% if mirror %}
+  <input type="hidden" name="{{ mirror }}" class="dp-mirror"
+         value="{{ selected|join(',') }}">
+  {% endif %}
 </div>
 {% endmacro %}
 
 
 {% macro doer_picker_script() %}
-<script>
-/* Search and a running count. Everything here is a convenience: with the
- * script dead the checkboxes still tick and the form still posts. */
-(function () {
-  document.querySelectorAll('.doerpick').forEach(function (box) {
-    var find = box.querySelector('.dp-find');
-    var rows = Array.prototype.slice.call(box.querySelectorAll('.dp-row'));
-    var out = box.querySelector('.picked');
-    var clear = box.querySelector('.dp-none');
-
-    function count() {
-      var on = rows.filter(function (r) { return r.querySelector('input').checked; });
-      if (!out) return;
-      if (!on.length) { out.textContent = ''; return; }
-      if (on.length === 1) {
-        out.textContent = '— ' + on[0].querySelector('.nm').textContent;
-      } else {
-        out.textContent = '— ' + on.length + ' people, one task each';
-      }
-    }
-
-    if (find) {
-      find.addEventListener('input', function () {
-        var q = find.value.trim().toLowerCase();
-        rows.forEach(function (r) {
-          // A person already ticked stays visible whatever is typed, so a
-          // search can never hide a choice somebody has already made.
-          var on = r.querySelector('input').checked;
-          r.hidden = !on && q !== '' && r.textContent.toLowerCase().indexOf(q) === -1;
-        });
-      });
-      // Enter in a search box would submit the whole form.
-      find.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') e.preventDefault();
-      });
-    }
-
-    if (clear) {
-      clear.addEventListener('click', function () {
-        rows.forEach(function (r) { r.querySelector('input').checked = false; });
-        count();
-      });
-    }
-
-    box.addEventListener('change', count);
-    count();
-  });
-})();
-</script>
+<script src="/static/doerpick.js"></script>
 {% endmacro %}

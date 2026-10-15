@@ -1149,25 +1149,39 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
 @media (prefers-reduced-motion:reduce){ .draftbar{animation:none} }
 
 /* ------------------------------------------- choosing who does the work --
-   A checkbox list rather than a <select multiple>: it cannot be wiped by a
-   stray click, it reads the same on a phone, and it works with no script. */
+   Pick a name, it becomes a tag with a cross on it. Drawn on top of a real
+   <select multiple>, which stays in the page and does the actual work — so
+   with the script dead the native control is simply shown instead. */
 .doerpick{margin-bottom:14px}
-.doerpick .dp-tools{display:flex;gap:8px;align-items:center;margin-bottom:6px}
-.doerpick .dp-find{flex:1;padding:7px 10px;font-size:13px}
-.doerpick .dp-list{max-height:208px;overflow-y:auto;border:1px solid var(--line);
-  border-radius:9px;background:var(--card)}
-.doerpick .dp-row{display:flex;align-items:center;gap:10px;margin:0;
-  padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;
-  font-weight:400;font-size:13.5px;color:var(--ink);text-transform:none;
-  letter-spacing:0}
-.doerpick .dp-row:last-child{border-bottom:0}
-.doerpick .dp-row:hover{background:var(--chip)}
-.doerpick .dp-row input{width:auto;margin:0;flex-shrink:0}
-.doerpick .dp-row .nm{font-weight:600}
-.doerpick .dp-row .m{margin-left:auto;text-align:right}
-.doerpick .dp-row:has(input:checked){background:#eef5fb}
+.doerpick .dp-hint{margin:-2px 0 7px}
+.doerpick .dp-src.dp-hidden{display:none}
 .doerpick .picked{margin-left:6px;text-transform:none;letter-spacing:0}
-@media (max-width:620px){
-  .doerpick .dp-row{flex-wrap:wrap}
-  .doerpick .dp-row .m{margin-left:30px;text-align:left;width:100%}
+
+.doerpick .dp-chips{display:flex;flex-wrap:wrap;gap:7px;align-items:center;
+  min-height:42px;padding:7px 9px;border:1px solid var(--line);
+  border-radius:9px;background:var(--card)}
+.doerpick .dp-none{color:var(--muted);font-size:12.5px;padding:2px 2px}
+
+.doerpick .dp-chip{display:inline-flex;align-items:center;gap:7px;
+  padding:5px 6px 5px 11px;border-radius:999px;font-size:13px;line-height:1.2;
+  background:#e8f1fa;border:1px solid #c3dcf2;color:#10456f;
+  animation:chipIn .16s ease both}
+@keyframes chipIn{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+.doerpick .dp-chip .who{font-weight:600;white-space:nowrap}
+.doerpick .dp-chip .x{width:19px;height:19px;flex-shrink:0;padding:0;border:0;
+  border-radius:50%;cursor:pointer;font-size:15px;line-height:17px;
+  background:rgba(16,69,111,.12);color:#10456f;
+  transition:background .12s, transform .12s}
+.doerpick .dp-chip .x:hover{background:#c0392b;color:#fff}
+.doerpick .dp-chip .x:active{transform:scale(.88)}
+
+.doerpick .dp-add{margin-top:8px}
+.doerpick .dp-add:disabled{color:var(--muted)}
+
+/* Inside an FMS step card it has a row of its own, but the card is busy, so
+   it is scaled down a touch to sit quietly among its neighbours. */
+.stepcard .doerpick{margin:2px 0 6px}
+.stepcard .doerpick .dp-chips{min-height:38px;padding:6px 8px}
+.stepcard .doerpick .dp-chip{font-size:12.5px;padding:4px 5px 4px 10px}
+.stepcard .doerpick .dp-add{font-size:13px;max-width:360px}
 }

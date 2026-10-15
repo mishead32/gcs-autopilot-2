@@ -138,18 +138,19 @@ def _read_steps(form) -> list[dict]:
     yes_lbl = form.getlist("step_yes")
     no_lbl = form.getlist("step_no")
 
-    def _people(values, i) -> str | None:
+    def _people(values, i, exclude: str = "") -> str | None:
         """'3,7,7,x' -> '3,7'. One hidden box per step, comma joined.
 
         Cleaned here rather than trusted: the box is written by script, and
         a step that quietly carried a stray id would hand work to somebody
-        nobody chose.
+        nobody chose. exclude drops whoever is already the primary doer.
         """
         raw = (values[i] if i < len(values) else "") or ""
+        skip = (exclude or "").strip()
         out = []
         for part in raw.split(","):
             part = part.strip()
-            if part.isdigit() and part not in out:
+            if part.isdigit() and part != skip and part not in out:
                 out.append(part)
         return ",".join(out) or None
 
@@ -187,7 +188,12 @@ def _read_steps(form) -> list[dict]:
             "title": title.strip(),
             "instructions": (instr[i] if i < len(instr) else "").strip() or None,
             "default_doer_id": int(doers[i]) if i < len(doers) and doers[i] else None,
-            "extra_doer_ids": _people(more_doers, i),
+            # Stripped of whoever is already named in "Who does it": the same
+            # person on a step twice is one person, and leaving them in both
+            # places means changing the primary doer would quietly leave the
+            # old one on the step as an extra.
+            "extra_doer_ids": _people(more_doers, i,
+                                      doers[i] if i < len(doers) else ""),
             "tat_hours": int(tats[i]) if i < len(tats) and tats[i] else 24,
             "tat_unit": (tat_units[i] if i < len(tat_units)
                          and tat_units[i] in clock.SPAN_UNITS else "hours"),

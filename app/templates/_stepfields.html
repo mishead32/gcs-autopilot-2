@@ -1,3 +1,4 @@
+{% from "_doerpick.html" import doer_picker, doer_picker_script %}
 {# One step card, used three times: building a new flow, editing an existing
    one, and as the blank template the "+ Add step" button clones. Written once
    because a field that exists when a flow is created and not when it is
@@ -18,30 +19,7 @@
       <select name="step_doer"><option value="">Pick at run time</option>
         {% for d in doers %}<option value="{{ d.id }}"
           {{ 'selected' if step and step.default_doer_id == d.id }}>{{ d.name }}</option>{% endfor %}
-      </select>
-      {# More than one person on a step.
-
-         Posted as ONE hidden comma-joined value per step, never as a
-         multi-select: the server reads every step field as a parallel list
-         lined up by position, and a box that posts two values for one step
-         and none for another would silently shift every later step's
-         settings onto the wrong step.
-
-         Several people means one task EACH when the step opens, and the run
-         waits for all of them before moving on. #}
-      <input type="hidden" name="step_doers" class="morewho"
-             value="{{ step.extra_doer_ids or '' if step else '' }}">
-      <details class="moredoers" {{ 'open' if step and step.extra_doer_ids }}>
-        <summary class="m">Also done by someone else<span class="cnt"></span></summary>
-        <div class="dp-list" style="max-height:150px;margin-top:6px">
-          {% for d in doers %}
-          <label class="dp-row"><input type="checkbox" class="whobox" value="{{ d.id }}">
-            <span class="nm">{{ d.name }}</span></label>
-          {% endfor %}
-        </div>
-        <div class="m" style="margin-top:5px">One task each. The flow moves on
-          only once every one of them has finished.</div>
-      </details></div>
+      </select></div>
     <div style="max-width:150px"><label>TAT — measured in</label>
       <select name="step_tat_unit" class="tatunit">
         {% for k, lbl in span_units.items() %}
@@ -59,6 +37,27 @@
           >{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
       </select></div>
   </div>
+  {# More than one person on a step: pick a name, it becomes a tag.
+
+     Given a row of its own rather than squeezed under "Who does it" — three
+     names in a 180px column stack into a tower and the card stops being
+     readable.
+
+     Posted as ONE hidden comma-joined value, never as a multi-select: the
+     server reads every step field as a parallel list lined up by position,
+     and a box posting two values for one step and none for another would
+     silently shift every later step's settings onto the wrong step. The
+     select itself carries no name, so it posts nothing and the hidden
+     mirror is all the server sees. #}
+  <div class="row"><div>
+    {{ doer_picker(doers, selected=step.doer_ids[1:] if step else [],
+                   name="", mirror="step_doers", label="Also done by",
+                   add_text="Add somebody else",
+                   hint="Leave empty for one person. Add names and the step
+                        opens one task EACH when it comes round — the flow
+                        moves on only once every one of them has finished.") }}
+  </div></div>
+
   <label>How it will be done</label>
   <textarea name="step_instructions" style="min-height:62px"
     placeholder="What exactly to do, and where. Paste links — the sheet, the folder, the form — and they become clickable for whoever does the step."
@@ -161,6 +160,7 @@
 {# The script that wires every card: the decision boxes, the TAT value list,
    and the step numbering. Shared for exactly the same reason as the card. #}
 {% macro step_script(span_choices) %}
+{{ doer_picker_script() }}
 <script>
 var SPAN_CHOICES = {{ span_choices|tojson }};
 
@@ -282,30 +282,22 @@ function wire(card){
   unit.addEventListener('change', fillValues);
   fillValues();
 
-  // The extra people on this step, kept in one hidden comma-joined field so
-  // every step posts exactly one value for every name.
-  var hid = card.querySelector('.morewho');
-  var boxes = card.querySelectorAll('.whobox');
-  var cnt = card.querySelector('.moredoers .cnt');
+  // "Who does it" and "Also done by" must never name the same person. The
+  // server strips a duplicate anyway, but a card that shows somebody in two
+  // places is a card that lies about what it will save.
   var primary = card.querySelector('select[name="step_doer"]');
-  if (hid && boxes.length) {
-    var already = (hid.value || '').split(',').map(function (x) { return x.trim(); });
-    boxes.forEach(function (b) {
-      if (already.indexOf(b.value) !== -1) b.checked = true;
-    });
-    function sync() {
-      var on = [];
-      boxes.forEach(function (b) {
-        // The person already named in "Who does it" is not an EXTRA one;
-        // listing them twice would try to hand them the same step twice.
-        if (b.checked && b.value !== primary.value) on.push(b.value);
+  var extra = card.querySelector('.doerpick .dp-src');
+  if (primary && extra) {
+    primary.addEventListener('change', function () {
+      var hit = false;
+      Array.prototype.forEach.call(extra.options, function (o) {
+        if (o.value && o.value === primary.value && o.selected) {
+          o.selected = false;
+          hit = true;
+        }
       });
-      hid.value = on.join(',');
-      if (cnt) cnt.textContent = on.length ? ' — ' + (on.length + 1) + ' people' : '';
-    }
-    boxes.forEach(function (b) { b.addEventListener('change', sync); });
-    if (primary) primary.addEventListener('change', sync);
-    sync();
+      if (hit) extra.dispatchEvent(new CustomEvent('dp:refresh'));
+    });
   }
 }
 

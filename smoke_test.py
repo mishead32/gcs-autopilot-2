@@ -7926,5 +7926,47 @@ check("and a javascript: link is left as plain text",
 check("the builder asks for it in plain words",
       "How it will be done" in admin.get("/flows/new").text)
 
+print("\n== the people picker ==")
+# It used to be a list of checkboxes, which rendered as a tower of names
+# inside a step card and could not be read. It is now: pick a name, it drops
+# into a box as a tag with a cross on it, and the chooser offers whoever is
+# left.
+_dpJs = open("app/static/doerpick.js", encoding="utf-8").read()
+_newP = admin.get("/tasks/new").text
+check("the picker is on the delegation form", 'class="doerpick' in _newP)
+check("built on a real multi-select that is already named and filled",
+      'name="doer_id" class="dp-src"' in _newP
+      or ('class="dp-src"' in _newP and 'name="doer_id"' in _newP))
+check("so with the script dead the native control still posts the same thing",
+      "dp-hidden" in _dpJs and "src.classList.add" in _dpJs)
+check("the cross is a button that cannot submit the form",
+      "x.type = 'button'" in _dpJs)
+check("somebody already chosen is not offered again",
+      "return !o.selected" in _dpJs)
+check("and the picker re-wires itself for step cards added later",
+      "MutationObserver" in _dpJs)
+check("the step card has its own picker", "step_doers" in admin.get("/flows/new").text)
+
+# The bug this found: pick two extras, then change "Who does it" to one of
+# them, and that person was on the step twice.
+_dupF = f"SMOKE both boxes {RUN}"
+admin.post("/flows/new", data={
+    "name": _dupF, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+    "step_title": ["Count it"], "step_doer": [str(_idsM[0])],
+    "step_doers": [f"{_idsM[0]},{_idsM[1]}"],      # the primary is in BOTH
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+    "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+    "step_next": ["0"], "step_no": [""], "step_fail": [""], "step_due_from": [""]})
+with _slK() as _d:
+    _dupStep = _d.scalar(_spK(_FlM).where(_FlM.name == _dupF)).steps[0]
+check("the primary doer is stripped out of the extras",
+      _dupStep.extra_doer_ids == str(_idsM[1]), _dupStep.extra_doer_ids)
+check("so the step names each person exactly once",
+      _dupStep.doer_ids == [_idsM[0], _idsM[1]], _dupStep.doer_ids)
+check("and opens one task each, not two for the same person",
+      len(set(_dupStep.doer_ids)) == len(_dupStep.doer_ids))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
