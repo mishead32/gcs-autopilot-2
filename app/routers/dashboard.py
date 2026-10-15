@@ -348,33 +348,56 @@ def recurring_list(request: Request, export: str = "", q: str = "",
 @router.post("/recurring")
 async def create_rule(
     request: Request,
-    title: str = Form(...), details: str = Form(""), doer_id: int = Form(...),
+    title: str = Form(...), details: str = Form(""),
     branch_id: str = Form(""), frequency: str = Form("daily"),
     due_time: str = Form("23:59"), priority: str = Form("medium"),
     requires_audit: str = Form(""),
     user: User = Depends(manager_up), db: Session = Depends(get_db),
 ):
+    """Add a checklist item — for one person, or for several at once.
+
+    Several people means one RULE each, not one rule with several names.
+    That keeps everything downstream honest: each person's checklist item
+    makes its own task each day, carries its own score, and can be switched
+    off, retimed or deleted without touching anybody else's. It also leaves
+    the one-task-per-rule-per-day guarantee exactly as it is, which is what
+    stopped checklist tasks appearing twice.
+    """
     # see the note in tasks.create_task
     form = await request.form()
     _proof = form.getlist("requires_attachment")
     proof_required = True if not _proof else ("1" in _proof)
-    doer = db.get(User, doer_id)
+
+    seen, doer_ids = set(), []
+    for raw in form.getlist("doer_id"):
+        if not str(raw).strip().isdigit():
+            continue
+        did = int(raw)
+        if did not in seen:
+            seen.add(did)
+            doer_ids.append(did)
+    if not doer_ids:
+        raise HTTPException(400, "Choose at least one person for this checklist item.")
 
     try:
         sched = recurring.read_schedule(frequency, form)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    db.add(RecurringRule(
-        org_id=user.org_id,
-        branch_id=int(branch_id) if branch_id else (doer.branch_id if doer else None),
-        title=title.strip(), details=details.strip() or None,
-        doer_id=doer_id, assigner_id=user.id,
-        priority=Priority(priority),
-        due_time=due_time, requires_audit=bool(requires_audit),
-        requires_attachment=proof_required,
-        **sched,
-    ))
+    for did in doer_ids:
+        doer = db.get(User, did)
+        if not doer or doer.org_id != user.org_id:
+            raise HTTPException(400, "Unknown doer")
+        db.add(RecurringRule(
+            org_id=user.org_id,
+            branch_id=int(branch_id) if branch_id else doer.branch_id,
+            title=title.strip(), details=details.strip() or None,
+            doer_id=did, assigner_id=user.id,
+            priority=Priority(priority),
+            due_time=due_time, requires_audit=bool(requires_audit),
+            requires_attachment=proof_required,
+            **sched,
+        ))
     db.commit()
     return RedirectResponse("/recurring", status_code=303)
 

@@ -545,6 +545,28 @@ class FlowStep(Base):
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     # who does it: a fixed user, or left blank to be picked at run time
     default_doer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # More than one person on a step: a comma-separated list of user ids,
+    # INCLUDING the one in default_doer_id above. Kept alongside rather than
+    # replacing it so every existing flow, every override and every piece of
+    # code that reads "the step's doer" carries on working untouched — this
+    # column is only consulted to find the OTHERS.
+    #
+    # When a step with several doers opens, it spawns one task each. They are
+    # separate tasks with separate proof, audits and scores, and the flow
+    # only moves on once every one of them is closed.
+    extra_doer_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def doer_ids(self) -> list[int]:
+        """Everyone who does this step, in order, without repeats."""
+        out = []
+        for raw in (self.extra_doer_ids or "").split(","):
+            raw = raw.strip()
+            if raw.isdigit() and int(raw) not in out:
+                out.append(int(raw))
+        if self.default_doer_id and self.default_doer_id not in out:
+            out.insert(0, self.default_doer_id)
+        return out
     # Turnaround time, as a unit and a number: 30 minutes, 2 days, 1 month.
     # tat_hours is the original column and is kept so older rows and the
     # bulk importer keep working; tat_unit/tat_value are what the engine

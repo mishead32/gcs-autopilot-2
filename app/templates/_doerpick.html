@@ -1,0 +1,93 @@
+{# Choosing who does the work — one person, or several.
+
+   A plain <select multiple> is the obvious answer and the wrong one: on a
+   phone it is a cramped scrolling box, and on a desktop people lose their
+   whole selection to one stray click. A list of checkboxes cannot be
+   mis-clicked, reads the same on every device, needs no JavaScript to
+   work, and shows at a glance who is already picked.
+
+   Picking several does NOT make one shared task. It makes one task each,
+   with the same title and deadline — so every person attaches their own
+   proof, gets their own audit, and is scored on their own work. Nobody is
+   ever marked late for something a colleague did not do.
+#}
+{% macro doer_picker(doers, selected=[], name="doer_id", label="Assign to",
+                     one_only=false, hint="") %}
+<div class="doerpick{{ ' single' if one_only }}" data-one="{{ '1' if one_only else '' }}">
+  <label>{{ label }}
+    <span class="m picked" style="font-weight:400"></span></label>
+  {% if hint %}<div class="m" style="margin:-2px 0 6px">{{ hint }}</div>{% endif %}
+
+  <div class="dp-tools">
+    <input type="search" class="dp-find" placeholder="Type a name to find them"
+           aria-label="Search people">
+    {% if not one_only %}
+    <button type="button" class="btn ghost sm dp-none">Clear all</button>
+    {% endif %}
+  </div>
+
+  <div class="dp-list">
+    {% for d in doers %}
+    <label class="dp-row">
+      <input type="{{ 'radio' if one_only else 'checkbox' }}" name="{{ name }}"
+             value="{{ d.id }}" {{ 'checked' if d.id in selected }}>
+      <span class="nm">{{ d.name }}</span>
+      <span class="m">{{ d.role.value }}{% if d.branch %} · {{ d.branch.name }}{% endif %}</span>
+    </label>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
+
+
+{% macro doer_picker_script() %}
+<script>
+/* Search and a running count. Everything here is a convenience: with the
+ * script dead the checkboxes still tick and the form still posts. */
+(function () {
+  document.querySelectorAll('.doerpick').forEach(function (box) {
+    var find = box.querySelector('.dp-find');
+    var rows = Array.prototype.slice.call(box.querySelectorAll('.dp-row'));
+    var out = box.querySelector('.picked');
+    var clear = box.querySelector('.dp-none');
+
+    function count() {
+      var on = rows.filter(function (r) { return r.querySelector('input').checked; });
+      if (!out) return;
+      if (!on.length) { out.textContent = ''; return; }
+      if (on.length === 1) {
+        out.textContent = '— ' + on[0].querySelector('.nm').textContent;
+      } else {
+        out.textContent = '— ' + on.length + ' people, one task each';
+      }
+    }
+
+    if (find) {
+      find.addEventListener('input', function () {
+        var q = find.value.trim().toLowerCase();
+        rows.forEach(function (r) {
+          // A person already ticked stays visible whatever is typed, so a
+          // search can never hide a choice somebody has already made.
+          var on = r.querySelector('input').checked;
+          r.hidden = !on && q !== '' && r.textContent.toLowerCase().indexOf(q) === -1;
+        });
+      });
+      // Enter in a search box would submit the whole form.
+      find.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') e.preventDefault();
+      });
+    }
+
+    if (clear) {
+      clear.addEventListener('click', function () {
+        rows.forEach(function (r) { r.querySelector('input').checked = false; });
+        count();
+      });
+    }
+
+    box.addEventListener('change', count);
+    count();
+  });
+})();
+</script>
+{% endmacro %}

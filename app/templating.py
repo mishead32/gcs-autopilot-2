@@ -114,3 +114,40 @@ templates.env.globals["BASIS_CHOICES"] = _BASIS
 from . import lastview as _lastview
 templates.env.globals["back_url"] = _lastview.url
 templates.env.globals["back_label"] = _lastview.label
+
+# ------------------------------------------------------- clickable links ---
+def linkify(text: str) -> "Markup":
+    """Turn a pasted link into a link, and nothing else into anything.
+
+    People write a step's instructions as "pull the sheet from <url>, check
+    against <url>" — and a doer reading that on a phone cannot do anything
+    with a web address they have to copy out by hand.
+
+    Escaped FIRST, always, and only then are the links put back. The text is
+    typed by whoever builds the flow, and treating it as HTML would let a
+    pasted <script> run in every doer's browser. Nothing else is allowed
+    through: no bold, no images, no raw tags.
+
+    rel="noopener noreferrer" because target="_blank" without it hands the
+    opened page a handle on ours.
+    """
+    import re as _re
+    from markupsafe import Markup as _M, escape as _esc
+    if not text:
+        return _M("")
+    safe = str(_esc(text))
+    # http(s) only. A "javascript:" or "data:" link is not a link somebody
+    # pasted from their browser bar, it is an attack.
+    pattern = _re.compile(r"(https?://[^\s<>\"']+)")
+
+    def _a(m):
+        url = m.group(1).rstrip(".,;:!?)")
+        tail = m.group(1)[len(url):]
+        show = url if len(url) <= 60 else url[:57] + "..."
+        return (f'<a href="{url}" target="_blank" rel="noopener noreferrer">'
+                f'{show}</a>{tail}')
+
+    return _M(pattern.sub(_a, safe))
+
+
+templates.env.filters["linkify"] = linkify

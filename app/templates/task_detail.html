@@ -37,7 +37,7 @@
 <div class="grid g2">
   <div>
     <div class="card">
-      {% if task.details %}<p style="white-space:pre-wrap;margin-top:0">{{ task.details }}</p>{% endif %}
+      {% if task.details %}<p style="white-space:pre-wrap;margin-top:0">{{ task.details|linkify }}</p>{% endif %}
       <table style="border:0">
         <tr><th style="background:0">Assigned by</th><td>{{ task.assigner.name }}</td></tr>
         <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>

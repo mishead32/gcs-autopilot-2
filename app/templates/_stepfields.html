@@ -18,7 +18,30 @@
       <select name="step_doer"><option value="">Pick at run time</option>
         {% for d in doers %}<option value="{{ d.id }}"
           {{ 'selected' if step and step.default_doer_id == d.id }}>{{ d.name }}</option>{% endfor %}
-      </select></div>
+      </select>
+      {# More than one person on a step.
+
+         Posted as ONE hidden comma-joined value per step, never as a
+         multi-select: the server reads every step field as a parallel list
+         lined up by position, and a box that posts two values for one step
+         and none for another would silently shift every later step's
+         settings onto the wrong step.
+
+         Several people means one task EACH when the step opens, and the run
+         waits for all of them before moving on. #}
+      <input type="hidden" name="step_doers" class="morewho"
+             value="{{ step.extra_doer_ids or '' if step else '' }}">
+      <details class="moredoers" {{ 'open' if step and step.extra_doer_ids }}>
+        <summary class="m">Also done by someone else<span class="cnt"></span></summary>
+        <div class="dp-list" style="max-height:150px;margin-top:6px">
+          {% for d in doers %}
+          <label class="dp-row"><input type="checkbox" class="whobox" value="{{ d.id }}">
+            <span class="nm">{{ d.name }}</span></label>
+          {% endfor %}
+        </div>
+        <div class="m" style="margin-top:5px">One task each. The flow moves on
+          only once every one of them has finished.</div>
+      </details></div>
     <div style="max-width:150px"><label>TAT — measured in</label>
       <select name="step_tat_unit" class="tatunit">
         {% for k, lbl in span_units.items() %}
@@ -36,8 +59,12 @@
           >{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
       </select></div>
   </div>
-  <label>Instructions</label><textarea name="step_instructions"
-    style="min-height:52px">{{ step.instructions or '' if step else '' }}</textarea>
+  <label>How it will be done</label>
+  <textarea name="step_instructions" style="min-height:62px"
+    placeholder="What exactly to do, and where. Paste links — the sheet, the folder, the form — and they become clickable for whoever does the step."
+    >{{ step.instructions or '' if step else '' }}</textarea>
+  <div class="m" style="margin-top:4px">Shown to the doer on the task itself.
+    Any web address you paste here turns into a link they can tap.</div>
 
   <div class="row">
     <div><label>Figures the doer must type in when finishing this step</label>
@@ -254,6 +281,32 @@ function wire(card){
   }
   unit.addEventListener('change', fillValues);
   fillValues();
+
+  // The extra people on this step, kept in one hidden comma-joined field so
+  // every step posts exactly one value for every name.
+  var hid = card.querySelector('.morewho');
+  var boxes = card.querySelectorAll('.whobox');
+  var cnt = card.querySelector('.moredoers .cnt');
+  var primary = card.querySelector('select[name="step_doer"]');
+  if (hid && boxes.length) {
+    var already = (hid.value || '').split(',').map(function (x) { return x.trim(); });
+    boxes.forEach(function (b) {
+      if (already.indexOf(b.value) !== -1) b.checked = true;
+    });
+    function sync() {
+      var on = [];
+      boxes.forEach(function (b) {
+        // The person already named in "Who does it" is not an EXTRA one;
+        // listing them twice would try to hand them the same step twice.
+        if (b.checked && b.value !== primary.value) on.push(b.value);
+      });
+      hid.value = on.join(',');
+      if (cnt) cnt.textContent = on.length ? ' — ' + (on.length + 1) + ' people' : '';
+    }
+    boxes.forEach(function (b) { b.addEventListener('change', sync); });
+    if (primary) primary.addEventListener('change', sync);
+    sync();
+  }
 }
 
 function addStep(){

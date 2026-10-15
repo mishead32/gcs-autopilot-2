@@ -7746,5 +7746,185 @@ check("the capture box explains itself in plain words",
       "Figures the doer must type in when finishing this step" in _newPageD)
 check("and says what each one becomes", "becomes a box the doer has to fill in" in _newPageD)
 
+print("\n== one task each when several people are picked ==")
+# "Several people on a task" is one task EACH, not one task with several
+# names on it. A shared task would have made the scoring a lie: whose proof,
+# whose audit, and who exactly is late when one of three has not finished?
+from app.models import (Task as _TM, User as _UM, RecurringRule as _RRM,
+                        Flow as _FlM, FlowInstance as _FIM, TaskStatus as _TstM)
+
+with _slK() as _d:
+    _peopleM = [u for u in _d.scalars(_spK(_UM).where(_UM.active.is_(True))).all()
+                if u.receives_work][:3]
+    _idsM = [u.id for u in _peopleM]
+    _namesM = [u.name for u in _peopleM]
+check("there are three people to hand work to", len(_idsM) == 3, _idsM)
+
+_titleM = f"SMOKE three doers {RUN}"
+_rM = admin.post("/tasks/new", data={
+    "title": _titleM, "details": "Count and sign",
+    "doer_id": [str(i) for i in _idsM], "branch_id": "", "priority": "high",
+    "due_at": "2026-11-05T17:00", "requires_audit": ""}, follow_redirects=False)
+check("the form is accepted", _rM.status_code == 303, _rM.status_code)
+check("and lands on the list, not on one arbitrary copy",
+      "/tasks?" in (_rM.headers.get("location") or ""), _rM.headers.get("location"))
+with _slK() as _d:
+    _madeM = _d.scalars(_spK(_TM).where(_TM.title == _titleM)).all()
+check("three people picked makes three tasks", len(_madeM) == 3, len(_madeM))
+check("one for each of them, nobody twice",
+      sorted(t.doer_id for t in _madeM) == sorted(_idsM))
+check("each with the same deadline", len({t.due_at for t in _madeM}) == 1)
+check("and the same priority", len({t.priority for t in _madeM}) == 1)
+check("they are separate records, so each can be closed on its own",
+      len({t.id for t in _madeM}) == 3)
+
+# Ticking somebody twice is a slip, not an instruction to hand them the job
+# twice over.
+_dupT = f"SMOKE dup doer {RUN}"
+admin.post("/tasks/new", data={
+    "title": _dupT, "details": "", "doer_id": [str(_idsM[0]), str(_idsM[0])],
+    "branch_id": "", "priority": "low", "due_at": "2026-11-06T17:00",
+    "requires_audit": ""}, follow_redirects=False)
+with _slK() as _d:
+    check("the same person ticked twice still gets one task",
+          len(_d.scalars(_spK(_TM).where(_TM.title == _dupT)).all()) == 1)
+
+_oneT = f"SMOKE one doer {RUN}"
+_r1 = admin.post("/tasks/new", data={
+    "title": _oneT, "details": "", "doer_id": [str(_idsM[0])], "branch_id": "",
+    "priority": "low", "due_at": "2026-11-07T17:00", "requires_audit": ""},
+    follow_redirects=False)
+check("one person still lands straight on their task",
+      "/tasks/" in (_r1.headers.get("location") or "")
+      and "?" not in (_r1.headers.get("location") or ""), _r1.headers.get("location"))
+
+_r0 = admin.post("/tasks/new", data={
+    "title": f"SMOKE nobody {RUN}", "details": "", "doer_id": [], "branch_id": "",
+    "priority": "low", "due_at": "2026-11-07T17:00", "requires_audit": ""})
+check("picking nobody is refused", _r0.status_code == 400, _r0.status_code)
+
+# --- the checklist: one RULE each --------------------------------------
+_ruleT = f"SMOKE three rules {RUN}"
+_rr = admin.post("/recurring", data={
+    "title": _ruleT, "details": "", "doer_id": [str(i) for i in _idsM],
+    "branch_id": "", "frequency": "daily", "due_time": "18:00",
+    "priority": "medium", "requires_audit": ""}, follow_redirects=False)
+check("the checklist form is accepted", _rr.status_code == 303, _rr.status_code)
+with _slK() as _d:
+    _rulesM = _d.scalars(_spK(_RRM).where(_RRM.title == _ruleT)).all()
+check("three people makes three checklist items", len(_rulesM) == 3, len(_rulesM))
+check("one each", sorted(r.doer_id for r in _rulesM) == sorted(_idsM))
+check("each switched on in its own right", all(r.active for r in _rulesM))
+check("so one person's can be retimed without touching the others",
+      len({r.id for r in _rulesM}) == 3)
+check("picking nobody for a checklist item is refused too",
+      admin.post("/recurring", data={
+          "title": f"SMOKE no rule doer {RUN}", "details": "", "doer_id": [],
+          "branch_id": "", "frequency": "daily", "due_time": "18:00",
+          "priority": "medium", "requires_audit": ""}).status_code == 400)
+
+print("\n== an FMS step several people share waits for all of them ==")
+# Moving on after the first person finishes would quietly cancel everybody
+# else's work, which is the opposite of asking three people to do something.
+_fnameM = f"SMOKE shared step {RUN}"
+_formM = {
+    "name": _fnameM, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+    "step_title": ["Everyone counts their own stock", "Manager signs off"],
+    "step_doer": [str(_idsM[0]), str(_idsM[0])],
+    "step_doers": [f"{_idsM[1]},{_idsM[2]}", ""],
+    "step_tat_unit": ["hours", "hours"], "step_tat": ["24", "24"],
+    "step_priority": ["medium", "medium"], "step_instructions": ["", ""],
+    "step_fields": ["", ""], "step_audit": ["0", "0"], "step_proof": ["0", "0"],
+    "step_decision": ["0", "0"], "step_yes": ["", ""], "step_next": ["", ""],
+    "step_no": ["", ""], "step_fail": ["", "0"], "step_due_from": ["", ""]}
+check("the flow is accepted", admin.post("/flows/new", data=_formM).status_code == 200)
+with _slK() as _d:
+    _fM = _d.scalar(_spK(_FlM).where(_FlM.name == _fnameM))
+    check("step 1 remembers all three people", _fM.steps[0].doer_ids == _idsM,
+          _fM.steps[0].doer_ids)
+    check("and step 2 just the one", _fM.steps[1].doer_ids == [_idsM[0]],
+          _fM.steps[1].doer_ids)
+    _fMid = _fM.id
+
+admin.post(f"/flows/{_fMid}/start", data={"reference": f"SMOKE STOCK {RUN}"})
+with _slK() as _d:
+    _iM = _d.scalar(_spK(_FIM).where(_FIM.flow_id == _fMid))
+    _t1M = _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iM.id)).all()
+    _iMid = _iM.id
+check("starting the run opens one task per person", len(_t1M) == 3, len(_t1M))
+check("one each, nobody missed", sorted(t.doer_id for t in _t1M) == sorted(_idsM))
+
+def _step_positions():
+    with _slK() as _d:
+        return [t.flow_step.position for t in
+                _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iMid)).all()]
+
+_doneM = 0
+for _tm in _t1M:
+    _cc = TestClient(app)
+    with _slK() as _d:
+        _em = _d.get(_UM, _tm.doer_id).email
+    _cc.post("/login", data={"email": _em, "password": "gcs1234"})
+    _sub = _cc.post(f"/tasks/{_tm.id}/submit", data={"completion_note": "counted"})
+    _doneM += 1
+    _opened = 2 in _step_positions()
+    if _doneM < 3:
+        check(f"after {_doneM} of 3 finish, the next step has NOT opened",
+              not _opened)
+    else:
+        check("only when the last one finishes does the next step open", _opened)
+
+with _slK() as _d:
+    _t2M = [t for t in _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iMid)).all()
+            if t.flow_step.position == 2]
+check("and the next step opens once, not three times", len(_t2M) == 1, len(_t2M))
+
+# A decision step cannot be shared: two people could pick two outcomes and
+# the flow would have to go two ways at once.
+_badM = dict(_formM)
+_badM["name"] = f"SMOKE bad decision {RUN}"
+_badM["step_decision"] = ["1", "0"]
+_badM["step_yes"] = ["Verified", ""]
+_badM["step_no"] = ["Rejected", ""]
+_badM["step_next"] = ["2", "0"]
+_badM["step_fail"] = ["1", "0"]
+_rbM = admin.post("/flows/new", data=_badM)
+check("a decision step with more than one doer is refused",
+      _rbM.status_code == 400, _rbM.status_code)
+check("and the refusal explains why", "only one person can do" in _rbM.text)
+
+print("\n== a step can say how it will be done, with links that work ==")
+_lnameM = f"SMOKE links {RUN}"
+_lformM = dict(_formM)
+_lformM.update({
+    "name": _lnameM, "step_doer": [str(_idsM[0]), str(_idsM[0])],
+    "step_doers": ["", ""],
+    "step_instructions": ["Open https://docs.google.com/spreadsheets/d/abc "
+                          "and copy sheet 2.", ""]})
+admin.post("/flows/new", data=_lformM)
+with _slK() as _d:
+    _lfM = _d.scalar(_spK(_FlM).where(_FlM.name == _lnameM))
+    _lfMid = _lfM.id
+admin.post(f"/flows/{_lfMid}/start", data={"reference": f"SMOKE LINK {RUN}"})
+with _slK() as _d:
+    _liM = _d.scalar(_spK(_FIM).where(_FIM.flow_id == _lfMid))
+    _ltM = _d.scalar(_spK(_TM).where(_TM.flow_instance_id == _liM.id))
+    _ltMid = _ltM.id
+_pageM = admin.get(f"/tasks/{_ltMid}").text
+check("a link pasted into the step is a real link on the doer's task",
+      '<a href="https://docs.google.com/spreadsheets/d/abc"' in _pageM)
+check("and it opens without handing the other page a handle on ours",
+      'rel="noopener noreferrer"' in _pageM)
+
+from app.templating import linkify as _lk
+check("anything that is not a link is escaped, never rendered as HTML",
+      "&lt;script&gt;" in str(_lk("<script>alert(1)</script>"))
+      and "<script>" not in str(_lk("<script>alert(1)</script>")))
+check("and a javascript: link is left as plain text",
+      "<a" not in str(_lk("javascript:alert(1)")))
+check("the builder asks for it in plain words",
+      "How it will be done" in admin.get("/flows/new").text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

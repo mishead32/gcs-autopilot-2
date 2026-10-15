@@ -22,7 +22,7 @@ from ..models import (
     Followup
 )
 from ..services import (notify, flows as flow_svc, storage, holidays, xlsx,
-                        detective)
+                        detective, shrink)
 from ..templating import templates
 
 router = APIRouter()
@@ -466,7 +466,6 @@ async def create_task(
     request: Request,
     title: str = Form(...),
     details: str = Form(""),
-    doer_id: int = Form(...),
     branch_id: str = Form(""),
     priority: str = Form("medium"),
     due_at: str = Form(...),
@@ -475,71 +474,124 @@ async def create_task(
     user: User = Depends(require_right(Right.CREATE_TASK)),
     db: Session = Depends(get_db),
 ):
-    doer = db.get(User, doer_id)
-    if not doer or doer.org_id != user.org_id:
-        raise HTTPException(400, "Unknown doer")
+    """Hand work out — to one person, or to several at once.
+
+    Several people means one task EACH, not one task with several names on
+    it. That is the whole design: every person attaches their own proof,
+    gets their own audit, and is scored on their own work, and nobody is
+    marked late because a colleague was. A shared task would have made the
+    scoring a lie, and the scoring is the point of the system.
+
+    doer_id is read as a list so a single-select form, a bulk import and an
+    API call that each post exactly one value keep working untouched.
+    """
+    form = await request.form()
+    wanted = [int(v) for v in form.getlist("doer_id")
+              if str(v).strip().isdigit()]
+    # Same person ticked twice — through a duplicated field or a resubmitted
+    # form — must not produce two identical tasks.
+    seen, doer_ids = set(), []
+    for d in wanted:
+        if d not in seen:
+            seen.add(d)
+            doer_ids.append(d)
+    if not doer_ids:
+        raise HTTPException(400, "Choose at least one person to do this.")
+
+    doers = []
+    for did in doer_ids:
+        d = db.get(User, did)
+        if not d or d.org_id != user.org_id or not d.active:
+            raise HTTPException(400, "Unknown doer")
+        doers.append(d)
+    doer = doers[0]
 
     # Proof is required unless the form explicitly says otherwise. The form
     # pairs the checkbox with a hidden "0", so an unticked box still posts a
     # value; a task created any other way (bulk import, API) sends nothing at
     # all and gets the safe default.
-    form = await request.form()
     _proof = form.getlist("requires_attachment")
     proof_required = True if not _proof else ("1" in _proof)
 
     # A deadline on a closed day would mark the doer late for a day nobody
     # was in, so it moves BACK to the working day before and the task says
     # why — in before the office shuts, rather than late the day after.
-    branch_for_holiday = int(branch_id) if branch_id else doer.branch_id
-    due_dt, moved_from = holidays.shift_due(
-        db, user.org_id, datetime.fromisoformat(due_at), branch_for_holiday)
-
-    task = Task(
-        org_id=user.org_id,
-        branch_id=int(branch_id) if branch_id else doer.branch_id,
-        title=title.strip(),
-        details=details.strip() or None,
-        assigner_id=user.id,
-        doer_id=doer.id,
-        priority=Priority(priority),
-        source=TaskSource.DELEGATION,
-        due_at=due_dt,
-        requires_audit=bool(requires_audit),
-        requires_attachment=proof_required,
-    )
-    db.add(task)
-    db.flush()
-
-    # Files chosen on the create form are only handled here in local mode.
-    # With a bucket configured the browser uploads them directly afterwards.
+    # Read once, not once per person: an UploadFile can only be read to the
+    # end a single time, so reading it inside the loop would give the first
+    # person the file and everybody else an empty one.
+    briefing = []
     if storage.mode() == "local":
         for f in files or []:
             if not f.filename:
                 continue
             data = await f.read()
-            if storage.check(f.filename, f.content_type or "", len(data)):
+            data, ctype, fname = shrink.shrink(data, f.content_type or "", f.filename)
+            if storage.check(fname, ctype, len(data)):
                 continue
-            key = storage.save_local(task.id, f.filename, data)
+            briefing.append((fname, ctype, data))
+
+    made = []
+    for person in doers:
+        # Each copy gets its deadline worked out for ITS OWN doer's branch:
+        # two people in two companies can have different holidays, and the
+        # one whose office is shut should not be the only one marked late.
+        branch_for_holiday = int(branch_id) if branch_id else person.branch_id
+        due_dt, moved_from = holidays.shift_due(
+            db, user.org_id, datetime.fromisoformat(due_at), branch_for_holiday)
+
+        task = Task(
+            org_id=user.org_id,
+            branch_id=int(branch_id) if branch_id else person.branch_id,
+            title=title.strip(),
+            details=details.strip() or None,
+            assigner_id=user.id,
+            doer_id=person.id,
+            priority=Priority(priority),
+            source=TaskSource.DELEGATION,
+            due_at=due_dt,
+            requires_audit=bool(requires_audit),
+            requires_attachment=proof_required,
+        )
+        db.add(task)
+        db.flush()
+        made.append(task)
+
+        for fname, ctype, data in briefing:
+            key = storage.save_local(task.id, fname, data)
             db.add(Attachment(task_id=task.id, uploaded_by_id=user.id,
-                              filename=f.filename[:250], stored_name=key,
-                              size=len(data), content_type=f.content_type or "",
+                              filename=fname[:250], stored_name=key,
+                              size=len(data), content_type=ctype,
                               storage="local"))
 
-    if moved_from:
-        # closed_reason gives either a holiday's name or "a Sunday", so the
-        # sentence has to read correctly for both.
-        why = (moved_from if moved_from.startswith("a ")
-               else f"it is {moved_from}")
-        db.add(TaskComment(
-            task_id=task.id, author_id=user.id,
-            body=f"Brought forward to {due_dt:%d %b %Y, %I:%M %p} — nobody is "
-                 f"in on the day you picked ({why}), so it is due the working "
-                 "day before rather than being late the day after."))
+        if moved_from:
+            # closed_reason gives either a holiday's name or "a Sunday", so
+            # the sentence has to read correctly for both.
+            why = (moved_from if moved_from.startswith("a ")
+                   else f"it is {moved_from}")
+            db.add(TaskComment(
+                task_id=task.id, author_id=user.id,
+                body=f"Brought forward to {due_dt:%d %b %Y, %I:%M %p} — nobody "
+                     f"is in on the day you picked ({why}), so it is due the "
+                     "working day before rather than being late the day after."))
 
-    notify.queue_task_assigned(db, task)
+        notify.queue_task_assigned(db, task)
+
     db.commit()
-    flash.set(request, "assigned", f"{doer.name} — due {due_dt:%d %b, %I:%M %p}")
-    return RedirectResponse(f"/tasks/{task.id}", status_code=303)
+    if len(made) == 1:
+        flash.set(request, "assigned",
+                  f"{doers[0].name} — due {made[0].due_at:%d %b, %I:%M %p}")
+        return RedirectResponse(f"/tasks/{made[0].id}", status_code=303)
+
+    # Several people: there is no single task to land on, so the assigner is
+    # shown the list of what they just handed out rather than one arbitrary
+    # copy of it.
+    names = ", ".join(d.name for d in doers[:3])
+    if len(doers) > 3:
+        names += f" and {len(doers) - 3} more"
+    flash.set(request, "assigned",
+              f"{len(made)} tasks — one each for {names}")
+    return RedirectResponse(
+        "/tasks?scope=assigned&status=pending&source=delegation", status_code=303)
 
 
 # ------------------------------------------------------------- detail ------

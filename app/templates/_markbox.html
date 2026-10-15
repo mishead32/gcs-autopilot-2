@@ -23,7 +23,7 @@
       <span class="{{ 'overdue' if task.is_overdue }}">Planned {{ task.due_at|dt('%d %b, %I:%M %p') }}
         · {{ task.due_at|due }}</span>
     </p>
-    {% if task.details %}<p class="m dets">{{ task.details }}</p>{% endif %}
+    {% if task.details %}<p class="m dets" style="white-space:pre-wrap">{{ task.details|linkify }}</p>{% endif %}
   </div>
 
   <div class="markbody">

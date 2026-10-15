@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_doerpick.html" import doer_picker, doer_picker_script %}
 {% block content %}
 <h1>Delegate a task</h1>
 <p class="sub">The doer is notified on WhatsApp and it lands on their dashboard immediately.</p>
@@ -10,16 +11,16 @@
   <label>Details / instructions</label>
   <textarea name="details" placeholder="What exactly needs to be done, and what does 'done' look like?"></textarea>
 
+  {# Full width: names and their company do not fit in half a row, and a
+     list people have to read before ticking should not be the narrowest
+     thing on the page. #}
+  {{ doer_picker(doers, hint="Pick one person, or several. Picking several
+     makes one task EACH with the same title and deadline — their own proof,
+     their own audit, their own score. Nobody is marked late for what a
+     colleague did not do.") }}
+
   <div class="row">
-    <div>
-      <label>Assign to</label>
-      <select name="doer_id" required>
-        {% for d in doers %}
-        <option value="{{ d.id }}">{{ d.name }} — {{ d.role.value }}{% if d.branch %} ({{ d.branch.name }}){% endif %}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div>
+    <div style="max-width:320px">
       <label>Branch</label>
       <select name="branch_id">
         <option value="">— use doer's branch —</option>
@@ -76,4 +77,5 @@
   <div style="margin-top:20px"><button class="btn">Assign task</button>
     <a class="btn ghost" href="/tasks">Cancel</a></div>
 </form>
+{{ doer_picker_script() }}
 {% endblock %}

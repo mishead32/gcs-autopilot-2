@@ -156,11 +156,53 @@ def start_flow(db: Session, flow: Flow, reference: str, starter: User,
     db.flush()
 
     first = flow.steps[0]
-    doer_id = (doer_overrides or {}).get(first.id) or first.default_doer_id or starter.id
-    doer = db.get(User, doer_id)
-    _spawn_step_task(db, inst, first, doer, starter)
+    _open_step(db, inst, first, starter, starter, doer_overrides)
     db.commit()
     return inst
+
+
+
+def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
+               fallback: User, assigner: User,
+               overrides: dict | None = None) -> Task:
+    """Open a step: one task for each person who does it.
+
+    A step with three names on it is three tasks, not one task with three
+    names. Each person attaches their own proof, is audited on their own
+    work and scored on it, and nobody is marked late because a colleague
+    was. The run then waits for ALL of them before moving on, which is what
+    "three people do this step" actually means.
+
+    The first task is returned, because every caller wants something to
+    point at and the first is as good an answer as any.
+    """
+    override = (overrides or {}).get(step.id)
+    if override:
+        people = [db.get(User, override)]
+    else:
+        people = [db.get(User, i) for i in step.doer_ids]
+        people = [p for p in people if p is not None and p.active]
+    if not people:
+        people = [fallback]
+
+    made = [_spawn_step_task(db, inst, step, p, assigner) for p in people]
+    return made[0]
+
+
+def _siblings_open(db: Session, task: Task) -> bool:
+    """Is anybody else still working on this same step of this same run?
+
+    Only tasks that are still live count. An earlier pass of a rework loop
+    has already been closed, so a step that comes round twice is not held
+    up by its own history.
+    """
+    if not task.flow_step_id:
+        return False
+    return bool(db.scalar(select(func.count()).select_from(Task).where(
+        Task.flow_instance_id == task.flow_instance_id,
+        Task.flow_step_id == task.flow_step_id,
+        Task.id != task.id,
+        Task.status.in_(_LIVE_TASK_STATES))))
 
 
 # A rework loop that never converges would spawn tasks forever. Nobody legs
@@ -178,6 +220,14 @@ def advance_flow(db: Session, task: Task) -> Task | None:
     # this, approving an audit on a held run would quietly start it moving
     # again behind the back of whoever paused it.
     if inst.held_at is not None or inst.cancelled_at is not None:
+        return None
+
+    # A step several people share only counts as finished when the last of
+    # them finishes. Moving on after the first would quietly cancel the work
+    # of everybody else, which is the opposite of asking three people to do
+    # something.
+    if _siblings_open(db, task):
+        db.commit()
         return None
 
     # carry the doer's captured field values forward into the flow context
@@ -223,8 +273,7 @@ def advance_flow(db: Session, task: Task) -> Task | None:
         return None
 
     inst.current_position = nxt.position
-    doer = db.get(User, nxt.default_doer_id) if nxt.default_doer_id else task.doer
-    new_task = _spawn_step_task(db, inst, nxt, doer, task.assigner)
+    new_task = _open_step(db, inst, nxt, task.doer, task.assigner)
     db.commit()
     return new_task
 

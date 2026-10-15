@@ -123,6 +123,7 @@ def _read_steps(form) -> list[dict]:
     """
     titles = form.getlist("step_title")
     doers = form.getlist("step_doer")
+    more_doers = form.getlist("step_doers")
     tats = form.getlist("step_tat")
     tat_units = form.getlist("step_tat_unit")
     dfroms = form.getlist("step_due_from")
@@ -136,6 +137,21 @@ def _read_steps(form) -> list[dict]:
     decides = form.getlist("step_decision")
     yes_lbl = form.getlist("step_yes")
     no_lbl = form.getlist("step_no")
+
+    def _people(values, i) -> str | None:
+        """'3,7,7,x' -> '3,7'. One hidden box per step, comma joined.
+
+        Cleaned here rather than trusted: the box is written by script, and
+        a step that quietly carried a stray id would hand work to somebody
+        nobody chose.
+        """
+        raw = (values[i] if i < len(values) else "") or ""
+        out = []
+        for part in raw.split(","):
+            part = part.strip()
+            if part.isdigit() and part not in out:
+                out.append(part)
+        return ",".join(out) or None
 
     def _is_field(values, i) -> bool:
         return (values[i] if i < len(values) else "").strip().startswith("field:")
@@ -171,6 +187,7 @@ def _read_steps(form) -> list[dict]:
             "title": title.strip(),
             "instructions": (instr[i] if i < len(instr) else "").strip() or None,
             "default_doer_id": int(doers[i]) if i < len(doers) and doers[i] else None,
+            "extra_doer_ids": _people(more_doers, i),
             "tat_hours": int(tats[i]) if i < len(tats) and tats[i] else 24,
             "tat_unit": (tat_units[i] if i < len(tat_units)
                          and tat_units[i] in clock.SPAN_UNITS else "hours"),
@@ -210,6 +227,17 @@ def _check_routes(rows: list[dict]) -> None:
     valid = {r["position"] for r in rows}
     for r in rows:
         where = f"Step {r['position']} ({r['title']})"
+
+        # A decision step may have exactly one doer. Two people choosing two
+        # different outcomes is a flow that has to go two ways at once, and
+        # there is no honest answer to it — better refused while the flow is
+        # being built than discovered by whoever is holding the bill.
+        if r["is_decision"] and r.get("extra_doer_ids"):
+            raise HTTPException(
+                400, f"{where} is a decision step, so only one person can do "
+                     "it — two people could pick two different outcomes and "
+                     "the flow would have to go both ways at once. Either "
+                     "give it a single doer, or make it a normal step.")
         for label, target in (("“after this step, open step”", r["next_step_pos"]),
                               ("second outcome", r["fail_step_pos"])):
             if target and target not in valid:
@@ -232,6 +260,7 @@ def _check_routes(rows: list[dict]) -> None:
 
 STEP_COLUMNS = ("title", "instructions", "default_doer_id", "tat_hours",
                 "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
+                "extra_doer_ids",
                 "requires_audit", "requires_attachment", "capture_fields",
                 "next_step_pos", "fail_step_pos", "is_decision",
                 "pass_label", "fail_label", "position")

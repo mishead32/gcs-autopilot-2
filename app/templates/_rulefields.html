@@ -7,16 +7,24 @@
 
    Pass r to fill it in from an existing rule; leave it out for a new one.
 #}
+{% from "_doerpick.html" import doer_picker, doer_picker_script %}
 {% macro rule_fields(doers, branches, frequencies, priorities, today_iso,
                      r=None, quarter_start='', year_day='') %}
     <label>Task title</label>
     <input name="title" required value="{{ r.title if r else '' }}"
            placeholder="e.g. Post daily sales MIS to CMD">
     <label>Details</label><textarea name="details" style="min-height:56px">{{ r.details or '' if r else '' }}</textarea>
+    {# Creating: tick as many people as you like and each gets a checklist
+       item of their own. Editing: exactly one, because an existing item
+       belongs to one person — changing who does it is a move, not a
+       multiplication. #}
+    {{ doer_picker(doers, selected=[r.doer_id] if r else [], one_only=(r is not none),
+       label=("Doer" if r else "Who does this"),
+       hint=("" if r else "Tick one person, or several. Several people means
+            one checklist item EACH — their own daily task, their own score,
+            and each can be retimed or switched off without touching the
+            others.")) }}
     <div class="row">
-      <div><label>Doer</label><select name="doer_id" required>
-        {% for d in doers %}<option value="{{ d.id }}"
-          {{ 'selected' if r and r.doer_id == d.id }}>{{ d.name }}</option>{% endfor %}</select></div>
       <div><label>Branch</label><select name="branch_id"><option value="">Doer's branch</option>
         {% for b in branches %}<option value="{{ b.id }}"
           {{ 'selected' if r and r.branch_id == b.id }}>{{ b.name }}</option>{% endfor %}</select></div>
@@ -128,6 +136,7 @@
 {# The script that shows only the boxes belonging to the chosen
    frequency. One copy, same reason as above. #}
 {% macro rule_script() %}
+{{ doer_picker_script() }}
 <script>
 /* Show only the boxes that belong to the chosen frequency, and say in plain
  * words what the rule will do. A form that shows every option at once is a

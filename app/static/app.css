@@ -1147,3 +1147,27 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
 .draftbar .t{flex:1;min-width:240px}
 .draftbar .btn.sm{padding:6px 12px;font-size:12.5px}
 @media (prefers-reduced-motion:reduce){ .draftbar{animation:none} }
+
+/* ------------------------------------------- choosing who does the work --
+   A checkbox list rather than a <select multiple>: it cannot be wiped by a
+   stray click, it reads the same on a phone, and it works with no script. */
+.doerpick{margin-bottom:14px}
+.doerpick .dp-tools{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.doerpick .dp-find{flex:1;padding:7px 10px;font-size:13px}
+.doerpick .dp-list{max-height:208px;overflow-y:auto;border:1px solid var(--line);
+  border-radius:9px;background:var(--card)}
+.doerpick .dp-row{display:flex;align-items:center;gap:10px;margin:0;
+  padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;
+  font-weight:400;font-size:13.5px;color:var(--ink);text-transform:none;
+  letter-spacing:0}
+.doerpick .dp-row:last-child{border-bottom:0}
+.doerpick .dp-row:hover{background:var(--chip)}
+.doerpick .dp-row input{width:auto;margin:0;flex-shrink:0}
+.doerpick .dp-row .nm{font-weight:600}
+.doerpick .dp-row .m{margin-left:auto;text-align:right}
+.doerpick .dp-row:has(input:checked){background:#eef5fb}
+.doerpick .picked{margin-left:6px;text-transform:none;letter-spacing:0}
+@media (max-width:620px){
+  .doerpick .dp-row{flex-wrap:wrap}
+  .doerpick .dp-row .m{margin-left:30px;text-align:left;width:100%}
+}
