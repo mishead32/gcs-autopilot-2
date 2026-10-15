@@ -295,7 +295,10 @@ async def create_flow(request: Request, user: User = Depends(require_right(Right
         db.add(FlowStep(flow_id=flow.id,
                         **{k: r[k] for k in STEP_COLUMNS}))
     db.commit()
-    return RedirectResponse(f"/flows/{flow.id}", status_code=303)
+    # ?built=new says the save went through, which is the only moment the
+    # browser may throw away the draft of this flow. Clearing it on submit
+    # instead lost twenty minutes of work every time the save was refused.
+    return RedirectResponse(f"/flows/{flow.id}?built=new", status_code=303)
 
 
 @router.get("/flows/{flow_id}", response_class=HTMLResponse)
@@ -450,7 +453,7 @@ async def edit_flow(flow_id: int, request: Request,
               f"{flow.name} saved — {len(rows)} step(s). Runs already going "
               "keep the steps they started with." if touching_steps
               else f"{flow.name} saved.")
-    return RedirectResponse(f"/flows/{flow.id}", status_code=303)
+    return RedirectResponse(f"/flows/{flow.id}?built=edit", status_code=303)
 
 
 @router.post("/flows/{flow_id}/toggle")

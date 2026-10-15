@@ -89,11 +89,21 @@
   // Adding or removing a step is a click, with no input event behind it.
   form.addEventListener('click', function () { setTimeout(saveSoon, 0); });
 
-  // Saved once the form is actually on its way, so a draft never outlives
-  // the thing it was a draft of.
+  // Submitting does NOT throw the draft away.
+  //
+  // It used to, and that was the whole feature undone: the server refuses a
+  // flow whose routing points at a step that does not exist, and the refusal
+  // arrives as an error page — by which time the draft had already been
+  // deleted and twenty minutes of work with it. Exactly the loss this file
+  // was written to prevent, caused by this file.
+  //
+  // So the draft is only cleared when the save is KNOWN to have gone
+  // through: the server redirects to the flow with ?built= on it, and the
+  // flow's own page clears it there. A refused save leaves the draft alone,
+  // and going back to the builder offers it.
   form.addEventListener('submit', function () {
     clearTimeout(timer);
-    store(function (s) { s.removeItem(KEY); });
+    save();
   });
 
   /* -------------------------------------------------------- restoring --- */

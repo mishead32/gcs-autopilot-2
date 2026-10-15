@@ -114,4 +114,24 @@
     </div>
   </div>
 </div>
+
+{# Landing here with ?built= on the address is the ONLY proof a save went
+   through, so it is the only moment the builder's draft may be thrown away.
+   Clearing it when the form was submitted instead destroyed the draft every
+   time the server refused the flow — which is precisely the loss the draft
+   exists to prevent. The address is tidied afterwards so a refresh, or a
+   bookmark, does not carry the instruction around forever. #}
+<script>
+(function () {
+  var q = new URLSearchParams(window.location.search).get('built');
+  if (!q) return;
+  try {
+    window.localStorage.removeItem(
+      q === 'edit' ? 'gcsa:flowdraft:edit-{{ flow.id }}' : 'gcsa:flowdraft:new');
+  } catch (e) { /* storage off or full: nothing to clear, nothing to do */ }
+  if (window.history.replaceState) {
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+</script>
 {% endblock %}

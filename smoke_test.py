@@ -8064,5 +8064,64 @@ _tbXl = admin.get(f"/flows/{_tbFid}?export=xlsx")
 check("the flow's export carries the method too", _tbXl.status_code == 200,
       _tbXl.status_code)
 
+print("\n== a refused save must not take the draft with it ==")
+# The draft feature undone by its own hand. The form cleared the draft the
+# moment it was submitted — but the server refuses a flow whose routing
+# points at a step that does not exist, and by the time that refusal
+# reached the screen the draft was already gone, along with twenty minutes
+# of typing. Exactly the loss the draft exists to prevent.
+_fdJs = open("app/static/flowdraft.js", encoding="utf-8").read()
+check("submitting no longer throws the draft away",
+      "form.addEventListener('submit'" in _fdJs
+      and "s.removeItem(KEY); });" not in _fdJs.split("addEventListener('submit'")[1][:300])
+check("it saves one last time on the way out instead",
+      "clearTimeout(timer);\n    save();" in _fdJs)
+
+from app.models import Flow as _FlR
+_fdOk = {"name": f"SMOKE draft clear {RUN}", "description": "", "branch_id": "",
+         "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+         "step_title": ["Only step"], "step_doer": [""], "step_doers": [""],
+         "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+         "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+         "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+         "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+         "step_due_from": [""]}
+_fdR = admin.post("/flows/new", data=_fdOk, follow_redirects=False)
+check("a flow that saves redirects with proof that it saved",
+      "built=new" in (_fdR.headers.get("location") or ""), _fdR.headers.get("location"))
+
+# The refusal: routing at a step this flow has not got.
+_fdBad = dict(_fdOk)
+_fdBad["name"] = f"SMOKE draft keep {RUN}"
+_fdBad["step_next"] = ["9"]
+_fdBadR = admin.post("/flows/new", data=_fdBad)
+check("a flow with a route to nowhere is still refused", _fdBadR.status_code == 400,
+      _fdBadR.status_code)
+check("and the refusal carries no instruction to clear anything",
+      "built=" not in _fdBadR.text)
+with _slK() as _d:
+    check("nothing was saved by the refused attempt",
+          _d.scalar(_spK(_FlR).where(_FlR.name == f"SMOKE draft keep {RUN}")) is None)
+
+with _slK() as _d:
+    _fdFlow = _d.scalar(_spK(_FlR).where(_FlR.name == f"SMOKE draft clear {RUN}"))
+    _fdId = _fdFlow.id
+_fdPage = admin.get(f"/flows/{_fdId}?built=new").text
+check("the flow's page is what clears the draft, and only on proof",
+      "gcsa:flowdraft:new" in _fdPage and "built" in _fdPage)
+check("it clears the right draft when a flow was EDITED, not the new one",
+      "gcsa:flowdraft:edit-" in _fdPage)
+check("and tidies the address so a refresh does not keep re-clearing",
+      "replaceState" in _fdPage)
+check("storage being switched off must not break the page",
+      "catch (e) {" in _fdPage)
+_fdPlain = admin.get(f"/flows/{_fdId}").text
+check("a plain visit clears nothing", "if (!q) return;" in _fdPlain)
+
+_fdEditR = admin.post(f"/flows/{_fdId}/edit", data=_fdOk, follow_redirects=False)
+check("saving an edit says so the same way",
+      "built=edit" in (_fdEditR.headers.get("location") or ""),
+      _fdEditR.headers.get("location"))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
