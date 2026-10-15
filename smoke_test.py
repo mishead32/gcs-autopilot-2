@@ -2423,6 +2423,7 @@ def _recurring_count():
 
 _real_today = _clock.today
 _day = _clock.today()
+_realTick = _M.SPAWN_CHECK_SECONDS
 _M.SPAWN_CHECK_SECONDS = 0.05
 with _SLP() as _d:
     for _r in _d.scalars(_sp(_RR)).all():
@@ -2449,7 +2450,7 @@ try:
     _b, _a, _ag = _aio.run(_walk_two_days())
 finally:
     _clock.today = _real_today
-    _M.SPAWN_CHECK_SECONDS = 600
+    _M.SPAWN_CHECK_SECONDS = _realTick
 
 check("the app spawns today's checklist on its own", _b > 0, _b)
 check("and a new day's checklist without any restart", _a > _b, f"{_b} -> {_a}")
@@ -2470,11 +2471,12 @@ async def _survive_error():
         pass
     return _alive
 
+_realTick = _M.SPAWN_CHECK_SECONDS
 _M.SPAWN_CHECK_SECONDS = 0.05
 try:
     check("a failure does not kill the loop", _aio.run(_survive_error()))
 finally:
-    _M.SPAWN_CHECK_SECONDS = 600
+    _M.SPAWN_CHECK_SECONDS = _realTick
     _clock.today = _real_today
 
 check("/cron/spawn still works alongside it",
@@ -7561,6 +7563,84 @@ check("the Excel export carries it too",
       or "DEL not finished yet" in open("app/routers/cmd.py", encoding="utf-8").read())
 _xlA = admin.get("/cmd?export=xlsx")
 check("and the export still builds", _xlA.status_code == 200, _xlA.status_code)
+
+print("\n== the background loop leaves the database alone overnight ==")
+# This is a money check, not a tidiness one. A managed Postgres sleeps when
+# nothing queries it and is billed by the hour it is awake. A loop poking it
+# every ten minutes all night meant it never slept — 144 wake-ups a day, most
+# with nobody in the building — and that was most of the compute bill.
+from app.main import (_asleep as _slp, _seconds_until_wake as _wake,
+                      _seconds_to_next_tick as _tickIn,
+                      SPAWN_CHECK_SECONDS as _TICK,
+                      QUIET_FROM as _QFs, QUIET_UNTIL as _QUs)
+from datetime import datetime as _dtQ, timedelta as _tdQ
+
+check("there are quiet hours at all", _QFs != _QUs, f"{_QFs} -> {_QUs}")
+check("asleep in the middle of the night", _slp(_dtQ(2026, 10, 15, 3, 0)))
+check("asleep at half past midnight", _slp(_dtQ(2026, 10, 15, 0, 30)))
+check("but AWAKE across the turn of the day, so the checklist gets made",
+      not _slp(_dtQ(2026, 10, 15, 0, 0)) and not _slp(_dtQ(2026, 10, 15, 0, 5)))
+check("awake through the working day", not _slp(_dtQ(2026, 10, 15, 11, 0))
+      and not _slp(_dtQ(2026, 10, 15, 18, 0)) and not _slp(_dtQ(2026, 10, 15, 21, 0)))
+check("awake again at seven", not _slp(_dtQ(2026, 10, 15, 7, 0)))
+check("still asleep a minute before seven", _slp(_dtQ(2026, 10, 15, 6, 59)))
+
+# It must not oversleep: a container paused and resumed, or a clock that
+# jumps, should never strand the loop for most of a day.
+check("it never sleeps more than an hour in one go",
+      _wake(_dtQ(2026, 10, 15, 0, 30)) <= 3600
+      and _wake(_dtQ(2026, 10, 15, 2, 0)) <= 3600)
+check("and never waits a negative or zero time",
+      _wake(_dtQ(2026, 10, 15, 7, 0)) > 0 and _tickIn(_dtQ(2026, 10, 15, 0, 0)) > 0)
+
+# The trap this was written to avoid: tick at 23:50, sleep half an hour, open
+# your eyes at 00:20 — by then inside quiet hours, so the day's checklist
+# would not be made until seven in the morning.
+_lateQ = _dtQ(2026, 10, 15, 23, 50)
+_nextQ = _lateQ + _tdQ(seconds=_tickIn(_lateQ))
+check("a tick late at night lands just after midnight, not inside quiet hours",
+      not _slp(_nextQ) and _nextQ.day == 16, _nextQ.strftime("%d %H:%M:%S"))
+
+# Walk a whole day the way the loop actually runs it.
+_tQ, _hitQ = _dtQ(2026, 10, 15, 23, 40), []
+for _ in range(400):
+    if _slp(_tQ):
+        _tQ += _tdQ(seconds=_wake(_tQ))
+    else:
+        _hitQ.append(_tQ)
+        _tQ += _tdQ(seconds=_tickIn(_tQ))
+    if _tQ > _dtQ(2026, 10, 16, 23, 30):
+        break
+check("the database is woken far less often than before",
+      len(_hitQ) <= 40, f"{len(_hitQ)} times in 24 hours, was 144")
+check("and one of those is just after midnight",
+      any(h.hour == 0 and h.minute < 10 for h in _hitQ),
+      [h.strftime("%H:%M:%S") for h in _hitQ[:3]])
+check("with nothing at all between one and six in the morning",
+      not any(1 <= h.hour < 6 for h in _hitQ))
+
+# A typo in the setting must not stop the app booting.
+from app.main import _mins as _minsQ
+check("a sensible setting is read", _minsQ("07:30", 0) == 450)
+check("a bare hour works too", _minsQ("22", 0) == 22 * 60)
+check("rubbish falls back instead of crashing",
+      _minsQ("not a time", 99) == 99 and _minsQ("99:99", 7) == 7
+      and _minsQ(None, 7) == 7)
+
+# And the thing the loop exists for still happens: the day's checklist.
+from app.main import _spawn_once as _spawnQ
+from app.models import Task as _TQ, TaskSource as _TsQ
+from sqlalchemy import func as _fnQ
+with _slK() as _d:
+    _beforeQ = _d.scalar(_spK(_fnQ.count()).select_from(_TQ)
+                         .where(_TQ.source == _TsQ.RECURRING))
+_madeQ = _spawnQ()
+with _slK() as _d:
+    _afterQ = _d.scalar(_spK(_fnQ.count()).select_from(_TQ)
+                        .where(_TQ.source == _TsQ.RECURRING))
+check("the day's checklist is still created by the loop's own worker",
+      _afterQ - _beforeQ == _madeQ, f"made {_madeQ}, rows grew by {_afterQ - _beforeQ}")
+check("and running it twice in a day creates nothing extra", _spawnQ() == 0)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -1,5 +1,7 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
@@ -27,7 +29,87 @@ from .templating import templates
 from . import lastview
 
 
-SPAWN_CHECK_SECONDS = 600      # look at the calendar every ten minutes
+# How often the loop looks up while it is awake. Ten minutes was chosen so
+# the new day's checklist appeared within ten minutes of midnight; the loop
+# now guarantees a tick just after midnight in its own right (see below), so
+# that precision buys nothing and every extra tick is another database
+# wake-up to pay for. Half an hour is plenty for handing a few tasks to the
+# detective.
+SPAWN_CHECK_SECONDS = int(os.getenv("SPAWN_CHECK_SECONDS", "1800"))
+
+# The hours this loop leaves the database alone entirely.
+#
+# This is a money setting, not a tidiness one. A managed Postgres that bills
+# by the hour sleeps when nothing asks it anything — Neon after five idle
+# minutes — and wakes for the next query. A background job poking it every
+# ten minutes all night therefore never lets it sleep: 144 wake-ups a day,
+# most of them at three in the morning with nobody in the building, billed
+# exactly as if the office were open around the clock.
+#
+# During the working day these ticks cost nothing extra, because staff using
+# the site keep the database awake anyway. Overnight they were the whole
+# expense, so overnight the loop now stops.
+#
+# It starts at ten past midnight rather than at midnight on purpose: the
+# day's checklist has to be created first. The loop is awake across the
+# turn of the day, makes the new day's tasks, and only then goes quiet.
+#
+# Both ends are "HH:MM" on a 24-hour clock, in the office's own time.
+QUIET_FROM = os.getenv("QUIET_FROM", "00:10")
+QUIET_UNTIL = os.getenv("QUIET_UNTIL", "07:00")
+
+
+def _mins(hhmm: str, fallback: int) -> int:
+    """'07:30' -> 450. A typo in a setting must not stop the app booting."""
+    try:
+        h, _, m = hhmm.strip().partition(":")
+        total = int(h) * 60 + int(m or 0)
+        return total if 0 <= total < 24 * 60 else fallback
+    except (ValueError, AttributeError):
+        return fallback
+
+
+_QF = _mins(QUIET_FROM, 10)        # 00:10
+_QU = _mins(QUIET_UNTIL, 420)      # 07:00
+
+
+def _asleep(now) -> bool:
+    """True when the loop should leave the database alone."""
+    if _QF == _QU:
+        return False                              # quiet hours switched off
+    m = now.hour * 60 + now.minute
+    if _QF > _QU:                                 # the usual 00:10 -> 07:00
+        return m >= _QF or m < _QU
+    return _QF <= m < _QU                         # a window inside one day
+
+
+def _seconds_until_wake(now) -> float:
+    """Sleep until quiet hours end — but never for more than an hour at once.
+
+    The cap matters: a container paused and resumed, or a clock that jumps,
+    must not leave the loop stranded for most of a day.
+    """
+    wake = now.replace(hour=_QU // 60, minute=_QU % 60, second=0, microsecond=0)
+    if wake <= now:
+        wake += timedelta(days=1)
+    return max(1.0, min((wake - now).total_seconds(), 3600))
+
+
+def _seconds_to_next_tick(now) -> float:
+    """The ordinary wait — shortened when midnight falls inside it.
+
+    Without this the loop could tick at 23:50, sleep its half hour, and open
+    its eyes at 00:20 — by then inside quiet hours, so the new day's
+    checklist would not be made until seven in the morning. So when the turn
+    of the day lands inside the next wait, the loop wakes there instead.
+    """
+    midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=30, microsecond=0)
+    # No floor beyond zero: midnight is always in the future here, so this
+    # cannot go negative, and a floor would quietly override a shorter
+    # interval set deliberately — which is exactly how the test that drives
+    # this loop at speed stopped working.
+    return max(0.0, min(SPAWN_CHECK_SECONDS, (midnight - now).total_seconds()))
 
 
 async def _daily_spawn():
@@ -41,6 +123,14 @@ async def _daily_spawn():
     last_done = None
     while True:
         try:
+            now = clock.now()
+            # Overnight the loop does nothing at all, so the database can
+            # sleep and stop being charged for. The day's checklist is
+            # created at the first tick after quiet hours end, which is
+            # before anybody starts work.
+            if _asleep(now):
+                await asyncio.sleep(_seconds_until_wake(now))
+                continue
             today = clock.today()
             if today != last_done:
                 created = await asyncio.to_thread(_spawn_once)
@@ -59,7 +149,7 @@ async def _daily_spawn():
         except Exception as exc:
             # A bad day must not kill the loop — tomorrow deserves a try.
             print(f"Checklist spawn failed: {exc!r}")
-        await asyncio.sleep(SPAWN_CHECK_SECONDS)
+        await asyncio.sleep(_seconds_to_next_tick(clock.now()))
 
 
 def _spawn_once() -> int:
@@ -78,7 +168,6 @@ async def lifespan(app: FastAPI):
 
     # A host with no shell (Render's free plan) cannot run a setup script, so
     # the first admin is created here when the environment supplies one.
-    import os
     from .routers.setup import needs_setup, create_admin
     admin_email, admin_pw = os.getenv("ADMIN_EMAIL"), os.getenv("ADMIN_PW")
     if admin_email and admin_pw:
