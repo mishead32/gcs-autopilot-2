@@ -137,6 +137,14 @@ def _read_steps(form) -> list[dict]:
     yes_lbl = form.getlist("step_yes")
     no_lbl = form.getlist("step_no")
 
+    def _is_field(values, i) -> bool:
+        return (values[i] if i < len(values) else "").strip().startswith("field:")
+
+    def _field_label(values, i) -> str | None:
+        """'field:Bill Date' -> 'Bill Date'. Anything else -> None."""
+        raw = (values[i] if i < len(values) else "").strip()
+        return raw[6:].strip()[:160] or None if raw.startswith("field:") else None
+
     def _pos(values, i):
         """A routing box: a step number, or 0 meaning 'the flow ends here'.
 
@@ -169,7 +177,12 @@ def _read_steps(form) -> list[dict]:
             "tat_value": int(tats[i]) if i < len(tats) and tats[i] else 24,
             # Not `or None`: 0 is a real answer here — "count from when the
             # run was started" — and would otherwise be read as "not set".
-            "due_from_pos": _pos(dfroms, i),
+            #
+            # The same box can also name a date question on the start form,
+            # posted as "field:Bill Date". The two are mutually exclusive by
+            # construction: it is one dropdown with one value.
+            "due_from_pos": None if _is_field(dfroms, i) else _pos(dfroms, i),
+            "due_from_field": _field_label(dfroms, i),
             "priority": (Priority(prios[i]) if i < len(prios) and prios[i]
                          else Priority.MEDIUM),
             "requires_audit": (audits[i] == "1") if i < len(audits) else False,
@@ -218,7 +231,7 @@ def _check_routes(rows: list[dict]) -> None:
 
 
 STEP_COLUMNS = ("title", "instructions", "default_doer_id", "tat_hours",
-                "tat_unit", "tat_value", "due_from_pos", "priority",
+                "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
                 "requires_audit", "requires_attachment", "capture_fields",
                 "next_step_pos", "fail_step_pos", "is_decision",
                 "pass_label", "fail_label", "position")

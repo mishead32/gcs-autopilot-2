@@ -27,7 +27,8 @@
   </table>
 </div>
 
-<form method="post" action="/flows/new" class="card" style="max-width:920px">
+<form method="post" action="/flows/new" class="card" style="max-width:920px"
+      data-draft="new">
   <div class="row">
     <div><label>Flow name</label>
       <input name="name" required placeholder="e.g. Bill verification"></div>
@@ -55,4 +56,6 @@
 
 {{ step_script(span_choices) }}
 <script>addStep(); addStep();</script>
+{# Loaded last: it needs addField, addStep and refreshDateFields to exist. #}
+<script src="/static/flowdraft.js"></script>
 {% endblock %}

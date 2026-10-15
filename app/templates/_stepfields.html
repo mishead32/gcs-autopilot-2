@@ -40,9 +40,13 @@
     style="min-height:52px">{{ step.instructions or '' if step else '' }}</textarea>
 
   <div class="row">
-    <div><label>Fields the doer must capture (comma separated)</label>
+    <div><label>Figures the doer must type in when finishing this step</label>
       <input name="step_fields" value="{{ step.capture_fields or '' if step else '' }}"
-             placeholder="Receipt No, Amount"></div>
+             placeholder="Receipt No, Amount">
+      <div class="m" style="margin-top:4px">Separate them with commas. Each one
+        becomes a box the doer has to fill in before they can submit — the
+        receipt number off the bill, the amount paid. Leave it empty if the
+        proof and the note are enough.</div></div>
     <div style="max-width:140px"><label>Needs audit</label>
       <select name="step_audit">
         <option value="0" {{ 'selected' if step and not step.requires_audit }}>No</option>
@@ -94,12 +98,23 @@
             {{ 'hidden' if not (step and step.due_from_pos == n) }}
             >step {{ n }}'s planned date</option>
           {% endfor %}
+          {# Filled in by script from the date questions on the start form
+             above, because those are being typed on this same page. The
+             step this flow was loaded with keeps its own answer even before
+             the script has run, so editing a flow never silently drops it. #}
+          {% if step and step.due_from_field %}
+          <option value="field:{{ step.due_from_field }}" class="fieldopt" selected
+            >the date answered for "{{ step.due_from_field }}"</option>
+          {% endif %}
         </select>
         <div class="m" style="margin-top:4px">
           Nothing to do with <em>where the flow goes</em> — only with
           <em>when this step is due</em>. The TAT above is counted from
           whichever moment you pick here, so a step earlier in the chain
           running late does not push every deadline after it.
+          Add a <strong>Date</strong> question to the start form and it
+          appears in this list too — for "due three days after the bill
+          date", where the bill date is something somebody types in.
         </div>
       </div>
     </div>
@@ -144,7 +159,64 @@ function renumber(){
       if (!ok && sel.value === opt.value) sel.value = '';
     });
   });
+  refreshDateFields();
 }
+
+/* The date questions on the start form, offered as clock anchors.
+ *
+ * They are being typed on this very page, so the list is rebuilt from the
+ * question rows rather than rendered once by the server. A question with no
+ * label yet is skipped — an anchor pointing at "" would be a deadline
+ * depending on nothing.
+ */
+function refreshDateFields(){
+  var labels = [];
+  document.querySelectorAll('#sfields .sfrow').forEach(function(row){
+    var t = row.querySelector('select[name=sf_type]');
+    var l = row.querySelector('input[name=sf_label]');
+    if (!t || !l) return;
+    if (t.value !== 'date' && t.value !== 'datetime') return;
+    var name = (l.value || '').trim();
+    if (name && labels.indexOf(name) === -1) labels.push(name);
+  });
+
+  document.querySelectorAll('#steps .duefrom').forEach(function(sel){
+    var chosen = sel.value;
+    sel.querySelectorAll('.fieldopt').forEach(function(o){ o.remove(); });
+    labels.forEach(function(name){
+      var o = document.createElement('option');
+      o.className = 'fieldopt';
+      o.value = 'field:' + name;
+      o.textContent = 'the date answered for "' + name + '"';
+      sel.appendChild(o);
+    });
+    // Keep what was chosen if it still exists. A question renamed mid-build
+    // takes its anchor with it, and the box falls back to the plain default
+    // rather than silently saving a pointer to a question nobody will ask.
+    if (chosen.indexOf('field:') === 0
+        && labels.indexOf(chosen.slice(6)) === -1) {
+      sel.value = '';
+    } else {
+      sel.value = chosen;
+    }
+  });
+}
+
+// A question's label or type changing changes the anchors on offer, and
+// questions are added and removed while the page is open — so this listens
+// on the container rather than on rows that may not exist yet.
+document.addEventListener('input', function(e){
+  if (e.target.closest && e.target.closest('#sfields')) refreshDateFields();
+});
+document.addEventListener('change', function(e){
+  if (e.target.closest && e.target.closest('#sfields')) refreshDateFields();
+});
+document.addEventListener('click', function(e){
+  // Removing a question is a click with no input event behind it.
+  if (e.target.closest && e.target.closest('#sfields')) {
+    setTimeout(refreshDateFields, 0);
+  }
+});
 
 function wire(card){
   var sel = card.querySelector('.decsel');

@@ -77,6 +77,7 @@ ADDITIONS = {
         ("tat_unit", "VARCHAR(10) DEFAULT 'hours'"),
         ("tat_value", "INTEGER DEFAULT 24"),
         ("due_from_pos", "INTEGER"),
+        ("due_from_field", "VARCHAR(160)"),
         # Left NULL on purpose for flows built before routing existed — the
         # engine reads NULL as "whatever comes next in order", so every
         # existing flow keeps running exactly as it did.

@@ -468,6 +468,7 @@ FIELD_TYPES = {
     "textarea": "Long text",
     "number": "Number",
     "date": "Date",
+    "datetime": "Date and time",
     "select": "Choose from a list",
     "yesno": "Yes / No",
 }
@@ -561,6 +562,16 @@ class FlowStep(Base):
     # approval is due 2 days after the bill was due to be verified" should
     # not drift just because the earlier step was closed late.
     due_from_pos: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The fourth anchor, and the one people ask for most: a DATE ANSWERED ON
+    # THE START FORM. "The audit is due three days after the bill date" —
+    # where the bill date is not when anything happened in the software, but
+    # a date somebody typed in when they started the run.
+    #
+    # Stored as the question's label rather than an index, because questions
+    # get reordered and an index would then quietly point at the wrong one.
+    # Renaming a question does break the link, which is the honest trade: a
+    # label is what the person building the flow actually recognises.
+    due_from_field: Mapped[str | None] = mapped_column(String(160), nullable=True)
     priority: Mapped[Priority] = mapped_column(PriorityCol, default=Priority.MEDIUM)
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=True)

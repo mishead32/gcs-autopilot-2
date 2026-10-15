@@ -20,7 +20,8 @@
 </div>
 {% endif %}
 
-<form method="post" action="/flows/{{ flow.id }}/edit" class="card" style="max-width:920px">
+<form method="post" action="/flows/{{ flow.id }}/edit" class="card" style="max-width:920px"
+      data-draft="edit-{{ flow.id }}">
   <div class="row">
     <div><label>Flow name</label>
       <input name="name" value="{{ flow.name }}" required></div>
@@ -96,4 +97,6 @@
 </div>
 
 {{ step_script(span_choices) }}
+{# Loaded last: it needs addField, addStep and refreshDateFields to exist. #}
+<script src="/static/flowdraft.js"></script>
 {% endblock %}

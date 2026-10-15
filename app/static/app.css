@@ -1136,3 +1136,14 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
   .lp-art .mark,.lp-stage .lp-box{animation:none!important;transform:none!important}
   .lp-fields input:focus,.lp-go:hover{transform:none!important}
 }
+
+/* The "you didn't finish building this" bar above the FMS builder. Loud
+   enough to be seen before somebody starts retyping, quiet enough not to
+   look like an error — nothing has gone wrong, there is just work waiting. */
+.draftbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  max-width:920px;margin:0 0 14px;padding:12px 16px;border-radius:10px;
+  background:#fff8e1;border:1px solid #f0d999;color:#7a5b00;font-size:13.5px;
+  animation:riseIn .3s cubic-bezier(.22,.8,.3,1) both}
+.draftbar .t{flex:1;min-width:240px}
+.draftbar .btn.sm{padding:6px 12px;font-size:12.5px}
+@media (prefers-reduced-motion:reduce){ .draftbar{animation:none} }

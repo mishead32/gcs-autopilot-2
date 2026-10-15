@@ -19,6 +19,7 @@ A step whose route is 0 ends the flow. A step whose route is NULL predates
 routing altogether and falls back to "the next step in order", so flows built
 before this keep behaving exactly as they did.
 """
+import os
 import json
 from datetime import datetime, timedelta
 
@@ -32,10 +33,43 @@ from ..models import (
 from . import notify, holidays
 
 
+# The hour a bare date is taken to mean. Somebody answering "20 Oct" means
+# that working day, not one second past midnight: counting a two-day TAT from
+# midnight quietly gives everyone two nights less than they expected.
+FIELD_DATE_HOUR = int(os.getenv("FIELD_DATE_HOUR", "9"))
+
+
+def _answered_moment(inst: FlowInstance, label: str) -> datetime | None:
+    """The date somebody typed on the start form, as a moment — or None.
+
+    Accepts what the three date-ish inputs actually post: a plain date, a
+    datetime-local value with a T in the middle, and the same with seconds.
+    Anything else is not a date and is reported as such rather than guessed
+    at, because a guessed deadline is worse than an obvious one.
+    """
+    try:
+        answers = json.loads(inst.context or "{}")
+    except (ValueError, TypeError):
+        return None
+    raw = answers.get(label)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip().replace("/", "-")
+    for fmt, bare in (("%Y-%m-%dT%H:%M:%S", False), ("%Y-%m-%dT%H:%M", False),
+                      ("%Y-%m-%d %H:%M", False), ("%Y-%m-%d", True),
+                      ("%d-%m-%Y", True)):
+        try:
+            when = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        return when.replace(hour=FIELD_DATE_HOUR) if bare else when
+    return None
+
+
 def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
     """The moment this step's turnaround is counted from.
 
-    Three answers, and the flow says which it wants:
+    Four answers, and the flow says which it wants:
 
       nothing   — now, because the step has just opened. The usual case.
       0         — when the RUN was started: the moment somebody filled in
@@ -44,7 +78,18 @@ def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
                   people mean by "within a week of the bill arriving".
       a number  — that step's PLANNED date, so a chain hanging off one date
                   does not drift every time somebody closes a step late.
+      a field   — a DATE ANSWERED ON THE START FORM. "Due three days after
+                  the bill date", where the bill date is not when anything
+                  happened in here but something somebody typed in.
     """
+    if step.due_from_field:
+        answered = _answered_moment(inst, step.due_from_field)
+        if answered is not None:
+            return answered
+        # The question was renamed, left blank, or answered with something
+        # that is not a date. Falling back to now keeps the run moving — a
+        # step with no deadline at all would simply never be chased.
+        return clock.now()
     if step.due_from_pos is None:
         return clock.now()
     if step.due_from_pos == 0:

@@ -7642,5 +7642,109 @@ check("the day's checklist is still created by the loop's own worker",
       _afterQ - _beforeQ == _madeQ, f"made {_madeQ}, rows grew by {_afterQ - _beforeQ}")
 check("and running it twice in a day creates nothing extra", _spawnQ() == 0)
 
+print("\n== a step's clock can start from a date typed on the start form ==")
+# "The audit is due three days after the bill date" — where the bill date is
+# not when anything happened in here, but something somebody typed in when
+# they started the run. Previously unexpressible: the only anchors were
+# moments the software itself knew about.
+from app.services import flows as _flowD
+from app.models import Flow as _FlD, FlowInstance as _FID, Task as _TD
+from datetime import datetime as _dtD
+
+_mkD = {"name": f"SMOKE field anchor {RUN}", "description": "", "branch_id": "",
+        "sf_label": ["Bill Date"], "sf_type": ["date"], "sf_required": ["1"],
+        "sf_options": [""],
+        "step_title": ["Verify the bill"], "step_doer": [""],
+        "step_tat_unit": ["days"], "step_tat": ["3"], "step_priority": ["medium"],
+        "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+        "step_proof": ["1"], "step_decision": ["0"], "step_yes": [""],
+        "step_next": ["0"], "step_no": [""], "step_fail": [""],
+        "step_due_from": ["field:Bill Date"]}
+admin.post("/flows/new", data=_mkD)
+with _slK() as _d:
+    _fD = _d.scalar(_spK(_FlD).where(_FlD.name == f"SMOKE field anchor {RUN}"))
+    check("the flow was built", _fD is not None)
+    check("the anchor is stored as the question's label",
+          _fD.steps[0].due_from_field == "Bill Date", _fD.steps[0].due_from_field)
+    check("and it is not also stored as a step number",
+          _fD.steps[0].due_from_pos is None, _fD.steps[0].due_from_pos)
+    _fDid = _fD.id
+
+admin.post(f"/flows/{_fDid}/start",
+           data={"reference": f"SMOKE BILL {RUN}", "sf0": "2026-11-20"})
+with _slK() as _d:
+    _iD = _d.scalar(_spK(_FID).where(_FID.flow_id == _fDid))
+    _tD = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _iD.id))
+    check("the answer is kept with the run", '"Bill Date"' in (_iD.context or ""),
+          _iD.context)
+    check("the step is due three days after the date that was typed, not today",
+          _tD.due_at.date() == _dtD(2026, 11, 23).date(), str(_tD.due_at))
+    check("and a bare date is read as the start of the working day, not midnight",
+          _tD.due_at.hour == _flowD.FIELD_DATE_HOUR, _tD.due_at.hour)
+
+# Every shape a date box actually posts, and everything that is not a date.
+class _FakeInst:
+    def __init__(self, ctx): self.context = ctx
+_amD = _flowD._answered_moment
+check("a plain date is understood",
+      _amD(_FakeInst('{"D": "2026-11-20"}'), "D") == _dtD(2026, 11, 20, _flowD.FIELD_DATE_HOUR))
+check("a date and time is understood, to the minute",
+      _amD(_FakeInst('{"D": "2026-11-20T14:30"}'), "D") == _dtD(2026, 11, 20, 14, 30))
+check("something that is not a date is refused rather than guessed at",
+      _amD(_FakeInst('{"D": "sometime next week"}'), "D") is None)
+check("a blank answer is refused", _amD(_FakeInst('{"D": "  "}'), "D") is None)
+check("a renamed question is refused", _amD(_FakeInst('{"D": "2026-11-20"}'), "Other") is None)
+check("and broken stored answers do not crash it",
+      _amD(_FakeInst("not json at all"), "D") is None)
+
+# A run that leaves the question blank must still get a deadline, or nobody
+# would ever be chased for it.
+admin.post(f"/flows/{_fDid}/start",
+           data={"reference": f"SMOKE BLANK {RUN}", "sf0": ""})
+with _slK() as _d:
+    _iB = _d.scalars(_spK(_FID).where(_FID.flow_id == _fDid)
+                     .order_by(_FID.id.desc())).first()
+    _tB = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _iB.id))
+    check("a run with the date left blank still gets a planned date",
+          _tB is not None and _tB.due_at is not None)
+
+_newPageD = admin.get("/flows/new").text
+check("the builder offers Date and time as an answer type",
+      "Date and time" in _newPageD)
+_sfD = open("app/templates/_stepfields.html", encoding="utf-8").read()
+check("the anchor list is built from the start form's date questions",
+      "refreshDateFields" in _sfD)
+check("a question renamed mid-build drops the anchor instead of saving a dud",
+      "labels.indexOf(chosen.slice(6)) === -1" in _sfD)
+
+print("\n== a half-built flow is not lost to a refresh ==")
+# Twenty minutes of typing — a start form and eight steps — used to vanish on
+# a stray refresh or a sleeping laptop, and people stopped building flows
+# because of it. The form now saves itself into the browser as it is typed.
+_dj = open("app/static/flowdraft.js", encoding="utf-8").read()
+check("the builder form is marked for drafting", 'data-draft="new"' in _newPageD)
+check("and loads the script that does it", "/static/flowdraft.js" in _newPageD)
+check("drafts are kept in the browser, never on the server",
+      "localStorage" in _dj and "fetch(" not in _dj)
+check("storage being refused must not break the page",
+      "catch (e) { return fallback; }" in _dj)
+check("nothing is restored without being asked first",
+      "data-yes" in _dj and "data-no" in _dj)
+check("a saved flow leaves no draft behind",
+      "addEventListener('submit'" in _dj and "removeItem(KEY)" in _dj)
+check("an untouched page is not offered back as a draft", "function isEmpty" in _dj)
+check("and a stale draft is thrown away rather than offered", "KEEP_DAYS" in _dj)
+
+# The edit page gets its own draft, keyed to the flow — so editing flow 3
+# can never offer you flow 7's half-finished changes.
+_editD = admin.get(f"/flows/{_fDid}/edit").text
+check("the edit page drafts too", 'data-draft="edit-' in _editD)
+check("under a key of its own per flow", f'data-draft="edit-{_fDid}"' in _editD)
+
+print("\n== the step builder says what it is asking for ==")
+check("the capture box explains itself in plain words",
+      "Figures the doer must type in when finishing this step" in _newPageD)
+check("and says what each one becomes", "becomes a box the doer has to fill in" in _newPageD)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
