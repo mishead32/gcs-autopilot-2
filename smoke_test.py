@@ -7926,10 +7926,11 @@ check("and a javascript: link is left as plain text",
 _bldP = admin.get("/flows/new").text
 check("the builder asks for it in plain words",
       "how it will be done" in _bldP.lower())
-# Renaming this box once already read as the box having been removed, so
-# the old word stays on the label beside the new one.
-check("and still calls it Instructions, so nobody thinks it has gone",
-      "Instructions" in _bldP)
+# Renaming this box once already read as the box having been removed. It is
+# now two boxes, each labelled for what it holds, which answers the same
+# worry better than keeping an old word on one label did.
+check("the description box is there and says what it is for",
+      "Step description" in _bldP)
 check("the box itself is the same field it always was",
       'name="step_instructions"' in _bldP)
 
@@ -7989,6 +7990,79 @@ check("so the step names each person exactly once",
       _dupStep.doer_ids == [_idsM[0], _idsM[1]], _dupStep.doer_ids)
 check("and opens one task each, not two for the same person",
       len(set(_dupStep.doer_ids)) == len(_dupStep.doer_ids))
+
+print("\n== a step has two boxes: what it is, and how it is done ==")
+# One box made the how swallow the what. "Verify the bill against the PO"
+# is the step; "open the PO folder, match line by line, flag anything over
+# 5%" is the method, and a doer skimming on a phone read the first line of
+# a run-together block and nothing else.
+from app.models import Flow as _FlT, FlowInstance as _FIT, Task as _TT
+
+_tbName = f"SMOKE two boxes {RUN}"
+_tbWhat = "Verify the bill against the purchase order."
+_tbHow = ("1. Open https://drive.google.com/po-folder\n"
+          "2. Match it line by line.\n3. Flag anything over 5%.")
+admin.post("/flows/new", data={
+    "name": _tbName, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+    "step_title": ["Verify the bill"], "step_doer": [""], "step_doers": [""],
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": [_tbWhat], "step_howto": [_tbHow],
+    "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
+    "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+    "step_no": [""], "step_fail": [""], "step_due_from": [""]})
+with _slK() as _d:
+    _tbF = _d.scalar(_spK(_FlT).where(_FlT.name == _tbName))
+    _tbS = _tbF.steps[0]
+    _tbFid = _tbF.id
+    check("the description is stored on its own", _tbS.instructions == _tbWhat)
+    check("and the method separately, not run together with it",
+          _tbS.how_to == _tbHow and _tbWhat not in (_tbS.how_to or ""))
+
+admin.post(f"/flows/{_tbFid}/start", data={"reference": f"SMOKE TWOBOX {RUN}"})
+with _slK() as _d:
+    _tbI = _d.scalar(_spK(_FIT).where(_FIT.flow_id == _tbFid))
+    _tbT = _d.scalar(_spK(_TT).where(_TT.flow_instance_id == _tbI.id))
+    _tbTid = _tbT.id
+    check("both reach the task the doer opens",
+          _tbT.details == _tbWhat and _tbT.how_to == _tbHow)
+
+_tbPage = admin.get(f"/tasks/{_tbTid}").text
+check("the task shows the description", _tbWhat in _tbPage)
+check("and the method under a heading of its own",
+      "How it will be done" in _tbPage and "Match it line by line" in _tbPage)
+check("a link in the method is clickable",
+      '<a href="https://drive.google.com/po-folder"' in _tbPage)
+
+_tbEdit = admin.get(f"/flows/{_tbFid}/edit").text
+check("editing the flow brings both back", _tbWhat in _tbEdit and "Flag anything over 5%" in _tbEdit)
+
+_tbNew = admin.get("/flows/new").text
+check("the builder offers both boxes",
+      'name="step_instructions"' in _tbNew and 'name="step_howto"' in _tbNew)
+check("labelled so nobody has to guess which is which",
+      "Step description" in _tbNew and "How it will be done" in _tbNew)
+
+# A step with only a description must still work — the method is optional.
+_tbBare = f"SMOKE one box {RUN}"
+admin.post("/flows/new", data={
+    "name": _tbBare, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
+    "step_title": ["Just do it"], "step_doer": [""], "step_doers": [""],
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": ["Something simple"], "step_howto": [""],
+    "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
+    "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+    "step_no": [""], "step_fail": [""], "step_due_from": [""]})
+with _slK() as _d:
+    _bare = _d.scalar(_spK(_FlT).where(_FlT.name == _tbBare)).steps[0]
+check("the method is optional", _bare.how_to is None, _bare.how_to)
+check("and a task from it simply has no method block",
+      "how_to" in _TT.__table__.c)
+
+_tbXl = admin.get(f"/flows/{_tbFid}?export=xlsx")
+check("the flow's export carries the method too", _tbXl.status_code == 200,
+      _tbXl.status_code)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

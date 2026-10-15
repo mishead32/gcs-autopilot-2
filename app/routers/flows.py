@@ -78,6 +78,7 @@ def flow_list(request: Request, export: str = "", q: str = "",
                 ("Then goes to", lambda r: r[1].fail_step_pos if r[1].is_decision else ""),
                 ("Needs audit", lambda r: "Yes" if r[1].requires_audit else ""),
                 ("Proof required", lambda r: "Yes" if r[1].requires_attachment else ""),
+                ("How it will be done", lambda r: r[1].how_to or ""),
                 ("Fields captured", lambda r: r[1].capture_fields or ""),
             ], steps, "One row per step, in the order the flow runs them."),
             ("Running now", [
@@ -132,6 +133,7 @@ def _read_steps(form) -> list[dict]:
     proofs = form.getlist("step_proof")
     fields = form.getlist("step_fields")
     instr = form.getlist("step_instructions")
+    howto = form.getlist("step_howto")
     nexts = form.getlist("step_next")
     fails = form.getlist("step_fail")
     decides = form.getlist("step_decision")
@@ -211,6 +213,7 @@ def _read_steps(form) -> list[dict]:
             "requires_audit": (audits[i] == "1") if i < len(audits) else False,
             # proof is required unless the step explicitly says otherwise
             "requires_attachment": (proofs[i] != "0") if i < len(proofs) else True,
+            "how_to": (howto[i] if i < len(howto) else "").strip() or None,
             "capture_fields": (fields[i] if i < len(fields) else "").strip() or None,
             "next_step_pos": _pos(nexts, i),
             "fail_step_pos": _pos(fails, i),
@@ -264,7 +267,7 @@ def _check_routes(rows: list[dict]) -> None:
                      "for the second outcome too (or 0 to end the flow there).")
 
 
-STEP_COLUMNS = ("title", "instructions", "default_doer_id", "tat_hours",
+STEP_COLUMNS = ("title", "instructions", "how_to", "default_doer_id", "tat_hours",
                 "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
                 "extra_doer_ids",
                 "requires_audit", "requires_attachment", "capture_fields",

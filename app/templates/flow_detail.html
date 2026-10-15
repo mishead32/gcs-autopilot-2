@@ -25,6 +25,8 @@
           {% if s.requires_audit %} · audited{% endif %}
         </div>
         {% if s.instructions %}<div class="m">{{ s.instructions }}</div>{% endif %}
+        {% if s.how_to %}<div class="m"><strong>How:</strong>
+          {{ s.how_to|linkify }}</div>{% endif %}
         {% if s.capture_fields %}<div class="m">Captures: {{ s.capture_fields }}</div>{% endif %}
         <div class="m" style="margin-top:4px">
           {% if s.is_decision %}

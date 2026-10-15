@@ -1197,3 +1197,13 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
 .stepcard .doerpick .dp-find{max-width:360px}
 .stepcard .doerpick .dp-type{font-size:13px;padding:7px 9px}
 }
+
+/* "How it will be done" — the method, set apart from the description so a
+   doer can skip to it or skip past it, rather than reading one block and
+   hoping the useful part is in there somewhere. */
+.howto{margin:12px 0 2px;padding:11px 14px;border-radius:9px;
+  background:var(--chip);border-left:3px solid var(--brand-2);font-size:13.5px}
+.howto .hd{font-size:10.5px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.howto.sm{margin:8px 0 0;padding:9px 11px;font-size:12.5px}
+.howto a{word-break:break-word}

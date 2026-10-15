@@ -58,16 +58,21 @@
                         moves on only once every one of them has finished.") }}
   </div></div>
 
-  {# Both words on the label on purpose. Renaming this from "Instructions"
-     to "How it will be done" read, to the person who had been using it for
-     weeks, as the box having been taken away. A label people recognise
-     costs nothing; a field somebody thinks has vanished costs a message. #}
-  <label>Instructions — how it will be done</label>
-  <textarea name="step_instructions" style="min-height:62px"
-    placeholder="What exactly to do, and where. Paste links — the sheet, the folder, the form — and they become clickable for whoever does the step."
+  {# Two boxes, kept apart on purpose. WHAT the step is, and HOW it is
+     done. Run together in one box the how swallows the what, and somebody
+     skimming the task on a phone reads the first line and nothing else. #}
+  <label>Step description — what this step is</label>
+  <textarea name="step_instructions" style="min-height:56px"
+    placeholder="e.g. Verify the bill against the purchase order"
     >{{ step.instructions or '' if step else '' }}</textarea>
-  <div class="m" style="margin-top:4px">Shown to the doer on the task itself.
-    Any web address you paste here turns into a link they can tap.</div>
+
+  <label style="margin-top:12px">How it will be done</label>
+  <textarea name="step_howto" style="min-height:72px"
+    placeholder="The method, in order. Open the PO folder, match it line by line, flag anything over 5%. Paste links — the sheet, the folder, the form — and they become clickable for whoever does the step."
+    >{{ step.how_to or '' if step else '' }}</textarea>
+  <div class="m" style="margin-top:4px">Both are shown to the doer on the
+    task itself, under their own headings. Any web address you paste in
+    either one turns into a link they can tap.</div>
 
   <div class="row">
     <div><label>Figures the doer must type in when finishing this step</label>

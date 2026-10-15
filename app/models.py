@@ -542,7 +542,13 @@ class FlowStep(Base):
     flow_id: Mapped[int] = mapped_column(ForeignKey("flows.id"))
     position: Mapped[int] = mapped_column(Integer, default=1)
     title: Mapped[str] = mapped_column(String(200))
+    # Two boxes, on purpose. "Verify the bill against the purchase order"
+    # is WHAT the step is; "open the PO folder, match line by line, flag
+    # anything over 5%" is HOW it is done. Run together in one box the how
+    # swallows the what, and a doer skimming a task on a phone reads the
+    # first line and nothing else.
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    how_to: Mapped[str | None] = mapped_column(Text, nullable=True)
     # who does it: a fixed user, or left blank to be picked at run time
     default_doer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     # More than one person on a step: a comma-separated list of user ids,
@@ -768,6 +774,10 @@ class Task(Base):
 
     title: Mapped[str] = mapped_column(String(250))
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The method, kept apart from the description rather than run together
+    # with it. An FMS step carries both; a delegated task usually has only
+    # the description, and this stays empty.
+    how_to: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     assigner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     doer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))

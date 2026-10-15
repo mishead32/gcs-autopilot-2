@@ -38,6 +38,16 @@
   <div>
     <div class="card">
       {% if task.details %}<p style="white-space:pre-wrap;margin-top:0">{{ task.details|linkify }}</p>{% endif %}
+      {# The method, under its own heading rather than run on from the
+         description. Somebody who already knows what the step is should be
+         able to skip straight to how to do it, and somebody who does not
+         should not have to read the method to find out. #}
+      {% if task.how_to %}
+      <div class="howto">
+        <div class="hd">How it will be done</div>
+        <p style="white-space:pre-wrap;margin:0">{{ task.how_to|linkify }}</p>
+      </div>
+      {% endif %}
       <table style="border:0">
         <tr><th style="background:0">Assigned by</th><td>{{ task.assigner.name }}</td></tr>
         <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>

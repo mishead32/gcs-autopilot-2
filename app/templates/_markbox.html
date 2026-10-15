@@ -24,6 +24,12 @@
         · {{ task.due_at|due }}</span>
     </p>
     {% if task.details %}<p class="m dets" style="white-space:pre-wrap">{{ task.details|linkify }}</p>{% endif %}
+    {% if task.how_to %}
+    <div class="howto sm">
+      <div class="hd">How it will be done</div>
+      <p style="white-space:pre-wrap;margin:0">{{ task.how_to|linkify }}</p>
+    </div>
+    {% endif %}
   </div>
 
   <div class="markbody">
