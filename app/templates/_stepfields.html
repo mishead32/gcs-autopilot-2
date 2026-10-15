@@ -52,13 +52,17 @@
   <div class="row"><div>
     {{ doer_picker(doers, selected=step.doer_ids[1:] if step else [],
                    name="", mirror="step_doers", label="Also done by",
-                   add_text="Add somebody else",
+                   add_text="Type a name, or pick from the list",
                    hint="Leave empty for one person. Add names and the step
                         opens one task EACH when it comes round — the flow
                         moves on only once every one of them has finished.") }}
   </div></div>
 
-  <label>How it will be done</label>
+  {# Both words on the label on purpose. Renaming this from "Instructions"
+     to "How it will be done" read, to the person who had been using it for
+     weeks, as the box having been taken away. A label people recognise
+     costs nothing; a field somebody thinks has vanished costs a message. #}
+  <label>Instructions — how it will be done</label>
   <textarea name="step_instructions" style="min-height:62px"
     placeholder="What exactly to do, and where. Paste links — the sheet, the folder, the form — and they become clickable for whoever does the step."
     >{{ step.instructions or '' if step else '' }}</textarea>

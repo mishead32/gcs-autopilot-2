@@ -22,7 +22,7 @@
    the wrong step. One hidden value per step keeps the columns straight.
 #}
 {% macro doer_picker(doers, selected=[], name="doer_id", label="Assign to",
-                     one_only=false, hint="", mirror="", add_text="Add a person") %}
+                     one_only=false, hint="", mirror="", add_text="Type a name, or pick from the list") %}
 <div class="doerpick{{ ' single' if one_only }}" data-one="{{ '1' if one_only else '' }}"
      data-add="{{ add_text }}">
   <label>{{ label }} <span class="m picked" style="font-weight:400"></span></label>
@@ -31,10 +31,11 @@
   <select {% if name %}name="{{ name }}"{% endif %} class="dp-src"
           {{ 'multiple' if not one_only }} size="6">
     {% if one_only %}<option value="">— nobody yet —</option>{% endif %}
+    {# The name and nothing else. Job title and company were noise: every
+       one of these people is in the same list for the same reason, and the
+       extra words made eighteen rows unreadable. #}
     {% for d in doers %}
-    <option value="{{ d.id }}"
-            data-sub="{{ d.role.value }}{% if d.branch %} · {{ d.branch.name }}{% endif %}"
-            {{ 'selected' if d.id in selected }}>{{ d.name }}</option>
+    <option value="{{ d.id }}" {{ 'selected' if d.id in selected }}>{{ d.name }}</option>
     {% endfor %}
   </select>
 

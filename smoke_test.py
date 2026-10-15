@@ -7923,8 +7923,15 @@ check("anything that is not a link is escaped, never rendered as HTML",
       and "<script>" not in str(_lk("<script>alert(1)</script>")))
 check("and a javascript: link is left as plain text",
       "<a" not in str(_lk("javascript:alert(1)")))
+_bldP = admin.get("/flows/new").text
 check("the builder asks for it in plain words",
-      "How it will be done" in admin.get("/flows/new").text)
+      "how it will be done" in _bldP.lower())
+# Renaming this box once already read as the box having been removed, so
+# the old word stays on the label beside the new one.
+check("and still calls it Instructions, so nobody thinks it has gone",
+      "Instructions" in _bldP)
+check("the box itself is the same field it always was",
+      'name="step_instructions"' in _bldP)
 
 print("\n== the people picker ==")
 # It used to be a list of checkboxes, which rendered as a tower of names
@@ -7943,6 +7950,21 @@ check("the cross is a button that cannot submit the form",
       "x.type = 'button'" in _dpJs)
 check("somebody already chosen is not offered again",
       "return !o.selected" in _dpJs)
+check("the list shows the name and nothing else",
+      "data-sub" not in _newP and "role.value" not in
+      open("app/templates/_doerpick.html", encoding="utf-8").read())
+check("there is a box to type a name into", "dp-type" in _dpJs)
+check("typing narrows the list to what matches",
+      "indexOf(q) !== -1" in _dpJs)
+check("an empty box still shows everybody, for anybody who would rather not type",
+      "q\n        ? left.filter" in _dpJs or "? left.filter" in _dpJs)
+check("Enter picks a name instead of submitting the half-filled form",
+      "e.key === 'Enter'" in _dpJs and "e.preventDefault()" in _dpJs)
+check("the arrow keys walk the list", "ArrowDown" in _dpJs and "ArrowUp" in _dpJs)
+check("a name is picked on mousedown, before the box can lose focus",
+      "'mousedown'" in _dpJs)
+check("and nothing matching says so rather than showing an empty box",
+      "No name matches that" in _dpJs)
 check("and the picker re-wires itself for step cards added later",
       "MutationObserver" in _dpJs)
 check("the step card has its own picker", "step_doers" in admin.get("/flows/new").text)
