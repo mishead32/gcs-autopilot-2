@@ -112,7 +112,22 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     # CALENDAR unit is a date that comes round, found at or after it. Both
     # start from the same anchor, so "the date of joining, then the next
     # 15th" is one setting rather than arithmetic somebody does by hand.
-    if unit in clock.CALENDAR_UNITS:
+    if unit == clock.FORM_UNIT:
+        # The deadline IS the moment somebody typed on the start form —
+        # "due at the joining date and time" means exactly that, with
+        # nothing added to it.
+        #
+        # Read here rather than taken from the anchor above, because the two
+        # failures want different answers. An anchor that cannot be read
+        # falls back to now and the step still gets its TAT on top; this one
+        # has no TAT on top, so falling back to now would hand somebody a
+        # task that was already late the second it arrived. A day is the
+        # honest stand-in: the run keeps moving and the deadline is one
+        # somebody can actually meet.
+        want = _answered_moment(inst, step.due_from_field or "")
+        if want is None:
+            want = clock.add_span(clock.now(), "hours", 24)
+    elif unit in clock.CALENDAR_UNITS:
         want = clock.next_occurrence(base, unit, value)
     else:
         want = clock.add_span(base, unit, value)

@@ -8408,5 +8408,126 @@ with _slK() as _d:
           [s.title for s in _runB.flow.steps] == ["Step one"],
           [s.title for s in _runB.flow.steps])
 
+
+
+print("\n== a step's TAT can be a timestamp taken straight off the start form ==")
+# The request, in the words it was asked in: a start form of name, company,
+# location, joining date and time; first step "Provide kpi kra to new
+# employee"; and "TAT — measured in" must itself offer "Take timestamp from
+# form", which then shows the form's questions.
+#
+# It could not be said with a span. "0 hours after the joining date" is
+# arithmetic nobody should have to translate, and the anchor box alone could
+# not do it either, because a length was always added on top of the anchor.
+from app.models import (Flow as _FlT, FlowInstance as _FIT, Task as _TT,
+                        User as _UT, FlowStep as _FST, _step_tat_defaults as _fixT)
+from app import clock as _ckT
+
+_newT = admin.get("/flows/new").text
+check("the TAT dropdown itself offers it",
+      'value="formtime"' in _newT and "Take timestamp from form" in _newT)
+check("and it sits in the TAT box, not somewhere else on the card",
+      _newT.index("Take timestamp from form") > _newT.index("TAT — measured in"))
+
+with _slK() as _d:
+    _uT = [u for u in _d.scalars(_spK(_UT).where(_UT.active.is_(True))).all()
+           if u.receives_work][0].id
+
+_kpiName = f"SMOKE onboarding {RUN}"
+_joinQ = "Joining date and time"
+admin.post("/flows/new", data={
+    "name": _kpiName, "description": "", "branch_id": "",
+    "sf_label": ["Name", "Company", "Location", _joinQ],
+    "sf_type": ["text", "text", "text", "datetime"],
+    "sf_required": ["1", "1", "1", "1"],
+    "sf_options": ["", "", "", ""],
+    "step_title": ["Provide kpi kra to new employee"],
+    "step_doer": [str(_uT)], "step_doers": [""],
+    "step_tat_unit": ["formtime"], "step_tat": [f"field:{_joinQ}"],
+    "step_priority": ["medium"],
+    "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+    "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+    "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    # Left on its default on purpose: the TAT box is in charge now, and the
+    # anchor box is hidden on the page. Honouring it as well would be two
+    # settings quietly contradicting each other.
+    "step_due_from": [""]})
+
+with _slK() as _d:
+    _kF = _d.scalar(_spK(_FlT).where(_FlT.name == _kpiName))
+    check("the step saved the unit it was given", _kF.steps[0].tat_unit == "formtime",
+          _kF.steps[0].tat_unit)
+    check("and which question it takes the moment from",
+          _kF.steps[0].due_from_field == _joinQ, _kF.steps[0].due_from_field)
+    check("with no length added on top", _kF.steps[0].tat_value == 0,
+          _kF.steps[0].tat_value)
+    check("read back it names the question rather than claiming '0 hours'",
+          _kF.steps[0].tat_label == f'the time answered for "{_joinQ}"',
+          _kF.steps[0].tat_label)
+    _kFid = _kF.id
+
+# The whole point, end to end: somebody starts the run, types a joining
+# moment, and the step is due AT it.
+admin.post(f"/flows/{_kFid}/start", data={
+    "reference": f"SMOKE KPI {RUN}", "sf0": "Ravi Kumar", "sf1": "GCS",
+    "sf2": "Chandigarh", "sf3": "2026-11-20T10:30"})
+with _slK() as _d:
+    _kI = _d.scalars(_spK(_FIT).where(_FIT.flow_id == _kFid)).all()[-1]
+    _kT = _d.scalar(_spK(_TT).where(_TT.flow_instance_id == _kI.id))
+    check("the task is due at the moment typed on the form",
+          _kT.due_at == _dtC(2026, 11, 20, 10, 30), str(_kT.due_at))
+    check("and it is the step that was asked for",
+          _kT.title.startswith("Provide kpi kra to new employee"), _kT.title)
+
+# A date with no time means the working day, not one second past midnight —
+# the same rule the clock anchors already use.
+admin.post(f"/flows/{_kFid}/start", data={
+    "reference": f"SMOKE KPI BARE {RUN}", "sf0": "Sita", "sf1": "GCS",
+    "sf2": "Mohali", "sf3": "2026-11-23"})
+with _slK() as _d:
+    _kI2 = _d.scalars(_spK(_FIT).where(_FIT.flow_id == _kFid)).all()[-1]
+    _kT2 = _d.scalar(_spK(_TT).where(_TT.flow_instance_id == _kI2.id))
+    check("a bare date is read as that working day",
+          _kT2.due_at.date() == _dtC(2026, 11, 23).date() and _kT2.due_at.hour > 0,
+          str(_kT2.due_at))
+
+# Saved without naming a question there is nothing to be due at, so it is
+# refused while the flow is being built rather than discovered by whoever is
+# holding the work.
+check("a form timestamp with no question chosen is refused",
+      admin.post("/flows/new", data={
+          "name": f"SMOKE no question {RUN}", "description": "", "branch_id": "",
+          "sf_label": ["Name"], "sf_type": ["text"], "sf_required": ["1"],
+          "sf_options": [""],
+          "step_title": ["Do it"], "step_doer": [str(_uT)], "step_doers": [""],
+          "step_tat_unit": ["formtime"], "step_tat": [""],
+          "step_priority": ["medium"], "step_instructions": [""],
+          "step_howto": [""], "step_fields": [""], "step_audit": ["0"],
+          "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+          "step_next": ["0"], "step_no": [""], "step_fail": [""],
+          "step_due_from": [""]}).status_code == 400)
+
+# 0 is the right answer here and the "no zero spans" floor must not push it
+# to 1 — an hour added to a joining time is an hour nobody asked for.
+_ftT = _FST(flow_id=1, position=1, title="z", tat_unit="formtime",
+            tat_value=0, due_from_field="Joining")
+_fixT(None, None, _ftT)
+check("nothing is added to a form timestamp", _ftT.tat_value == 0, _ftT.tat_value)
+check("and the legacy hour count agrees with it", _ftT.tat_hours == 0, _ftT.tat_hours)
+
+# Editing the flow must offer the setting back, with the question it chose.
+_edT = admin.get(f"/flows/{_kFid}/edit").text
+check("editing the flow keeps the unit selected",
+      'value="formtime" selected' in " ".join(_edT.split()),
+      [_l for _l in _edT.splitlines() if "formtime" in _l])
+check("and remembers which question, so editing never loses it",
+      f'data-field="{_joinQ}"' in _edT)
+check("the card explains that there is nothing left to count from",
+      "is</strong> the deadline" in _edT)
+check("the spans and the calendar rules are all still on offer",
+      all(f'value="{_u}"' in _edT for _u in
+          ("hours", "days", "weeks", "months", "minutes", "monthday",
+           "weekday", "fortnight")))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

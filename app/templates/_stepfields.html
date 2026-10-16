@@ -20,18 +20,27 @@
         {% for d in doers %}<option value="{{ d.id }}"
           {{ 'selected' if step and step.default_doer_id == d.id }}>{{ d.name }}</option>{% endfor %}
       </select></div>
-    <div style="max-width:190px"><label>TAT — measured in</label>
+    <div style="max-width:260px;flex:1 1 240px"><label>TAT — measured in</label>
       <select name="step_tat_unit" class="tatunit">
         {% for k, lbl in span_units.items() %}
-        {# The label, not the key: "Monthday" and "Fortnight" are not words
-           anybody picking a deadline would recognise. #}
+        {# The label, not the key: "Monthday", "Fortnight" and "Formtime" are
+           not words anybody picking a deadline would recognise. #}
         <option value="{{ k }}"
           {{ 'selected' if (step and step.tat_unit == k) or (not step and k == 'hours') }}>{{ lbl }}</option>
         {% endfor %}
       </select></div>
-    <div style="max-width:210px"><label class="tatlabel">How many</label>
+    {# One box, three jobs: how many (a span), which date (a calendar rule),
+       or which question (a timestamp off the start form). ONE box because the
+       server reads every step field as a parallel list lined up by position
+       — a second box that only some steps posted would shift every later
+       step's settings onto the wrong step.
+
+       data-field carries the question an existing step already names, so
+       editing a flow does not lose it before the script has built the list. #}
+    <div class="tatvalbox" style="max-width:210px;flex:1 1 200px"><label class="tatlabel">How many</label>
       <select name="step_tat" class="tatval"
-              data-value="{{ step.tat_value if step is not none and step.tat_value is not none else 24 }}"></select></div>
+              data-value="{{ step.tat_value if step is not none and step.tat_value is not none else 24 }}"
+              data-field="{{ step.due_from_field or '' if step and step.tat_unit == 'formtime' else '' }}"></select></div>
     <div><label>Priority</label>
       <select name="step_priority">
         {% for p in priorities %}<option value="{{ p.value }}"
@@ -119,7 +128,15 @@
       below · 0 = the flow finishes here · an earlier number sends it back for
       rework.</div>
 
-    <div class="row" style="margin-top:12px">
+    {# Hidden — never disabled — when the TAT itself names a form question:
+       a hidden field is still submitted, so every step posts one value for
+       every name and the parallel lists stay lined up. #}
+    <div class="m formtimenote" style="margin-top:12px" hidden>
+      This step's deadline is the moment answered on the start form, so there
+      is nothing to count from — the question chosen above
+      <strong>is</strong> the deadline.
+    </div>
+    <div class="row duefromrow" style="margin-top:12px">
       <div style="max-width:420px"><label>Start this step's clock from</label>
         {# A list, not a number. "Count the TAT from 2" told nobody what 2
            meant, and the one answer people most often wanted — count from
@@ -215,7 +232,20 @@ function renumber(){
  * Rebuilt from the question rows rather than rendered once by the server,
  * because the questions and the steps are written on the same page.
  */
-function refreshDateFields(){
+var FORM_UNIT = 'formtime';
+
+/* The start form's questions, as they stand right now.
+ *
+ * Read off the question rows rather than rendered once by the server,
+ * because the questions and the steps are typed on the same page: a
+ * question added thirty seconds ago has never been near the server.
+ *
+ * `dated` says whether it holds a moment. Both lists that use this — the
+ * clock anchor and "take the timestamp from the form" — show every question
+ * and grey the rest, because a question somebody can see and cannot pick
+ * teaches the rule, and a question that is simply absent teaches nothing.
+ */
+function formQuestions(){
   var qs = [], seen = {};
   document.querySelectorAll('#sfields .sfrow').forEach(function(row){
     var t = row.querySelector('select[name=sf_type]');
@@ -225,6 +255,18 @@ function refreshDateFields(){
     if (!name || seen[name]) return;          // unnamed, or already listed
     seen[name] = 1;
     qs.push({name: name, dated: t.value === 'date' || t.value === 'datetime'});
+  });
+  return qs;
+}
+
+function refreshDateFields(){
+  var qs = formQuestions();
+
+  // A step whose TAT is a form timestamp is listing those same questions in
+  // its second box, so it has to hear about this too.
+  document.querySelectorAll('#steps .stepcard').forEach(function(card){
+    var u = card.querySelector('.tatunit');
+    if (u && u.value === FORM_UNIT && card._fillTat) card._fillTat();
   });
 
   var usable = qs.filter(function(q){ return q.dated; })
@@ -299,10 +341,72 @@ function wire(card){
   // already had whenever the new unit still offers it.
   var unit = card.querySelector('.tatunit'), val = card.querySelector('.tatval');
   var lbl = card.querySelector('.tatlabel');
+  var box = card.querySelector('.tatvalbox');
+  var dfrow = card.querySelector('.duefromrow');
+  var dfnote = card.querySelector('.formtimenote');
   var CAL = {monthday: 1, weekday: 1, fortnight: 1};
 
+  // "Start this step's clock from" and "take the timestamp from the form"
+  // answer the same question, so only one of them is ever on screen. The row
+  // is HIDDEN, not disabled: a hidden field is still submitted, which is
+  // what keeps every step posting one value for every name.
+  function anchorBox(){
+    var form = unit.value === FORM_UNIT;
+    if (dfrow) dfrow.hidden = form;
+    if (dfnote) dfnote.hidden = !form;
+  }
+
+  /* The questions off the start form, offered as this step's deadline.
+   *
+   * "Provide KPI/KRA to new employee, due at the joining date and time" is
+   * not a length of time, so there is no number to pick — the second box
+   * becomes the list of questions instead, and whichever one is chosen is
+   * the deadline.
+   */
+  function fillQuestions(){
+    var qs = formQuestions();
+    var keep = val.value || ('field:' + (val.dataset.field || ''));
+    val.innerHTML = '';
+
+    if (!qs.length) {
+      var none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'Add a question to the start form first';
+      none.disabled = true;
+      val.appendChild(none);
+    }
+    var first = '';
+    qs.forEach(function(q){
+      var o = document.createElement('option');
+      o.value = 'field:' + q.name;
+      if (q.dated) {
+        o.textContent = q.name;
+        if (!first) first = o.value;
+      } else {
+        // Shown, not choosable, with the fix written on it.
+        o.textContent = q.name + ' — set its answer type to Date to use it';
+        o.disabled = true;
+      }
+      val.appendChild(o);
+    });
+
+    var ok = Array.prototype.some.call(val.options, function(o){
+      return o.value === keep && !o.disabled;
+    });
+    val.value = ok ? keep : first;
+    val.disabled = false;
+    if (lbl) lbl.textContent = 'Which question';
+    if (box) { box.style.maxWidth = '340px'; box.style.flexBasis = '300px'; }
+    anchorBox();
+  }
+
   function fillValues(){
+    if (unit.value === FORM_UNIT) { fillQuestions(); return; }
+    if (box) { box.style.maxWidth = '210px'; box.style.flexBasis = '200px'; }
+    anchorBox();
+
     var opts = SPAN_CHOICES[unit.value] || SPAN_CHOICES.hours;
+    if (!opts.length) opts = SPAN_CHOICES.hours;
     var keep = val.value || val.dataset.value;
     val.innerHTML = '';
     opts.forEach(function(pair){
@@ -326,6 +430,8 @@ function wire(card){
     val.disabled = unit.value === 'fortnight';
   }
   unit.addEventListener('change', fillValues);
+  // So a question typed on the start form can refresh this card's list.
+  card._fillTat = fillValues;
   fillValues();
 
   // "Who does it" and "Also done by" must never name the same person. The

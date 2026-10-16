@@ -164,6 +164,39 @@ def _read_steps(form) -> list[dict]:
         raw = (values[i] if i < len(values) else "").strip()
         return raw[6:].strip()[:160] or None if raw.startswith("field:") else None
 
+    def _unit(i) -> str:
+        raw = tat_units[i] if i < len(tat_units) else ""
+        return raw if raw in clock.SPAN_UNITS else "hours"
+
+    def _tat(values, i) -> int:
+        """The second TAT box as a number — 24 when it is not one.
+
+        "Take timestamp from form" posts a question label through this same
+        box, which is deliberate: one box, one name, one value per step, so
+        the server's parallel lists stay lined up with the step numbers. It
+        is read as the question by _clock_from below and as 0 here.
+        """
+        raw = (values[i] if i < len(values) else "").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return 0 if raw else 24
+
+    def _clock_from(i) -> tuple[int | None, str | None]:
+        """Where this step's clock starts: (step position, form question).
+
+        Two boxes can set it, and which one is in charge depends on the TAT
+        unit. Normally it is the "start this step's clock from" dropdown.
+        With the unit set to "take the timestamp from the form" the question
+        named in the TAT box IS the clock, and the anchor box is hidden on
+        the page — so it is ignored here too rather than left to contradict
+        what the person chose.
+        """
+        if _unit(i) == clock.FORM_UNIT:
+            return None, _field_label(tats, i)
+        return (None if _is_field(dfroms, i) else _pos(dfroms, i),
+                _field_label(dfroms, i))
+
     def _pos(values, i):
         """A routing box: a step number, or 0 meaning 'the flow ends here'.
 
@@ -196,18 +229,17 @@ def _read_steps(form) -> list[dict]:
             # old one on the step as an extra.
             "extra_doer_ids": _people(more_doers, i,
                                       doers[i] if i < len(doers) else ""),
-            "tat_hours": int(tats[i]) if i < len(tats) and tats[i] else 24,
-            "tat_unit": (tat_units[i] if i < len(tat_units)
-                         and tat_units[i] in clock.SPAN_UNITS else "hours"),
-            "tat_value": int(tats[i]) if i < len(tats) and tats[i] else 24,
+            "tat_hours": _tat(tats, i),
+            "tat_unit": _unit(i),
+            "tat_value": _tat(tats, i),
             # Not `or None`: 0 is a real answer here — "count from when the
             # run was started" — and would otherwise be read as "not set".
             #
             # The same box can also name a date question on the start form,
             # posted as "field:Bill Date". The two are mutually exclusive by
             # construction: it is one dropdown with one value.
-            "due_from_pos": None if _is_field(dfroms, i) else _pos(dfroms, i),
-            "due_from_field": _field_label(dfroms, i),
+            "due_from_pos": _clock_from(i)[0],
+            "due_from_field": _clock_from(i)[1],
             "priority": (Priority(prios[i]) if i < len(prios) and prios[i]
                          else Priority.MEDIUM),
             "requires_audit": (audits[i] == "1") if i < len(audits) else False,
@@ -254,6 +286,17 @@ def _check_routes(rows: list[dict]) -> None:
                     400, f"{where}: its {label} points at step {target}, which "
                          f"this flow does not have. Steps are numbered 1 to "
                          f"{max(valid)}.")
+        # "Take the timestamp from the form" has to say WHICH question.
+        # Saved without one there is nothing to be due at, and the step would
+        # quietly fall back to a day from whenever it opened — a deadline
+        # nobody set and nobody would understand.
+        if r["tat_unit"] == clock.FORM_UNIT and not r["due_from_field"]:
+            raise HTTPException(
+                400, f"{where}: its TAT is set to take the timestamp from the "
+                     "start form, so it needs to say which question. Pick one "
+                     "in the box beside it — and if the form has no date "
+                     "question yet, add one (answer type: Date, or Date and "
+                     "time) and it will appear there.")
         if r["due_from_pos"] and r["due_from_pos"] not in valid:
             raise HTTPException(
                 400, f"{where}: its clock is set to start from step "

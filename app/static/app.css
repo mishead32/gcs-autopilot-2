@@ -157,6 +157,11 @@ input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);
 textarea{min-height:80px;resize:vertical}
 .row{display:flex;gap:14px;flex-wrap:wrap}
 .row>*{flex:1;min-width:180px}
+/* display:flex above beats the browser's own [hidden] rule, so a row hidden
+   by script stayed on the page. Rows ARE hidden rather than disabled —
+   a hidden field is still submitted, which is what keeps the step cards
+   posting one value per name — so this has to work. */
+.row[hidden],.row>*[hidden]{display:none}
 .inline{display:flex;gap:8px;align-items:center}
 .inline input[type=checkbox]{width:auto}
 

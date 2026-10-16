@@ -98,6 +98,35 @@ SPAN_UNITS.update(CALENDAR_UNITS)
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
                  "Saturday", "Sunday"]
 
+# ------------------------------------------------- a moment off the form ---
+# The fourth shape a turnaround can take, and the plainest one: the deadline
+# IS a moment somebody typed on the start form. Nothing added, nothing
+# counted.
+#
+#   Start form: name, company, location, joining date and time
+#   Step 1:     "Provide KPI/KRA to new employee"
+#   TAT:        take the timestamp from the form  ->  "joining date and time"
+#
+# The step is due at the joining moment itself. Expressed as a span it is
+# unsayable — "0 hours after the joining date" is arithmetic nobody should
+# have to translate, and the anchor box alone could not do it because a span
+# of some length was always added on top.
+#
+# Which question it reads is kept in the step's due_from_field, the same
+# column the anchor box uses: it is the same idea — a label off the start
+# form — and one column means one set of rules for renamed questions.
+FORM_UNIT = "formtime"
+SPAN_UNITS[FORM_UNIT] = "Take timestamp from form"
+# Its second box is not a list of numbers; it is the start form's own
+# questions, which only the page building the flow knows about.
+SPAN_CHOICES[FORM_UNIT] = []
+
+# Units written as a sentence rather than from their key. "Monthday",
+# "Fortnight" and "Formtime" are not words anybody picking a deadline would
+# recognise.
+UNIT_SENTENCES = dict(CALENDAR_UNITS)
+UNIT_SENTENCES[FORM_UNIT] = SPAN_UNITS[FORM_UNIT]
+
 # 1-28 only. The 29th, 30th and 31st do not exist in every month, and a
 # deadline that silently moves to the 28th in February is a deadline nobody
 # can plan around. Somebody wanting month-end says so with a span.
@@ -120,7 +149,7 @@ def unit_labels() -> dict:
     """
     out = {}
     for key in SPAN_UNITS:
-        out[key] = CALENDAR_UNITS.get(key) or key.title()
+        out[key] = UNIT_SENTENCES.get(key) or key.title()
     return out
 
 
@@ -133,7 +162,13 @@ def span_options() -> dict:
     """
     out = {}
     for unit, values in SPAN_CHOICES.items():
-        if unit == "weekday":
+        if unit == FORM_UNIT:
+            # Empty on purpose. Its choices are the start form's questions,
+            # which are being typed on the same page the step is — so the
+            # page builds that list itself, live, and the server has nothing
+            # useful to say about it.
+            out[unit] = []
+        elif unit == "weekday":
             out[unit] = [[v, WEEKDAY_NAMES[v]] for v in values]
         elif unit == "monthday":
             out[unit] = [[v, _ordinal(v)] for v in values]

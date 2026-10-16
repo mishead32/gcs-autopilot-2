@@ -637,6 +637,13 @@ class FlowStep(Base):
 
     @property
     def tat_label(self) -> str:
+        # A turnaround taken straight off the start form has no length to
+        # report, so reporting one ("0 hours") would be a lie on every page
+        # that reads this back. It names the question instead.
+        if (self.tat_unit or "") == clock.FORM_UNIT:
+            if self.due_from_field:
+                return f'the time answered for "{self.due_from_field}"'
+            return "a time answered on the start form"
         return clock.span_label(self.tat_unit or "hours",
                                 self.tat_value or self.tat_hours or 0)
 
@@ -676,6 +683,13 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
             target.tat_value = target.tat_hours \
                 if target.tat_value == 24 else target.tat_value
         target.tat_hours = target.tat_value
+    elif target.tat_unit == clock.FORM_UNIT:
+        # There is no number to keep. The deadline is the moment named in
+        # due_from_field, and 0 is what "nothing is added to it" looks like
+        # — so the floor below must not push it up to 1 and quietly make
+        # every such step an hour late.
+        target.tat_value = 0
+        target.tat_hours = 0
     elif target.tat_unit in clock.CALENDAR_UNITS:
         # 0 is a real answer here — Monday, and the fortnight rule's single
         # placeholder — so the "no zero spans" floor below must not touch
