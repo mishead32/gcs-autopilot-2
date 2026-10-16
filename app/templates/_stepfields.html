@@ -200,39 +200,57 @@ function renumber(){
   refreshDateFields();
 }
 
-/* The date questions on the start form, offered as clock anchors.
+/* The start form's questions, offered as clock anchors.
  *
- * They are being typed on this very page, so the list is rebuilt from the
- * question rows rather than rendered once by the server. A question with no
- * label yet is skipped — an anchor pointing at "" would be a deadline
- * depending on nothing.
+ * EVERY question is listed, not only the ones that hold a date. A question
+ * typed as Short text cannot be counted from — "Vendor Name" is not a
+ * moment — but leaving it out of the list entirely was worse: somebody adds
+ * "Date of joining", leaves the answer type on its default, looks for it
+ * here and finds nothing, with no hint that the type is what decides it.
+ *
+ * So it appears, greyed, saying exactly what to change. A question you can
+ * see and cannot pick teaches the rule; a question that is simply absent
+ * teaches nothing.
+ *
+ * Rebuilt from the question rows rather than rendered once by the server,
+ * because the questions and the steps are written on the same page.
  */
 function refreshDateFields(){
-  var labels = [];
+  var qs = [], seen = {};
   document.querySelectorAll('#sfields .sfrow').forEach(function(row){
     var t = row.querySelector('select[name=sf_type]');
     var l = row.querySelector('input[name=sf_label]');
     if (!t || !l) return;
-    if (t.value !== 'date' && t.value !== 'datetime') return;
     var name = (l.value || '').trim();
-    if (name && labels.indexOf(name) === -1) labels.push(name);
+    if (!name || seen[name]) return;          // unnamed, or already listed
+    seen[name] = 1;
+    qs.push({name: name, dated: t.value === 'date' || t.value === 'datetime'});
   });
+
+  var usable = qs.filter(function(q){ return q.dated; })
+                 .map(function(q){ return q.name; });
 
   document.querySelectorAll('#steps .duefrom').forEach(function(sel){
     var chosen = sel.value;
     sel.querySelectorAll('.fieldopt').forEach(function(o){ o.remove(); });
-    labels.forEach(function(name){
+    qs.forEach(function(q){
       var o = document.createElement('option');
       o.className = 'fieldopt';
-      o.value = 'field:' + name;
-      o.textContent = 'the date answered for "' + name + '"';
+      o.value = 'field:' + q.name;
+      if (q.dated) {
+        o.textContent = 'the date answered for "' + q.name + '"';
+      } else {
+        // Shown but not choosable, with the fix written on it.
+        o.textContent = '"' + q.name + '" — set its answer type to Date to use it';
+        o.disabled = true;
+      }
       sel.appendChild(o);
     });
-    // Keep what was chosen if it still exists. A question renamed mid-build
-    // takes its anchor with it, and the box falls back to the plain default
-    // rather than silently saving a pointer to a question nobody will ask.
+    // Keep what was chosen while it is still a question that holds a date.
+    // A question renamed, removed, or switched back to text takes its anchor
+    // with it rather than leaving a pointer to something nobody will answer.
     if (chosen.indexOf('field:') === 0
-        && labels.indexOf(chosen.slice(6)) === -1) {
+        && usable.indexOf(chosen.slice(6)) === -1) {
       sel.value = '';
     } else {
       sel.value = chosen;

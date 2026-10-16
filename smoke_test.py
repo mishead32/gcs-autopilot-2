@@ -7726,7 +7726,20 @@ _sfD = open("app/templates/_stepfields.html", encoding="utf-8").read()
 check("the anchor list is built from the start form's date questions",
       "refreshDateFields" in _sfD)
 check("a question renamed mid-build drops the anchor instead of saving a dud",
-      "labels.indexOf(chosen.slice(6)) === -1" in _sfD)
+      "usable.indexOf(chosen.slice(6)) === -1" in _sfD)
+
+# The gap this closed: a question called "Date of joining" left on the
+# default Short text answer type simply did not appear in the anchor list,
+# with nothing on screen saying the TYPE was what decided it. Somebody
+# looking for their own question found an empty space.
+check("every start-form question is listed, not only the dated ones",
+      "qs.push({name: name, dated:" in _sfD)
+check("and one that cannot hold a date says what to change",
+      "set its answer type to Date to use it" in _sfD)
+check("while staying unchoosable, so a dud anchor cannot be saved",
+      "o.disabled = true;" in _sfD)
+check("a question with no name yet is left out of the list entirely",
+      "if (!name || seen[name]) return;" in _sfD)
 
 print("\n== a half-built flow is not lost to a refresh ==")
 # Twenty minutes of typing — a start form and eight steps — used to vanish on
