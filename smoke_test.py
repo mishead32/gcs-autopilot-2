@@ -2232,9 +2232,12 @@ check("and the upgrade is safe to run twice", bool(_rows))
 print("\n== the start form is a real form builder ==")
 _nb = admin.get("/flows/new").text
 check("the builder is on the create page", 'name="sf_label"' in _nb)
+# Yes / No is deliberately not in this list any more — see the section on
+# it further down, which also checks that flows already using it keep it.
 for _t, _lbl in [("text", "Short text"), ("textarea", "Long text"),
                  ("number", "Number"), ("date", "Date"),
-                 ("select", "Choose from a list"), ("yesno", "Yes / No")]:
+                 ("datetime", "Date and time"),
+                 ("select", "Choose from a list")]:
     check(f"it offers '{_lbl}'", f'value="{_t}"' in _nb and _lbl in _nb)
 check("a question can be made optional", 'name="sf_required"' in _nb)
 check("and a list question takes its choices", 'name="sf_options"' in _nb)
@@ -8317,6 +8320,93 @@ check("the CMD board counts exactly what the desk shows",
 check("and the rule lives in one place, so they cannot drift apart",
       "needs_chasing" in open("app/services/cmdboard.py", encoding="utf-8").read()
       and "needs_chasing" in open("app/routers/followups.py", encoding="utf-8").read())
+
+print("\n== the start-form builder shows what will actually be asked ==")
+# Choosing "Date and time" changed nothing you could see: the builder only
+# ever showed a text box for the question's NAME, so the calendar — which
+# was real, on the form somebody fills in — looked like it had not been
+# switched on at all.
+_sfB = open("app/templates/_startform.html", encoding="utf-8").read()
+_newB = admin.get("/flows/new").text
+check("the builder shows what the answer will look like", 'class="sfprev"' in _newB)
+check("a date question previews a real date box", "'<input type=\"date\">'" in _sfB)
+check("and a date-and-time one a date AND time box",
+      "'<input type=\"datetime-local\">'" in _sfB)
+check("the preview is dead — it posts nothing and cannot be typed in",
+      "el.disabled = true;" in _sfB and "el.removeAttribute('name');" in _sfB)
+
+# The form people actually fill in has had the real controls all along.
+from app.models import Flow as _FlB, FIELD_TYPES as _FTB, BUILDER_FIELD_TYPES as _BFTB
+_dtName = f"SMOKE picker {RUN}"
+admin.post("/flows/new", data={
+    "name": _dtName, "description": "", "branch_id": "",
+    "sf_label": ["Date of joining", "Bill date"],
+    "sf_type": ["datetime", "date"], "sf_required": ["1", "1"],
+    "sf_options": ["", ""],
+    "step_title": ["Step one"], "step_doer": [""], "step_doers": [""],
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+    "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+    "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    "step_due_from": [""]})
+with _slK() as _d:
+    _dtF = _d.scalar(_spK(_FlB).where(_FlB.name == _dtName))
+    _dtFid = _dtF.id
+_startP = admin.get(f"/flows/{_dtFid}").text
+check("the form people fill in gives a real calendar", 'type="date"' in _startP)
+check("and a real date-and-time picker", 'type="datetime-local"' in _startP)
+
+print("\n== Yes / No is no longer offered for a new question ==")
+check("the builder does not offer it", "yesno" not in _BFTB)
+check("but every other type is still there",
+      all(k in _BFTB for k in ("text", "textarea", "number", "date", "datetime", "select")))
+check("and it is not in the dropdown on the page", ">Yes / No<" not in _newB)
+# Removing it outright would have turned existing Yes/No questions into text
+# boxes on flows nobody had touched.
+check("a flow already using it still knows what it is", "yesno" in _FTB)
+_ynName = f"SMOKE yesno kept {RUN}"
+admin.post("/flows/new", data={
+    "name": _ynName, "description": "", "branch_id": "",
+    "sf_label": ["Approved?"], "sf_type": ["yesno"], "sf_required": ["1"],
+    "sf_options": [""],
+    "step_title": ["Step one"], "step_doer": [""], "step_doers": [""],
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+    "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+    "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    "step_due_from": [""]})
+with _slK() as _d:
+    _ynF = _d.scalar(_spK(_FlB).where(_FlB.name == _ynName))
+    check("an existing Yes/No question keeps its type rather than becoming text",
+          _ynF.start_form_fields[0]["type"] == "yesno",
+          _ynF.start_form_fields[0]["type"])
+    _ynId = _ynF.id
+check("and still asks Yes or No on the form",
+      "<option value=\"Yes\">Yes</option>" in admin.get(f"/flows/{_ynId}").text)
+
+print("\n== the running list says which step each run is on ==")
+# The complaint: a run called "Prepare the message for therapists..." listed
+# under the flow "Content Writing Process" looked like a step of that flow
+# that was nowhere to be found in it. It is not a step — it is the thing the
+# run is about, typed when it was started. Both are now labelled.
+from app.models import FlowInstance as _FIB
+admin.post(f"/flows/{_dtFid}/start",
+           data={"reference": f"SMOKE WHAT THIS IS ABOUT {RUN}",
+                 "sf0": "2026-11-10T09:00", "sf1": "2026-11-10"})
+_listP = admin.get("/flows").text
+check("the column is no longer just called Reference",
+      "What this run is about" in _listP)
+check("and the step the run is sitting on has a column of its own",
+      "Now on" in _listP)
+check("the run's subject is shown", f"SMOKE WHAT THIS IS ABOUT {RUN}" in _listP)
+check("and so is the step it is actually on", "Step one" in _listP)
+with _slK() as _d:
+    _runB = _d.scalars(_spK(_FIB).where(_FIB.flow_id == _dtFid)).all()[-1]
+    check("the reference is what somebody typed, not a step title",
+          _runB.reference == f"SMOKE WHAT THIS IS ABOUT {RUN}")
+    check("and the flow's own steps are unchanged by any of this",
+          [s.title for s in _runB.flow.steps] == ["Step one"],
+          [s.title for s in _runB.flow.steps])
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

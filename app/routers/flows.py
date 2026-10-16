@@ -9,7 +9,7 @@ import json
 from ..db import get_db
 from ..deps import current_user, manager_up, require_right
 from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Priority,
-                      Right, FIELD_TYPES)
+                      Right, FIELD_TYPES, BUILDER_FIELD_TYPES)
 from ..services import flows as flow_svc, xlsx
 from ..templating import templates
 
@@ -110,7 +110,7 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
         "user": user, "branches": branches, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
-        "field_types": FIELD_TYPES,
+        "field_types": BUILDER_FIELD_TYPES,
     })
 
 
@@ -369,7 +369,7 @@ def edit_flow_form(flow_id: int, request: Request,
     _mark_usage(db, flow)
     return templates.TemplateResponse(request, "flow_edit.html", {
         "user": user, "flow": flow, "branches": branches,
-        "field_types": FIELD_TYPES, "doers": doers,
+        "field_types": BUILDER_FIELD_TYPES, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "runs": runs, "live": live,

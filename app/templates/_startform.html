@@ -34,6 +34,14 @@
     <label>Choices — separate them with commas</label>
     <input name="sf_options" placeholder="e.g. Electricity, Water, Rent, Internet">
   </div>
+  {# What the person STARTING a run will actually be handed. The builder
+     only ever showed a text box for the question's name, so choosing
+     "Date and time" looked like it had changed nothing — the calendar was
+     real, it was just two screens away. Now it is here. #}
+  <div class="sfprev">
+    <div class="m">They will answer with</div>
+    <div class="sfprevbox"></div>
+  </div>
   <button type="button" class="btn ghost sm" style="margin-top:10px"
           onclick="this.closest('.sfrow').remove()">Remove question</button>
 </div>
@@ -45,8 +53,39 @@ function wireField(row){
   // disabled, so every row still posts one value for every name and the
   // server's parallel lists stay lined up with the questions.
   var t = row.querySelector('.sftype'), o = row.querySelector('.sfopts');
-  function apply(){ o.hidden = t.value !== 'select'; }
+  var prev = row.querySelector('.sfprevbox');
+  var opts = row.querySelector('input[name=sf_options]');
+
+  // A dead copy of the real control: no name, so it posts nothing, and
+  // disabled so nobody can type an answer into a form that is only being
+  // designed. It exists to be looked at.
+  function draw(){
+    if (!prev) return;
+    var kind = t.value, html;
+    if (kind === 'date')          html = '<input type="date">';
+    else if (kind === 'datetime') html = '<input type="datetime-local">';
+    else if (kind === 'number')   html = '<input type="number" placeholder="0">';
+    else if (kind === 'textarea') html = '<textarea rows="2"></textarea>';
+    else if (kind === 'select') {
+      var list = (opts && opts.value ? opts.value : '').split(',')
+        .map(function(x){ return x.trim(); }).filter(Boolean);
+      html = '<select><option>— choose —</option>' +
+        list.map(function(x){
+          return '<option>' + x.replace(/[<>&]/g, '') + '</option>';
+        }).join('') + '</select>';
+    }
+    else if (kind === 'yesno')    html = '<select><option>Yes</option><option>No</option></select>';
+    else                          html = '<input type="text" placeholder="typed in by hand">';
+    prev.innerHTML = html;
+    prev.querySelectorAll('input,select,textarea').forEach(function(el){
+      el.disabled = true;
+      el.removeAttribute('name');
+    });
+  }
+
+  function apply(){ o.hidden = t.value !== 'select'; draw(); }
   t.addEventListener('change', apply);
+  if (opts) opts.addEventListener('input', draw);
   apply();
 }
 

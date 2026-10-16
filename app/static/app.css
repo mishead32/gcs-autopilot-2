@@ -1207,3 +1207,12 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
   text-transform:uppercase;color:var(--muted);margin-bottom:5px}
 .howto.sm{margin:8px 0 0;padding:9px 11px;font-size:12.5px}
 .howto a{word-break:break-word}
+
+/* A dead copy of the answer control, in the start-form builder. Choosing
+   "Date and time" used to change nothing you could see — the calendar was
+   real, just two screens away on the form somebody fills in. */
+.sfprev{margin-top:10px;padding-top:9px;border-top:1px dashed var(--line)}
+.sfprev .m{margin-bottom:5px}
+.sfprevbox input,.sfprevbox select,.sfprevbox textarea{
+  max-width:260px;background:var(--card);opacity:.9;cursor:not-allowed}
+.sfprevbox textarea{min-height:44px}

@@ -473,6 +473,13 @@ FIELD_TYPES = {
     "yesno": "Yes / No",
 }
 
+# What the builder actually offers. Yes/No is still rendered and still
+# answered on any flow already using it — dropping it from FIELD_TYPES
+# outright would quietly turn those questions into text boxes on flows
+# nobody has touched. It is simply no longer offered for new ones: a list
+# of two choices does the same job and reads better on the form.
+BUILDER_FIELD_TYPES = {k: v for k, v in FIELD_TYPES.items() if k != "yesno"}
+
 
 class Flow(Base):
     """A reusable workflow template, e.g. 'New PT Member Onboarding'."""

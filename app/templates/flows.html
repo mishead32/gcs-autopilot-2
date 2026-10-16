@@ -51,13 +51,23 @@
 <h2>Running now ({{ running|length }})</h2>
 {% if running %}
 <div class="table-wrap"><table>
-  <tr><th>Reference</th><th>Flow</th><th>Progress</th><th>State</th>
-      <th>Started</th><th></th></tr>
+  {# "Reference" on its own was read as a step, and the long ones made that
+     worse: a run called "Prepare the message for therapists..." under the
+     flow "Content Writing Process" looks like a step of that flow that
+     nobody can find in it. It is not a step — it is the THING this run is
+     about, typed when it was started. The header says so, and the step the
+     run is actually sitting on now has a column of its own. #}
+  <tr><th>What this run is about</th><th>Flow</th><th>Now on</th>
+      <th>Progress</th><th>State</th><th>Started</th><th></th></tr>
   {% for i in running %}
   {% set p = progress[i.id] %}
+  {% set cur = (i.flow.steps | selectattr('position', 'equalto', i.current_position)
+                | list | first) %}
   <tr class="{{ 'held' if i.on_hold }}">
     <td><a href="/flows/instance/{{ i.id }}"><strong>{{ i.reference }}</strong></a></td>
     <td>{{ i.flow.name }}</td>
+    <td>{% if cur %}<span class="m">Step {{ cur.position }}</span><br>{{ cur.title }}
+        {% else %}<span class="m">—</span>{% endif %}</td>
     <td><div class="inline"><div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div>
       <span style="font-size:12px">{{ p[0] }}/{{ p[1] }}</span></div></td>
     <td><span class="chip run_{{ i.state|replace(' ','_') }}">{{ i.state }}</span>
