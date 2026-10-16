@@ -20,16 +20,18 @@
         {% for d in doers %}<option value="{{ d.id }}"
           {{ 'selected' if step and step.default_doer_id == d.id }}>{{ d.name }}</option>{% endfor %}
       </select></div>
-    <div style="max-width:150px"><label>TAT — measured in</label>
+    <div style="max-width:190px"><label>TAT — measured in</label>
       <select name="step_tat_unit" class="tatunit">
         {% for k, lbl in span_units.items() %}
+        {# The label, not the key: "Monthday" and "Fortnight" are not words
+           anybody picking a deadline would recognise. #}
         <option value="{{ k }}"
-          {{ 'selected' if (step and step.tat_unit == k) or (not step and k == 'hours') }}>{{ k|title }}</option>
+          {{ 'selected' if (step and step.tat_unit == k) or (not step and k == 'hours') }}>{{ lbl }}</option>
         {% endfor %}
       </select></div>
-    <div style="max-width:120px"><label>How many</label>
+    <div style="max-width:210px"><label class="tatlabel">How many</label>
       <select name="step_tat" class="tatval"
-              data-value="{{ step.tat_value if step else 24 }}"></select></div>
+              data-value="{{ step.tat_value if step is not none and step.tat_value is not none else 24 }}"></select></div>
     <div><label>Priority</label>
       <select name="step_priority">
         {% for p in priorities %}<option value="{{ p.value }}"
@@ -272,21 +274,38 @@ function wire(card){
   sel.addEventListener('change', apply);
   apply();
 
-  // The second TAT box offers whole numbers that suit the unit: minutes in
-  // fives, weeks one to eight, months one to twelve. Rebuilt on every change,
-  // keeping the number the step already had whenever the new unit offers it.
+  // The second TAT box offers what suits the unit: minutes in fives, weeks
+  // one to eight — and for a calendar deadline, dates and weekday names
+  // rather than bare numbers, because "0" meaning Monday is not a choice
+  // anybody can make. Rebuilt on every change, keeping what the step
+  // already had whenever the new unit still offers it.
   var unit = card.querySelector('.tatunit'), val = card.querySelector('.tatval');
+  var lbl = card.querySelector('.tatlabel');
+  var CAL = {monthday: 1, weekday: 1, fortnight: 1};
+
   function fillValues(){
     var opts = SPAN_CHOICES[unit.value] || SPAN_CHOICES.hours;
     var keep = val.value || val.dataset.value;
     val.innerHTML = '';
-    opts.forEach(function(n){
+    opts.forEach(function(pair){
       var o = document.createElement('option');
-      o.value = n; o.textContent = n;
+      o.value = pair[0];
+      o.textContent = pair[1];
       val.appendChild(o);
     });
-    val.value = opts.indexOf(Number(keep)) !== -1 ? keep
-              : (unit.value === 'hours' ? 24 : opts[0]);
+    var has = opts.some(function(p){ return String(p[0]) === String(keep); });
+    val.value = has ? keep : (unit.value === 'hours' ? 24 : opts[0][0]);
+
+    // "How many" is the wrong question for a date. The label follows the
+    // unit, so the two boxes always read as one sentence.
+    if (lbl) {
+      lbl.textContent = CAL[unit.value]
+        ? (unit.value === 'fortnight' ? 'Which dates' : 'Which one')
+        : 'How many';
+    }
+    // The fortnight rule has exactly one answer, so there is nothing to
+    // choose — shown, but not pretending to be a decision.
+    val.disabled = unit.value === 'fortnight';
   }
   unit.addEventListener('change', fillValues);
   fillValues();

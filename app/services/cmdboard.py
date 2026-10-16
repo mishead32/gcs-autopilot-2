@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
+from . import chasing
 from ..models import (AuditState, Branch, Followup, PARKED_STATES, Task,
                       TaskSource, TaskStatus)
 
@@ -171,7 +172,12 @@ def build(db: Session, org_id: int, start: datetime, end: datetime,
             else:
                 pos.upcoming += 1
             # --- chasing: of what is open today, what was chased today --
-            if t.due_at <= today_end:     # only work already owed is chased
+            # Same rule as the follow-up desk, read from the same place, or
+            # the board and the desk would quietly report two different
+            # numbers for the same question. A daily checklist job is only
+            # chased when it is high priority, and the rest leave the count
+            # altogether rather than sitting in it as permanent pending.
+            if t.due_at <= today_end and chasing.needs_chasing(t):
                 ch = board.chase[key]
                 ch.open_tasks += 1
                 if t.id in chased:

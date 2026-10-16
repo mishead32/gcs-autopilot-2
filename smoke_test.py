@@ -2099,8 +2099,13 @@ _fp = admin.get("/flows/new").text
 check("the builder offers every unit",
       all(f'value="{u}"' in _fp for u in ["minutes", "hours", "days", "weeks", "months"]))
 check("and a second box for the number", 'class="tatval"' in _fp)
-check("with sensible choices per unit", '"weeks": [1, 2, 3, 4, 6, 8]' in _fp
-      or '"weeks":[1,2,3,4,6,8]' in _fp.replace(" ", ""))
+# The choices travel as [value, label] pairs now: a weekday is 0 and has to
+# read "Monday", so the label cannot be worked out from the number.
+_fpFlat = _fp.replace(" ", "")
+check("with sensible choices per unit",
+      '"weeks":[[1,"1"],[2,"2"],[3,"3"],[4,"4"],[6,"6"],[8,"8"]]' in _fpFlat, )
+check("and the calendar units name their choices",
+      '[0,"Monday"]' in _fpFlat and '[1,"the1st"]' in _fpFlat)
 check("the builder asks what to count the TAT from",
       'name="step_due_from"' in _fp)
 
@@ -4532,12 +4537,18 @@ def _rows7(html):
     return {int(i) for i in _re.findall(r'/tasks/(\d+)"', html)}
 
 with _sl7() as _d:
+    from app.services import chasing as _chase7
     _pcu = _d.query(_U7).filter(_U7.email == "pc@gcs.local").one()
     _desk = [t for t in _d.query(_T7).filter(
         _T7.source.in_((_S7.RECURRING, _S7.FLOW)),
         _T7.status.in_((_ST7.PENDING, _ST7.IN_PROGRESS, _ST7.REJECTED,
                         _ST7.REOPENED)),
-        _T7.due_at <= _ck7.now().replace(hour=23, minute=59, second=59)).all()]
+        _T7.due_at <= _ck7.now().replace(hour=23, minute=59, second=59)).all()
+        # Daily checklist work below high priority is not the desk's to
+        # chase, so it is not on the desk and must not be in the expected
+        # set either. Worked out here independently of the page, so this is
+        # still a real check on what the page shows.
+        if _chase7.needs_chasing(t)]
     _desk_ids = {t.id for t in _desk}
     _late_ids = {t.id for t in _desk if t.due_at < _ck7.now()}
     _soon_ids = _desk_ids - _late_ids
@@ -8122,6 +8133,177 @@ _fdEditR = admin.post(f"/flows/{_fdId}/edit", data=_fdOk, follow_redirects=False
 check("saving an edit says so the same way",
       "built=edit" in (_fdEditR.headers.get("location") or ""),
       _fdEditR.headers.get("location"))
+
+print("\n== an FMS step's TAT can be a date, not just a length ==")
+# "Due on the 15th" cannot be written as a span: a month after the 15th
+# drifts off the 15th the first time somebody is a day late. So a step's
+# turnaround can name a date that comes round instead — counted from the
+# same anchor as a span, including a date typed on the start form.
+from app import clock as _ckC
+from datetime import datetime as _dtC
+
+check("the unit list offers a date each month", "monthday" in _ckC.SPAN_UNITS)
+check("a weekday each week", "weekday" in _ckC.SPAN_UNITS)
+check("and the 1st and the 15th", "fortnight" in _ckC.SPAN_UNITS)
+check("the old spans are all still there",
+      all(u in _ckC.SPAN_UNITS for u in ("minutes", "hours", "days", "weeks", "months")))
+
+_optC = _ckC.span_options()
+check("a weekday is offered by name, not as the number 0",
+      _optC["weekday"][0] == [0, "Monday"], _optC["weekday"][0])
+check("and a date as an ordinal", _optC["monthday"][0] == [1, "the 1st"], _optC["monthday"][0])
+check("the 29th to the 31st are not offered, because they do not exist every month",
+      max(v for v, _ in _optC["monthday"]) == 28)
+check("the old units still read as plain numbers", _optC["hours"][0] == [1, "1"])
+
+_novC = _dtC(2026, 11, 10, 9, 0)        # a Tuesday
+check("the test anchor is the Tuesday it is meant to be", _novC.strftime("%A") == "Tuesday")
+_nxC = _ckC.next_occurrence
+check("10 Nov, due the 15th -> 15 Nov",
+      _nxC(_novC, "monthday", 15).date() == _dtC(2026, 11, 15).date())
+check("20 Nov, due the 15th -> 15 Dec, not a date already gone",
+      _nxC(_dtC(2026, 11, 20, 9, 0), "monthday", 15).date() == _dtC(2026, 12, 15).date())
+check("ON the 15th, due the 15th -> that same day, not a month later",
+      _nxC(_dtC(2026, 11, 15, 9, 0), "monthday", 15).date() == _dtC(2026, 11, 15).date())
+check("Tuesday, due every Monday -> the following Monday",
+      _nxC(_novC, "weekday", 0).date() == _dtC(2026, 11, 16).date())
+check("Monday, due every Monday -> that same Monday",
+      _nxC(_dtC(2026, 11, 9, 9, 0), "weekday", 0).date() == _dtC(2026, 11, 9).date())
+check("3 Nov, due the 1st or 15th -> the 15th",
+      _nxC(_dtC(2026, 11, 3, 9, 0), "fortnight", 0).date() == _dtC(2026, 11, 15).date())
+check("20 Nov, due the 1st or 15th -> the 1st of next month",
+      _nxC(_dtC(2026, 11, 20, 9, 0), "fortnight", 0).date() == _dtC(2026, 12, 1).date())
+check("29 Dec, due the 5th -> 5 Jan, the year rolls over",
+      _nxC(_dtC(2026, 12, 29, 9, 0), "monthday", 5).date() == _dtC(2027, 1, 5).date())
+check("a calendar deadline falls at the end of the day, not one second past midnight",
+      _nxC(_novC, "monthday", 15).hour == _ckC.CAL_DUE_HOUR and _ckC.CAL_DUE_HOUR >= 12)
+
+# 0 is a real answer for a calendar unit — Monday — and the rule that stops
+# a span of zero must not quietly turn it into Tuesday.
+from app.models import FlowStep as _FSC
+_zeroC = _FSC(flow_id=1, position=1, title="z", tat_unit="weekday", tat_value=0)
+from app.models import _step_tat_defaults as _fixC
+_fixC(None, None, _zeroC)
+check("a weekday of 0 survives, so 'every Monday' is not saved as Tuesday",
+      _zeroC.tat_value == 0, _zeroC.tat_value)
+_spanC = _FSC(flow_id=1, position=1, title="z", tat_unit="days", tat_value=0)
+_fixC(None, None, _spanC)
+check("but a SPAN of zero is still floored, because no time at all is not a TAT",
+      _spanC.tat_value == 1, _spanC.tat_value)
+
+# End to end, with the anchor the request actually described: a joining date
+# typed on the start form, and a step due on the next 15th after it.
+from app.models import (Flow as _FlC, FlowInstance as _FIC, Task as _TC,
+                        User as _UC)
+with _slK() as _d:
+    _uC = [u for u in _d.scalars(_spK(_UC).where(_UC.active.is_(True))).all()
+           if u.receives_work][0].id
+_joinName = f"SMOKE joining date {RUN}"
+admin.post("/flows/new", data={
+    "name": _joinName, "description": "", "branch_id": "",
+    "sf_label": ["Date of joining"], "sf_type": ["date"], "sf_required": ["1"],
+    "sf_options": [""],
+    "step_title": ["Induction paperwork"], "step_doer": [str(_uC)], "step_doers": [""],
+    "step_tat_unit": ["monthday"], "step_tat": ["15"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+    "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+    "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    "step_due_from": ["field:Date of joining"]})
+with _slK() as _d:
+    _jF = _d.scalar(_spK(_FlC).where(_FlC.name == _joinName))
+    check("the step stored the calendar unit", _jF.steps[0].tat_unit == "monthday")
+    check("with the date it was given", _jF.steps[0].tat_value == 15)
+    check("and the start-form question as its anchor",
+          _jF.steps[0].due_from_field == "Date of joining")
+    _jFid = _jF.id
+admin.post(f"/flows/{_jFid}/start",
+           data={"reference": f"SMOKE JOIN {RUN}", "sf0": "2026-11-10"})
+with _slK() as _d:
+    _jI = _d.scalars(_spK(_FIC).where(_FIC.flow_id == _jFid)).all()[-1]
+    _jT = _d.scalar(_spK(_TC).where(_TC.flow_instance_id == _jI.id))
+# 15 Nov 2026 is a Sunday, and a deadline never falls on a closed day — so
+# the answer is the working day before it, which is the existing rule doing
+# its job rather than the new one getting it wrong.
+check("joining 10 Nov with a TAT of 'the 15th' lands on the 15th or just before",
+      _dtC(2026, 11, 13) <= _jT.due_at <= _dtC(2026, 11, 15, 23, 59),
+      str(_jT.due_at))
+
+print("\n== the desk is only asked to chase what is worth chasing ==")
+# A desk handed 150 daily low-priority rows stops ticking any of them, and a
+# coverage figure it can never get to 100% is a figure it learns to ignore.
+from app.services import chasing as _chC
+from app.models import (RecurringRule as _RRC, Recurrence as _RecC,
+                        Priority as _PrC, TaskSource as _TsC)
+from app.services import recurring as _recC
+
+with _slK() as _d:
+    _admC = _d.scalar(_spK(_UC).where(_UC.email == "mis@gcs.local"))
+    _doC = [u for u in _d.scalars(_spK(_UC).where(_UC.active.is_(True))).all()
+            if u.receives_work][0]
+    _ruleIds = {}
+    for _fq, _pr in [(_RecC.DAILY, _PrC.HIGH), (_RecC.DAILY, _PrC.MEDIUM),
+                     (_RecC.DAILY, _PrC.LOW), (_RecC.WEEKLY, _PrC.LOW)]:
+        _r = _RRC(org_id=1, branch_id=_doC.branch_id,
+                  title=f"SMOKE chase {_fq.value} {_pr.value} {RUN}",
+                  doer_id=_doC.id, assigner_id=_admC.id, priority=_pr,
+                  frequency=_fq, due_time="18:00", requires_attachment=False,
+                  weekdays="0,1,2,3,4,5,6" if _fq == _RecC.WEEKLY else None)
+        _d.add(_r)
+        _d.flush()
+        _ruleIds[(_fq, _pr)] = _r.id
+    _d.commit()
+    _recC.run_spawn(_d)
+
+def _chaseable(fq, pr):
+    with _slK() as _d:
+        _t = _d.scalar(_spK(_TC).where(_TC.rule_id == _ruleIds[(fq, pr)]))
+        return None if _t is None else _chC.needs_chasing(_t)
+
+check("a DAILY checklist job at HIGH priority is chased",
+      _chaseable(_RecC.DAILY, _PrC.HIGH) is True)
+check("a DAILY job at MEDIUM is not", _chaseable(_RecC.DAILY, _PrC.MEDIUM) is False)
+check("a DAILY job at LOW is not", _chaseable(_RecC.DAILY, _PrC.LOW) is False)
+check("a WEEKLY job at LOW still is — only DAILY is narrowed",
+      _chaseable(_RecC.WEEKLY, _PrC.LOW) is True)
+
+with _slK() as _d:
+    _fmsT = _d.scalar(_spK(_TC).where(_TC.source == _TsC.FLOW))
+    _delT = _d.scalar(_spK(_TC).where(_TC.source == _TsC.DELEGATION,
+                                      _TC.priority == _PrC.LOW))
+    check("FMS work is chased at every priority",
+          _fmsT is None or _chC.needs_chasing(_fmsT) is True)
+    check("and delegation is untouched by this rule",
+          _delT is None or _chC.needs_chasing(_delT) is True)
+    # A rule somebody deleted leaves its tasks behind. They are real work
+    # still in somebody's hands, so they stay chaseable rather than vanishing.
+    _orphan = _TC(org_id=1, branch_id=_doC.branch_id, title=f"SMOKE orphan {RUN}",
+                  assigner_id=_admC.id, doer_id=_doC.id, priority=_PrC.LOW,
+                  source=_TsC.RECURRING, due_at=_clock.now(), rule_id=None)
+    check("a checklist task whose rule was deleted is still chased",
+          _chC.needs_chasing(_orphan) is True)
+
+_deskP = admin.get("/followups?desk=pc&show=all").text
+check("the high-priority daily job is on the desk",
+      f"SMOKE chase daily high {RUN}" in _deskP)
+check("the medium one is not", f"SMOKE chase daily medium {RUN}" not in _deskP)
+check("nor the low one", f"SMOKE chase daily low {RUN}" not in _deskP)
+check("but the weekly low one is", f"SMOKE chase weekly low {RUN}" in _deskP)
+
+# The board and the desk must answer the same question the same way.
+from app.services import cmdboard as _cbC
+with _slK() as _d:
+    _sC, _eC, _ = _cbC.window("this_month")
+    _bC = _cbC.build(_d, 1, _sC, _eC)
+    _owed = _bC.chase["recurring"].open_tasks
+    _todayEnd = _dtC.combine(_clock.today(), _dtC.max.time())
+    _byHand = sum(1 for _t in _d.scalars(_spK(_TC).where(_TC.source == _TsC.RECURRING)).all()
+                  if _t.due_at and _t.due_at <= _todayEnd and _t.closed_at is None
+                  and _t.submitted_at is None and _chC.needs_chasing(_t))
+check("the CMD board counts exactly what the desk shows",
+      _owed == _byHand, f"board {_owed} vs counted {_byHand}")
+check("and the rule lives in one place, so they cannot drift apart",
+      "needs_chasing" in open("app/services/cmdboard.py", encoding="utf-8").read()
+      and "needs_chasing" in open("app/routers/followups.py", encoding="utf-8").read())
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

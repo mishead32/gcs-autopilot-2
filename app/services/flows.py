@@ -106,8 +106,16 @@ def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
 def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
                      doer: User, assigner: User) -> Task:
     base = _deadline_base(db, inst, step)
-    want = clock.add_span(base, step.tat_unit or "hours",
-                          step.tat_value or step.tat_hours or 0)
+    unit = step.tat_unit or "hours"
+    value = step.tat_value if step.tat_value is not None else (step.tat_hours or 0)
+    # Two kinds of turnaround. A SPAN is a length added to the anchor; a
+    # CALENDAR unit is a date that comes round, found at or after it. Both
+    # start from the same anchor, so "the date of joining, then the next
+    # 15th" is one setting rather than arithmetic somebody does by hand.
+    if unit in clock.CALENDAR_UNITS:
+        want = clock.next_occurrence(base, unit, value)
+    else:
+        want = clock.add_span(base, unit, value)
     # The work still has to happen, so the step is never skipped — only its
     # deadline moves off a holiday. Skipping it would break the chain.
     due_at, _moved = holidays.shift_due(db, inst.org_id, want, doer.branch_id)

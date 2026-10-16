@@ -26,7 +26,8 @@ If the business ever spans timezones, this is the file to change: make the
 columns timezone-aware and convert at the edges. Until then, one office, one
 clock, one function.
 """
-from datetime import date, datetime, timedelta, timezone
+import os
+from datetime import date, datetime, time, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
 UTC_OFFSET = timedelta(hours=5, minutes=30)
@@ -75,6 +76,123 @@ SPAN_CHOICES = {
     "weeks": [1, 2, 3, 4, 6, 8],
     "months": [1, 2, 3, 4, 6, 12],
 }
+
+
+# ------------------------------------------------- calendar deadlines -----
+# A turnaround is not always a LENGTH. "Due on the 7th", "due every Monday",
+# "due on the 1st and the 15th" are deadlines that come round, and forcing
+# them into a span is impossible: "a month after the 7th" drifts off the 7th
+# the first time somebody is a day late.
+#
+# So a step's TAT can name a date instead of a duration. It is still counted
+# FROM the step's anchor — including a date somebody typed on the start form
+# — so "joining date, then the next 15th" is one setting, not a calculation
+# anybody has to do in their head.
+CALENDAR_UNITS = {
+    "monthday": "A date each month",
+    "weekday": "A weekday each week",
+    "fortnight": "The 1st and the 15th",
+}
+SPAN_UNITS.update(CALENDAR_UNITS)
+
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                 "Saturday", "Sunday"]
+
+# 1-28 only. The 29th, 30th and 31st do not exist in every month, and a
+# deadline that silently moves to the 28th in February is a deadline nobody
+# can plan around. Somebody wanting month-end says so with a span.
+SPAN_CHOICES["monthday"] = list(range(1, 29))
+SPAN_CHOICES["weekday"] = list(range(7))
+SPAN_CHOICES["fortnight"] = [0]
+
+# The hour a calendar deadline falls at. "Due on the 15th" means by the end
+# of the 15th, not one second past midnight on it.
+CAL_DUE_HOUR = int(os.getenv("STEP_DUE_HOUR", "18"))
+
+
+def unit_labels() -> dict:
+    """How each TAT unit is written in the dropdown.
+
+    A span is titled from its key — "Hours", "Weeks" — which reads fine. A
+    calendar unit is not a unit of anything, so titling its key gives
+    "Monthday" and "Fortnight", which mean nothing to the person choosing.
+    Those get a sentence instead.
+    """
+    out = {}
+    for key in SPAN_UNITS:
+        out[key] = CALENDAR_UNITS.get(key) or key.title()
+    return out
+
+
+def span_options() -> dict:
+    """Every unit's second box as [value, label] pairs.
+
+    The old shape was a bare list of numbers, which is fine while every
+    choice IS a number. A weekday is 0 and reads "Monday", so the label has
+    to travel with the value.
+    """
+    out = {}
+    for unit, values in SPAN_CHOICES.items():
+        if unit == "weekday":
+            out[unit] = [[v, WEEKDAY_NAMES[v]] for v in values]
+        elif unit == "monthday":
+            out[unit] = [[v, _ordinal(v)] for v in values]
+        elif unit == "fortnight":
+            out[unit] = [[0, "the 1st or the 15th, whichever is next"]]
+        else:
+            out[unit] = [[v, str(v)] for v in values]
+    return out
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        tail = "th"
+    else:
+        tail = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"the {n}{tail}"
+
+
+def next_occurrence(start: datetime, unit: str, value: int) -> datetime:
+    """The next time this calendar rule comes round, at or after `start`.
+
+    "At or after" on purpose: a joining date of the 15th with a deadline of
+    "the 15th" is due THAT day, not a month later. Only a target already
+    gone by moves on to the next one.
+    """
+    value = int(value or 0)
+    day = start.date()
+
+    if unit == "weekday":
+        want = max(0, min(6, value))
+        ahead = (want - day.weekday()) % 7
+        target = day + timedelta(days=ahead)
+
+    elif unit == "fortnight":
+        # Whichever of the 1st or the 15th comes next. Both are real dates in
+        # every month, which is why they are the pair people pick.
+        if day.day <= 1:
+            target = day.replace(day=1)
+        elif day.day <= 15:
+            target = day.replace(day=15)
+        else:
+            target = _first_of_next_month(day)
+
+    elif unit == "monthday":
+        want = max(1, min(28, value))
+        if day.day <= want:
+            target = day.replace(day=want)
+        else:
+            nxt = _first_of_next_month(day)
+            target = nxt.replace(day=want)
+
+    else:                                   # not a calendar unit after all
+        return add_span(start, unit, value)
+
+    return datetime.combine(target, time(hour=CAL_DUE_HOUR))
+
+
+def _first_of_next_month(day: date) -> date:
+    return (day.replace(day=28) + timedelta(days=7)).replace(day=1)
 
 
 def add_months(start: datetime, months: int) -> datetime:

@@ -109,7 +109,7 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
     return templates.TemplateResponse(request, "flow_new.html", {
         "user": user, "branches": branches, "doers": doers,
         "priorities": list(Priority),
-        "span_units": clock.SPAN_UNITS, "span_choices": clock.SPAN_CHOICES,
+        "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "field_types": FIELD_TYPES,
     })
 
@@ -371,7 +371,7 @@ def edit_flow_form(flow_id: int, request: Request,
         "user": user, "flow": flow, "branches": branches,
         "field_types": FIELD_TYPES, "doers": doers,
         "priorities": list(Priority),
-        "span_units": clock.SPAN_UNITS, "span_choices": clock.SPAN_CHOICES,
+        "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "runs": runs, "live": live,
     })
 

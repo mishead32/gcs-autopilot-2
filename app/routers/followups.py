@@ -34,7 +34,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Followup,
     PRIORITY_ORDER, PARKED_STATES,
 )
-from ..services import xlsx
+from ..services import xlsx, chasing
 from ..templating import templates
 
 router = APIRouter()
@@ -112,6 +112,11 @@ def _open_tasks(db: Session, user: User, sources, day: date,
         Task.status.not_in(PARKED_STATES),
     )
     rows = list(db.scalars(_visible(user, q, desk_right)).all())
+    # Work the desk is not expected to chase leaves the list ENTIRELY, not
+    # just the pending column. A desk that can never reach 100% because the
+    # total is full of jobs nobody expects them to ring about learns to
+    # ignore the number — and then the number is worth nothing.
+    rows = [t for t in rows if chasing.needs_chasing(t)]
     rows.sort(key=lambda t: (PRIORITY_ORDER.get(t.priority, 9), t.due_at))
     return rows
 

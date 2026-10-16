@@ -669,7 +669,14 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
             target.tat_value = target.tat_hours \
                 if target.tat_value == 24 else target.tat_value
         target.tat_hours = target.tat_value
+    elif target.tat_unit in clock.CALENDAR_UNITS:
+        # 0 is a real answer here — Monday, and the fortnight rule's single
+        # placeholder — so the "no zero spans" floor below must not touch
+        # it. Forcing it to 1 turned "every Monday" into "every Tuesday".
+        target.tat_value = target.tat_value or 0
     else:
+        # A span of nothing is not a turnaround, so a blank or a zero means
+        # the smallest real answer.
         target.tat_value = target.tat_value or 1
 
 
@@ -845,6 +852,10 @@ class Task(Base):
     branch: Mapped[Branch | None] = relationship()
     flow_instance: Mapped[FlowInstance | None] = relationship()
     flow_step: Mapped[FlowStep | None] = relationship()
+    # The checklist rule this task came from, NULL for everything else. Read
+    # by the follow-up desk, which chases a daily job only when it is high
+    # priority and needs the frequency to know that.
+    rule: Mapped["RecurringRule | None"] = relationship()
     comments: Mapped[list["TaskComment"]] = relationship(
         back_populates="task", cascade="all, delete-orphan", order_by="TaskComment.created_at"
     )
