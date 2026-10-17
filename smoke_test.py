@@ -9377,5 +9377,148 @@ check("a flow with a position still demands it",
 check("and still names the position it needs it for",
       "steps assigned to" in _posFlowPg)
 
+
+print("\n== a start-form question can be a file ==")
+# The one answer that cannot be typed. A run is usually ABOUT a document —
+# the bill, the signed offer, the policy copy — and without this people were
+# starting the run and then hunting for somewhere to put it.
+from app.models import Attachment as _AtF, FIELD_TYPES as _FTF, \
+     BUILDER_FIELD_TYPES as _BFTF
+from app.services import storage as _stF
+
+check("the builder offers it as an answer type", _BFTF.get("file") == "File upload")
+check("and the form reader knows it", _FTF.get("file") == "File upload")
+_newPg = admin.get("/flows/new").text
+check("it is in the dropdown on the page",
+      'value="file"' in _newPg and "File upload" in _newPg)
+
+_fileFlow = f"SMOKE bill with a file {RUN}"
+admin.post("/flows/new", data={
+    "name": _fileFlow, "description": "", "branch_id": "",
+    "sf_label": ["Vendor name", "The bill"], "sf_type": ["text", "file"],
+    "sf_required": ["1", "1"], "sf_options": ["", ""],
+    "step_title": ["Verify it", "Pay it"],
+    "step_doer": [str(_fourW[0]), str(_fourW[1])], "step_doers": ["", ""],
+    "step_tat_unit": ["days", "days"], "step_tat": ["1", "1"],
+    "step_priority": ["medium", "medium"], "step_instructions": ["", ""],
+    "step_howto": ["", ""], "step_fields": ["", ""],
+    "step_audit": ["0", "0"], "step_proof": ["1", "0"],
+    "step_decision": ["0", "0"], "step_yes": ["", ""],
+    "step_next": ["", "0"], "step_no": ["", ""], "step_fail": ["", ""],
+    "step_due_from": ["", ""]})
+with _slK() as _d:
+    _fFl = _d.scalar(_spK(_FlW).where(_FlW.name == _fileFlow))
+    _fFid = _fFl.id
+    check("the question saved as a file question",
+          [q["type"] for q in _fFl.start_form_fields] == ["text", "file"],
+          [q["type"] for q in _fFl.start_form_fields])
+_startPg = admin.get(f"/flows/{_fFid}").text
+check("the start form asks for a file", 'type="file"' in _startPg)
+check("and says what it will accept", ".pdf" in _startPg)
+
+# A required file question means the run cannot start without one.
+check("starting without the file is refused",
+      admin.post(f"/flows/{_fFid}/start",
+                 data={"reference": f"SMOKE NOFILE {RUN}",
+                       "sf0": "Kataria Traders"}).status_code == 400)
+
+# A real upload, through the real form.
+_pdf = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n"
+        b"%%EOF\n" + b"x" * 400)
+_up = admin.post(f"/flows/{_fFid}/start",
+                 data={"reference": f"SMOKE WITHFILE {RUN}",
+                       "sf0": "Kataria Traders"},
+                 files={"sf1": ("bill-4471.pdf", _pdf, "application/pdf")})
+check("starting with the file works", _up.status_code == 200, _up.status_code)
+
+with _slK() as _d:
+    _iF = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fFid)).all()[-1]
+    _iFid = _iF.id
+    _atts = _d.scalars(_spK(_AtF)
+                       .where(_AtF.flow_instance_id == _iFid)).all()
+    check("the file is stored against the run", len(_atts) == 1, len(_atts))
+    _att = _atts[0]
+    check("with its own name", _att.filename == "bill-4471.pdf", _att.filename)
+    check("its content type", _att.content_type == "application/pdf",
+          _att.content_type)
+    check("the bytes are all there", _att.size == len(_pdf), _att.size)
+    check("and the question it answers, so it is not an unlabelled heap",
+          _att.start_field == "The bill", _att.start_field)
+    check("it hangs off the run's first step, which is a real task",
+          _att.task.flow_step.position == 1, _att.task.flow_step.position)
+    _attId = _att.id
+    _steps = {t.flow_step.position: t for t in _fsvP._run_tasks(_d, _iF)}
+    _t1Fid, _t2Fid = _steps[1].id, _steps[2].id
+    _em1F = _d.get(_UW, _steps[1].doer_id).email
+    _em2F = _d.get(_UW, _steps[2].doer_id).email
+    # It is the starter's document, not the doer's proof. A step that
+    # demands proof must still demand it.
+    check("it does not count as the doer's proof",
+          _steps[1].proof_files == [] and len(_steps[1].attachments) == 1,
+          len(_steps[1].attachments))
+
+check("the run page lists it", "bill-4471.pdf"
+      in admin.get(f"/flows/instance/{_iFid}").text)
+
+# Everybody on the run can open it — including step 2's doer, who has never
+# been given step 1.
+_c2F = TestClient(app)
+_c2F.post("/login", data={"email": _em2F, "password": "gcs1234"})
+_pg2F = _c2F.get(f"/tasks/{_t2Fid}").text
+check("step 2's doer sees it on their own task", "bill-4471.pdf" in _pg2F)
+check("labelled with the question it answers", "The bill" in _pg2F)
+_dl = _c2F.get(f"/attachments/{_attId}")
+check("and can actually open it", _dl.status_code == 200, _dl.status_code)
+check("getting the real bytes back", _dl.content == _pdf)
+
+# Step 1's doer still has to attach their own proof.
+_c1F = TestClient(app)
+_c1F.post("/login", data={"email": _em1F, "password": "gcs1234"})
+check("step 1 cannot be submitted on the strength of the start-form file",
+      _c1F.post(f"/tasks/{_t1Fid}/submit",
+                data={"completion_note": "verified"}).status_code == 400)
+
+# Somebody with nothing to do with the run still cannot open it.
+with _slK() as _d:
+    _outsider = [u for u in _d.scalars(_spK(_UW).where(_UW.active.is_(True))).all()
+                 if u.receives_work and u.id not in
+                 (_steps[1].doer_id, _steps[2].doer_id)][0].email
+_cOut = TestClient(app)
+_cOut.post("/login", data={"email": _outsider, "password": "gcs1234"})
+check("somebody outside the run cannot open it",
+      _cOut.get(f"/attachments/{_attId}").status_code == 404)
+
+# An optional file question starts fine with nothing in it.
+_opt = f"SMOKE optional file {RUN}"
+admin.post("/flows/new", data={
+    "name": _opt, "description": "", "branch_id": "",
+    "sf_label": ["Supporting paper"], "sf_type": ["file"],
+    "sf_required": ["0"], "sf_options": [""],
+    "step_title": ["Do it"], "step_doer": [str(_fourW[0])], "step_doers": [""],
+    "step_tat_unit": ["days"], "step_tat": ["1"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+    "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+    "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    "step_due_from": [""]})
+with _slK() as _d:
+    _optId = _d.scalar(_spK(_FlW).where(_FlW.name == _opt)).id
+check("an optional file question starts without one",
+      admin.post(f"/flows/{_optId}/start",
+                 data={"reference": f"SMOKE OPTFILE {RUN}"}).status_code == 200)
+
+# A file the server will not take stops the start — rather than leaving a
+# run standing with its paperwork missing.
+_bad = admin.post(f"/flows/{_fFid}/start",
+                  data={"reference": f"SMOKE BADFILE {RUN}",
+                        "sf0": "Kataria Traders"},
+                  files={"sf1": ("notes.exe", b"MZ" + b"x" * 300,
+                                 "application/x-msdownload")})
+check("a file type the server does not take is refused", _bad.status_code == 400,
+      _bad.status_code)
+with _slK() as _d:
+    check("and no run was created by the attempt",
+          not _d.scalars(_spK(_FIW).where(
+              _FIW.reference == f"SMOKE BADFILE {RUN}")).all())
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

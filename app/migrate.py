@@ -23,6 +23,9 @@ ADDITIONS = {
     ],
     "attachments": [
         ("content_type", "VARCHAR(120) DEFAULT ''"),
+        # A file answered on an FMS start form, and the question it answers.
+        ("flow_instance_id", "INTEGER"),
+        ("start_field", "VARCHAR(160)"),
         ("storage", "VARCHAR(10) DEFAULT 'local'"),
         ("data", "BLOB"),
     ],

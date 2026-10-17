@@ -12,7 +12,7 @@
       id="markForm" data-task="{{ task.id }}"
       data-mode="{{ UPLOAD_MODE() }}" data-max="{{ MAX_UPLOAD_MB }}"
       data-proof="{{ 1 if task.requires_attachment else 0 }}"
-      data-has="{{ task.attachments|length }}">
+      data-has="{{ task.proof_files|length }}">
   <input type="hidden" name="return_to" value="" class="returnto">
 
   <div class="markhead">
@@ -34,8 +34,8 @@
 
   <div class="markbody">
     {% if task.requires_attachment %}
-      {% if task.attachments %}
-    <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
+      {% if task.proof_files %}
+    <div class="proof ok">Proof attached ({{ task.proof_files|length }}) — you can submit.</div>
       {% else %}
     <div class="proof need needbox">
       <strong>Proof and a note are required for this task.</strong>
@@ -77,17 +77,17 @@
     </div>
     {% endif %}
 
-    {% if task.attachments %}
+    {% if task.proof_files %}
     <label>Already attached</label>
     <div class="att-mini">
-      {% for a in task.attachments %}
+      {% for a in task.proof_files %}
       <a href="/attachments/{{ a.id }}" target="_blank" rel="noopener">{{ a.filename }}</a>
       {% endfor %}
     </div>
     {% endif %}
   </div>
 
-  {% set blocked = task.requires_attachment and not task.attachments %}
+  {% set blocked = task.requires_attachment and not task.proof_files %}
   <div class="markacts">
     <a class="btn ghost sm" href="/tasks/{{ task.id }}">Open the full task instead</a>
     {% if decision_step %}

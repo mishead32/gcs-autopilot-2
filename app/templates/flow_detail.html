@@ -53,7 +53,11 @@
     {% if user.has_create_task %}
     <div class="card">
       <strong>Start this flow</strong>
-      <form method="post" action="/flows/{{ flow.id }}/start" style="margin-top:12px">
+      {# multipart because a start-form question can be a FILE — the bill,
+         the signed offer, the policy copy. A plain form post drops the
+         bytes and sends only the file name. #}
+      <form method="post" action="/flows/{{ flow.id }}/start"
+            enctype="multipart/form-data" style="margin-top:12px">
         <label>Reference</label>
         <input name="reference" required placeholder="Member name / lead id / invoice no.">
         {% for f in flow.start_form_fields %}
@@ -75,6 +79,19 @@
             <option value="">— choose —</option>
             {% for o in f.options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
           </select>
+        {% elif f.type == 'file' %}
+          {% if uploads_on %}
+          <input type="file" name="{{ f.key }}" {{ 'required' if f.required }}
+                 accept="{{ upload_accept }}">
+          <div class="m" style="margin-top:4px">Up to {{ upload_max }} MB.
+            Whoever is on any step of this run can open it from their task —
+            it does not have to be sent round separately.</div>
+          {% else %}
+          {# Nowhere durable to put a file on this server. Saying so beats a
+             picker that silently loses the document. #}
+          <div class="m">File uploads are switched off on this server, so this
+            question cannot be answered. Ask an admin to set up storage.</div>
+          {% endif %}
         {% elif f.type == 'yesno' %}
           <select name="{{ f.key }}" {{ 'required' if f.required }}>
             <option value="">— choose —</option>

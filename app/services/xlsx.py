@@ -195,7 +195,7 @@ def task_columns(show_doer: bool = True):
         ("False marking", lambda t: "Yes" if t.false_marked else ""),
         ("False marking reason", lambda t: t.false_mark_reason or ""),
         ("Reopened", lambda t: t.reopen_count or 0),
-        ("Attachments", lambda t: len(t.attachments)),
+        ("Attachments", lambda t: len(t.proof_files)),
         ("Completion note", lambda t: t.completion_note or ""),
         ("Flow run", lambda t: (t.flow_instance.reference
                                 if t.flow_instance else "")),

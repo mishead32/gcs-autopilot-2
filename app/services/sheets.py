@@ -96,7 +96,7 @@ def _tasks(db: Session, org_id: int) -> tuple[list[str], list[list]]:
             _d(t.false_marked),
             t.false_marked_by.name if t.false_marked_by else "",
             t.false_mark_reason or "", t.reopen_count,
-            t.completion_note or "", len(t.attachments), len(t.comments),
+            t.completion_note or "", len(t.proof_files), len(t.comments),
             t.flow_instance.flow.name if t.flow_instance else "",
             t.flow_instance.reference if t.flow_instance else "",
         ])

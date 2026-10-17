@@ -613,8 +613,17 @@ def task_detail(task_id: int, request: Request,
             .order_by(User.name)
         ).all()
 
+    # Files answered on the FMS start form belong to the whole run, so every
+    # step's doer sees them — the bill the run is about should not have to be
+    # forwarded from step to step.
+    run_files = []
+    if task.flow_instance_id:
+        run_files = db.scalars(
+            select(Attachment)
+            .where(Attachment.flow_instance_id == task.flow_instance_id)
+            .order_by(Attachment.id)).all()
     return templates.TemplateResponse(request, "task_detail.html", {
-        "user": user, "task": task, "capture_fields": capture_fields,
+        "user": user, "task": task, "run_files": run_files, "capture_fields": capture_fields,
         "captured": json.loads(task.captured_data or "{}"),
         "is_doer": task.doer_id == user.id,
         "doers": doers,
@@ -941,7 +950,7 @@ async def submit_task(task_id: int, request: Request,
     if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
         raise HTTPException(400, "Task is already closed")
 
-    if task.requires_attachment and not task.attachments:
+    if task.requires_attachment and not task.proof_files:
         raise HTTPException(
             400,
             "This task needs proof attached before it can be submitted. "

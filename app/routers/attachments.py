@@ -16,6 +16,7 @@ upload and writes it to disk instead.
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import (RedirectResponse, FileResponse, JSONResponse,
                                Response)
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import UPLOAD_DIR
@@ -218,9 +219,20 @@ def _cache_headers(att: Attachment) -> dict:
 
 def _fetch(attachment_id: int, user: User, db: Session) -> Attachment:
     att = db.get(Attachment, attachment_id)
-    if not att or not can_view_task(user, att.task):
+    if not att:
         raise HTTPException(404, "Not found")
-    return att
+    if can_view_task(user, att.task):
+        return att
+    # A file answered on an FMS start form belongs to the RUN, not only to
+    # the step it was uploaded against. The person on step 4 has never been
+    # given step 1, so judging it by that one task would hide the document
+    # the whole run is about from everybody doing the work.
+    if att.flow_instance_id:
+        for t in db.scalars(select(Task).where(
+                Task.flow_instance_id == att.flow_instance_id)).all():
+            if can_view_task(user, t):
+                return att
+    raise HTTPException(404, "Not found")
 
 
 @router.get("/attachments/{attachment_id}")

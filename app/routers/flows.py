@@ -9,9 +9,10 @@ import json
 from ..db import get_db
 from ..deps import current_user, manager_up, require_right
 from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Department,
+                      Attachment,
                       Priority,
                       Right, FIELD_TYPES, BUILDER_FIELD_TYPES)
-from ..services import flows as flow_svc, xlsx
+from ..services import flows as flow_svc, xlsx, storage, shrink
 from ..templating import templates
 
 router = APIRouter()
@@ -413,6 +414,11 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
         # Which positions this flow names, so the start form can say what
         # the company it is about to run for will have to have somebody in.
         "positions": [s.doer_dept for s in flow.steps if s.doer_dept],
+        # A file question needs somewhere to put the file. Saying so on the
+        # form beats a picker that silently loses the document.
+        "uploads_on": storage.uploads_available(),
+        "upload_accept": storage.ACCEPT_ATTR,
+        "upload_max": storage.MAX_UPLOAD_MB,
         "progress": {i.id: flow_svc.flow_progress(i) for i in instances},
     })
 
@@ -650,7 +656,26 @@ async def start_flow(flow_id: int, request: Request,
     # member name — goes straight into the run's context, where every later
     # step can read it.
     context = {}
+    uploads = []                       # (question label, UploadFile)
     for field in flow.start_form_fields:
+        if field["type"] == "file":
+            # Read, checked and stored only once the run exists, because an
+            # attachment belongs to a task and there is no task yet. Refused
+            # here, before anything is created, so a run is never started
+            # with half its paperwork.
+            picked = form.get(field["key"])
+            if not _is_upload(picked):
+                if field["required"]:
+                    raise HTTPException(
+                        400, f"'{field['label']}' needs a file to start this flow.")
+                continue
+            if not storage.uploads_available():
+                raise HTTPException(
+                    400, "File uploads are switched off on this server, so "
+                         f"'{field['label']}' cannot be answered. Ask an "
+                         "admin to set up storage.")
+            uploads.append((field["label"], picked))
+            continue
         value = (form.get(field["key"]) or "").strip()
         if not value:
             if field["required"]:
@@ -672,9 +697,56 @@ async def start_flow(flow_id: int, request: Request,
                      f"'{field['label']}'.")
         context[field["label"]] = value
 
+    # The files are read BEFORE the run is created: a file over the limit, or
+    # of a type this server does not take, should stop the start rather than
+    # leave a run standing with the document missing.
+    ready = []
+    for label, up in uploads:
+        data = await up.read()
+        data, ctype, fname = shrink.shrink(data, up.content_type or "",
+                                           up.filename or "file")
+        err = storage.check(fname, ctype, len(data))
+        if err:
+            raise HTTPException(400, f"'{label}': {err}")
+        ready.append((label, fname, ctype, data))
+
     inst = flow_svc.start_flow(db, flow, reference, user, overrides, context,
                                branch_id=run_branch)
+    if ready:
+        _attach_to_run(db, inst, user, ready)
+        db.commit()
     return RedirectResponse(f"/flows/instance/{inst.id}", status_code=303)
+
+
+def _is_upload(value) -> bool:
+    """A filled-in file box, as opposed to an empty one or a typed answer."""
+    return hasattr(value, "filename") and bool((value.filename or "").strip())
+
+
+def _attach_to_run(db: Session, inst: FlowInstance, user: User, ready) -> None:
+    """Save each start-form file against the run and its first step.
+
+    The task is the run's first step, which is where it was uploaded and
+    what every existing rule about who may see or remove a file already
+    works from. flow_instance_id is what makes it the RUN's file, so the
+    person on step 4 can open it without being handed step 1.
+    """
+    first = sorted(inst.tasks, key=lambda t: (t.flow_step.position
+                                              if t.flow_step else 0))[0]
+    for label, fname, ctype, data in ready:
+        if storage.mode() == "db":
+            db.add(Attachment(
+                task_id=first.id, uploaded_by_id=user.id, filename=fname[:250],
+                stored_name=storage.safe_key(first.id, fname), size=len(data),
+                content_type=ctype, storage="db", data=data,
+                flow_instance_id=inst.id, start_field=label[:160]))
+        else:
+            key = storage.save_local(first.id, fname, data)
+            db.add(Attachment(
+                task_id=first.id, uploaded_by_id=user.id, filename=fname[:250],
+                stored_name=key, size=len(data), content_type=ctype,
+                storage="local", flow_instance_id=inst.id,
+                start_field=label[:160]))
 
 
 # ------------------------------------------------- pause, resume, stop ----
@@ -761,8 +833,11 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
         started_with = json.loads(inst.context or "{}")
     except json.JSONDecodeError:
         started_with = {}
+    run_files = db.scalars(
+        select(Attachment).where(Attachment.flow_instance_id == inst.id)
+        .order_by(Attachment.id)).all()
     return templates.TemplateResponse(request, "flow_instance.html", {
-        "user": user, "inst": inst, "tasks": tasks,
+        "user": user, "inst": inst, "tasks": tasks, "run_files": run_files,
         "progress": flow_svc.flow_progress(inst),
         "can_control": user.has(Right.MANAGE_FLOW),
         "started_with": started_with,

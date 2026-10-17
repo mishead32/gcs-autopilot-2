@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_task_table.html" import task_table with context %}
+{% from "_uploader.html" import file_grid %}
 {% from "_export.html" import excel_btn %}
 {% block title %}{{ inst.reference }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
@@ -111,6 +112,14 @@
   marked <em>planned</em> — visible, not chased, not scored, and their dates
   are confirmed as each one opens.</p>
 {{ task_table(tasks) }}
+
+{% if run_files %}
+<h2>Files this run was started with</h2>
+<p class="m" style="margin:0 0 10px">Uploaded on the start form. Whoever is on
+  any step of this run can open these from their own task — they do not have
+  to be sent round separately.</p>
+{{ file_grid(run_files) }}
+{% endif %}
 
 {% if inst.context and inst.context != '{}' %}
 <h2>What this run was started with</h2>

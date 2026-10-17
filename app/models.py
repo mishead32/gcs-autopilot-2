@@ -516,6 +516,11 @@ FIELD_TYPES = {
     "datetime": "Date and time",
     "select": "Choose from a list",
     "yesno": "Yes / No",
+    # A file, picked when the run is started: the bill, the signed offer, the
+    # policy copy. It is the one answer that cannot be typed, and without it
+    # people were starting a run and then hunting for somewhere to put the
+    # document that the whole run is about.
+    "file": "File upload",
 }
 
 # What the builder actually offers. Yes/No is still rendered and still
@@ -966,6 +971,17 @@ class Task(Base):
     )
 
     @property
+    def proof_files(self) -> list["Attachment"]:
+        """The doer's own attachments — their proof that the work happened.
+
+        A file answered on an FMS start form is stored against this task too
+        (it has to belong to a task), but somebody else uploaded it before
+        the work began. Counting it as proof would let a doer submit a step
+        on the strength of the document they were handed.
+        """
+        return [a for a in self.attachments if not a.start_field]
+
+    @property
     def waiting_label(self) -> str:
         """'waiting for step 2', or empty when this is live work.
 
@@ -1126,6 +1142,18 @@ class Attachment(Base):
     __tablename__ = "attachments"
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
+    # Set only on a file answered on an FMS START FORM.
+    #
+    # It still belongs to a task — the run's first step — because that is
+    # where it was uploaded and that keeps every existing rule about who may
+    # see and remove it working unchanged. This says it belongs to the whole
+    # RUN as well, so the person on step 4 can open the bill the run is
+    # about without being given the step-1 task to see it.
+    flow_instance_id: Mapped[int | None] = mapped_column(
+        ForeignKey("flow_instances.id"), nullable=True, index=True)
+    # The start-form question it answers, so the run page can show it beside
+    # the question rather than in an unlabelled heap.
+    start_field: Mapped[str | None] = mapped_column(String(160), nullable=True)
     uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     filename: Mapped[str] = mapped_column(String(255))
     # object key in the bucket, or the file name on disk

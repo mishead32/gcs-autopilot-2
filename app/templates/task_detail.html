@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_uploader.html" import uploader, attachment_list %}
+{% from "_uploader.html" import uploader, attachment_list, file_grid %}
 {% block content %}
 {# Back to the list they came from, with its filters still on it — not to
    an unfiltered /tasks that throws away the three dropdowns they just set. #}
@@ -82,8 +82,18 @@
           <td><a href="/flows/instance/{{ task.flow_instance.id }}">{{ task.flow_instance.flow.name }} — {{ task.flow_instance.reference }}</a></td></tr>{% endif %}
       </table>
 
-      {% if task.attachments %}
-      <label>Attachments ({{ task.attachments|length }})</label>
+      {# Answered on the start form, so it belongs to the whole run. Shown on
+         every step rather than only on step 1: the bill the run is about
+         should not have to be forwarded from one person to the next. #}
+      {% if run_files %}
+      <label>From the start form ({{ run_files|length }})</label>
+      <div class="m" style="margin:-2px 0 8px">Uploaded when this run was
+        started. Open them here — they are not yours to remove.</div>
+      {{ file_grid(run_files) }}
+      {% endif %}
+
+      {% if task.proof_files %}
+      <label>Attachments ({{ task.proof_files|length }})</label>
       {{ attachment_list(task, user, can_remove=true) }}
       {% endif %}
 
@@ -102,8 +112,8 @@
     <div class="card">
       <strong>Your actions</strong>
       {% if task.requires_attachment %}
-        {% if task.attachments %}
-      <div class="proof ok">Proof attached ({{ task.attachments|length }}) — you can submit.</div>
+        {% if task.proof_files %}
+      <div class="proof ok">Proof attached ({{ task.proof_files|length }}) — you can submit.</div>
         {% else %}
       <div class="proof need">
         <strong>Proof and a note are required for this task.</strong>
@@ -119,7 +129,7 @@
         <label>Completion note{% if task.requires_attachment %} — required{% endif %}</label>
         <textarea name="completion_note" {{ 'required' if task.requires_attachment }}
                   placeholder="What did you do? Any issues?"></textarea>
-        {% set blocked = task.requires_attachment and not task.attachments %}
+        {% set blocked = task.requires_attachment and not task.proof_files %}
         {% if decision_step %}
         <div class="decide">
           <div class="m">This step has two outcomes. Pick the one that happened —

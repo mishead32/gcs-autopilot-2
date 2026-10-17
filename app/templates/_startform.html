@@ -75,6 +75,7 @@ function wireField(row){
         }).join('') + '</select>';
     }
     else if (kind === 'yesno')    html = '<select><option>Yes</option><option>No</option></select>';
+    else if (kind === 'file')     html = '<input type="file">';
     else                          html = '<input type="text" placeholder="typed in by hand">';
     prev.innerHTML = html;
     prev.querySelectorAll('input,select,textarea').forEach(function(el){

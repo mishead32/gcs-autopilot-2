@@ -34,10 +34,42 @@
 {% endmacro %}
 
 
-{% macro attachment_list(task, user, can_remove=false) %}
-{% if task.attachments %}
+{# The same grid, given the rows directly. The macro below still takes a
+   task, because almost every caller has one; this is for the FMS start-form
+   files, which belong to a RUN and are shown on four different steps' tasks. #}
+{% macro file_grid(rows) %}
+{% if rows %}
 <div class="att-grid">
-  {% for a in task.attachments %}
+  {% for a in rows %}
+  <div class="att {{ 'img' if a.is_image }}">
+    {% if a.is_image %}
+    <a href="/attachments/{{ a.id }}/view" target="_blank" rel="noopener" class="thumb">
+      <img src="/attachments/{{ a.id }}/view" alt="{{ a.filename }}" loading="lazy">
+    </a>
+    {% else %}
+    <a href="/attachments/{{ a.id }}" class="thumb file">
+      <span class="ext">{{ a.filename.rsplit('.', 1)[-1][:4]|upper if '.' in a.filename else 'FILE' }}</span>
+    </a>
+    {% endif %}
+    <div class="meta">
+      {% if a.start_field %}
+      <div class="m" style="font-weight:600;color:var(--ink)">{{ a.start_field }}</div>
+      {% endif %}
+      <a href="/attachments/{{ a.id }}" class="fn" title="{{ a.filename }}">{{ a.filename }}</a>
+      <div class="m">{{ a.size_label }} · {{ a.uploaded_by.name.split()[0] }}
+        · {{ a.created_at|dt('%d %b, %I:%M %p') }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro attachment_list(task, user, can_remove=false) %}
+{% if task.proof_files %}
+<div class="att-grid">
+  {% for a in task.proof_files %}
   <div class="att {{ 'img' if a.is_image }}">
     {% if a.is_image %}
     <a href="/attachments/{{ a.id }}/view" target="_blank" rel="noopener" class="thumb">
