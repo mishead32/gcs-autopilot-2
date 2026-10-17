@@ -9,7 +9,11 @@
 <p class="sub">
   <span class="chip {{ task.priority.value }}"
         title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>
+  {% if task.waiting_label %}
+  <span class="chip planned" title="{{ task.waiting_label }}">planned</span>
+  {% else %}
   <span class="chip {{ task.status.value }}">{{ task.status.value.replace('_',' ') }}</span>
+  {% endif %}
   <span class="chip">{{ task.source.value }}</span>
   {% if task.branch %}<span class="chip">{{ task.branch.name }}</span>{% endif %}
   <a class="chip audit_{{ task.audit_state.value }}" href="#audit"
@@ -51,8 +55,16 @@
       <table style="border:0">
         <tr><th style="background:0">Assigned by</th><td>{{ task.assigner.name }}</td></tr>
         <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>
-        <tr><th style="background:0">Due</th>
-            <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})</td></tr>
+        <tr><th style="background:0">{{ 'Planned for' if task.waiting_label else 'Due' }}</th>
+            <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})
+            {% if task.waiting_label %}
+            <div class="m" style="margin-top:4px">This step's turn has not come
+              round yet — the run is on step
+              {{ task.flow_instance.current_position }}. The date above is the
+              plan, confirmed when the step opens. Until then nobody chases it
+              and it does not count in your score. You can still get on with it
+              early if you want to.</div>
+            {% endif %}</td></tr>
         <tr><th style="background:0">Assigned on</th>
             <td>{{ task.created_at|dt }}
               <span class="m">· {{ task.created_at|ago }}</span></td></tr>

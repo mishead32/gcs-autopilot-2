@@ -41,6 +41,9 @@ ADDITIONS = {
         ("decision", "VARCHAR(10)"),
         ("held_from", "VARCHAR(20)"),
         ("covers_day", "DATE"),
+        # An FMS step whose turn has not come round yet. Every existing task
+        # is live work, so FALSE is the right answer for all of them.
+        ("flow_waiting", "BOOLEAN DEFAULT 0"),
         # The human reference: DEL-01, CL-01, FMS-01. Backfilled below.
         ("ref", "VARCHAR(20)"),
         ("ref_n", "INTEGER"),

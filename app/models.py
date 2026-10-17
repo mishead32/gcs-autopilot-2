@@ -895,6 +895,16 @@ class Task(Base):
     flow_instance_id: Mapped[int | None] = mapped_column(ForeignKey("flow_instances.id"), nullable=True)
     flow_step_id: Mapped[int | None] = mapped_column(ForeignKey("flow_steps.id"), nullable=True)
     rule_id: Mapped[int | None] = mapped_column(ForeignKey("recurring_rules.id"), nullable=True)
+    # An FMS step whose turn has not come yet.
+    #
+    # Every step of a run is created the moment the start form is submitted,
+    # each with the date it is PLANNED for, so the people on steps 2, 3 and
+    # 4 can see what is coming instead of being surprised by it the day it
+    # lands. Only the step the run is actually on is live work: the others
+    # are visible, and can be got on with early, but the follow-up desk does
+    # not chase them and the score does not count them until their turn
+    # arrives. Nobody is marked late for work that was not yet theirs to do.
+    flow_waiting: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     # audit
     requires_audit: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -956,6 +966,21 @@ class Task(Base):
     )
 
     @property
+    def waiting_label(self) -> str:
+        """'waiting for step 2', or empty when this is live work.
+
+        Named after what the person is actually waiting on rather than the
+        step they are on: "step 3 of 4" says where it sits, "waiting for
+        step 2" says why they cannot start.
+        """
+        if not self.flow_waiting or self.status == TaskStatus.COMPLETED:
+            return ""
+        inst = self.flow_instance
+        if inst is None:
+            return "planned"
+        return f"planned — the run is on step {inst.current_position}"
+
+    @property
     def is_overdue(self) -> bool:
         """Past its date and still owed BY THE DOER.
 
@@ -967,6 +992,12 @@ class Task(Base):
         if self.status in (TaskStatus.COMPLETED,) + PARKED_STATES:
             return False
         if self.submitted_at is not None:
+            return False
+        if self.flow_waiting:
+            # An FMS step whose turn has not come round yet. The date on it
+            # is a PLAN, shown so the doer can see the work coming; marking
+            # it red would tell somebody they are late for a step the run
+            # has not reached. It gets a real deadline when it opens.
             return False
         return clock.now() > self.due_at
 

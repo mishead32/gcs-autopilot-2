@@ -382,6 +382,14 @@ def window_tasks(tasks, start: datetime, end: datetime):
         if t.status in PARKED_STATES:
             continue
         done_at = handed_in(t)
+        # An FMS step whose turn has not come round yet. The whole run is
+        # laid out when the start form is submitted so people can see what
+        # is coming, but a step the run has not reached is not work anybody
+        # is behind on — scoring it would mark somebody late for waiting on
+        # a colleague. It joins the score the moment its step opens, and if
+        # they get on with it early that counts here as finished work.
+        if t.flow_waiting and done_at is None:
+            continue
         shut_in = done_at is not None and start <= done_at <= end
         due_in = start <= t.due_at <= end
         # Open when the period began: either never finished, or finished

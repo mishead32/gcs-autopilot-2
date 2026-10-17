@@ -133,7 +133,8 @@ def missing_positions(db: Session, flow: Flow, branch_id: int | None) -> list[st
     return gaps
 
 
-def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
+def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep,
+                   opens_at: datetime | None = None) -> datetime:
     """The moment this step's turnaround is counted from.
 
     Four answers, and the flow says which it wants:
@@ -154,25 +155,34 @@ def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
         if answered is not None:
             return answered
         # The question was renamed, left blank, or answered with something
-        # that is not a date. Falling back to now keeps the run moving — a
-        # step with no deadline at all would simply never be chased.
-        return clock.now()
+        # that is not a date. Falling back to the step opening keeps the run
+        # moving — a step with no deadline at all would never be chased.
+        return opens_at or clock.now()
     if step.due_from_pos is None:
-        return clock.now()
+        return opens_at or clock.now()
     if step.due_from_pos == 0:
         return inst.started_at or clock.now()
     earlier = [t for t in inst.tasks
                if t.flow_step and t.flow_step.position == step.due_from_pos]
     if not earlier:
-        return clock.now()          # that step has not run on this instance
+        return opens_at or clock.now()   # that step has not run on this instance
     # The most recent run of it, so a rework loop measures from the latest
     # pass rather than from a date two rounds old.
     return max(t.due_at for t in earlier)
 
 
 def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
-                     doer: User, assigner: User) -> Task:
-    base = _deadline_base(db, inst, step)
+                     doer: User, assigner: User, waiting: bool = False,
+                     opens_at: datetime | None = None) -> Task:
+    """One task for one person on one step.
+
+    opens_at is the moment this step is EXPECTED to open, used while the
+    whole run is being planned ahead: step 3 has not opened and cannot be
+    counted from "now", so it is counted from when step 2 is due to finish.
+    Left out — the step is opening for real — and "now" is the answer,
+    which is what it has always been.
+    """
+    base = _deadline_base(db, inst, step, opens_at)
     unit = step.tat_unit or "hours"
     value = step.tat_value if step.tat_value is not None else (step.tat_hours or 0)
     # Two kinds of turnaround. A SPAN is a length added to the anchor; a
@@ -193,7 +203,7 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
         # somebody can actually meet.
         want = _answered_moment(inst, step.due_from_field or "")
         if want is None:
-            want = clock.add_span(clock.now(), "hours", 24)
+            want = clock.add_span(opens_at or clock.now(), "hours", 24)
     elif unit in clock.CALENDAR_UNITS:
         want = clock.next_occurrence(base, unit, value)
     else:
@@ -217,15 +227,212 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
         flow_step_id=step.id,
         requires_audit=step.requires_audit,
         requires_attachment=step.requires_attachment,
+        flow_waiting=waiting,
     )
     db.add(task)
     db.flush()
-    notify.queue(
-        db, doer, "flow_step_ready", task,
-        title=step.title, flow=inst.flow.name, reference=inst.reference,
-        due=task.due_at.strftime("%d %b, %I:%M %p"),
-    )
+    # A step still waiting its turn is not news. The person can see it on
+    # their list with the date it is planned for; a WhatsApp saying "this is
+    # ready" when it is not would teach them to ignore the next one, which
+    # is the message that matters.
+    if not waiting:
+        notify.queue(
+            db, doer, "flow_step_ready", task,
+            title=step.title, flow=inst.flow.name, reference=inst.reference,
+            due=task.due_at.strftime("%d %b, %I:%M %p"),
+        )
     return task
+
+
+# --------------------------------------------------------- the plan ------
+# A run used to show one step at a time: step 2 did not exist until step 1
+# was marked, so the person on step 3 had no idea anything was coming until
+# the day it landed on them. They could not book around it, and a flow that
+# takes three weeks looked like a single task that appeared out of nowhere.
+#
+# So the whole run is laid out the moment the start form is submitted. Every
+# step gets a task with the date it is PLANNED for, chained off the one
+# before it: form submitted 16 Oct, step 1 (TAT 1 day) due 17 Oct, step 2
+# (TAT 2 days) due 19 Oct, and so on. Everybody can see their part of it
+# from day one.
+#
+# Only the step the run is actually on is live work. The rest are visible,
+# and can be got on with early, but they are not chased and not scored until
+# their turn comes: nobody is marked late for work that was not yet theirs.
+
+# How many steps ahead a plan is drawn. A rework loop would otherwise plan
+# the same four steps round and round forever.
+MAX_PLANNED_STEPS = 40
+
+
+def straight_path(flow: Flow, start_pos: int) -> list[FlowStep]:
+    """The steps a run goes through if every decision goes the first way.
+
+    A decision cannot be read before somebody makes it, so the plan follows
+    the first outcome and is redrawn the moment a real decision is taken.
+    Showing nothing past the first decision would put most flows back to one
+    step at a time, which is the thing being fixed.
+
+    A route back to a step already in the plan ends it: that is a rework
+    loop, and a plan that listed step 2 four times would be noise, not a
+    plan.
+    """
+    by_pos = {s.position: s for s in flow.steps}
+    order = sorted(by_pos)
+    out: list[FlowStep] = []
+    seen: set[int] = set()
+    pos = start_pos
+    while pos in by_pos and pos not in seen and len(out) < MAX_PLANNED_STEPS:
+        step = by_pos[pos]
+        out.append(step)
+        seen.add(pos)
+        target = step.next_step_pos
+        if target == 0:
+            break                       # this step deliberately ends the flow
+        if target is None:
+            nxt = next((p for p in order if p > pos), None)
+            if nxt is None:
+                break
+            pos = nxt
+        else:
+            pos = target
+    return out
+
+
+def _touched(task: Task) -> bool:
+    """Has anybody done anything with this task yet?
+
+    A waiting task nobody has opened can be taken off the plan silently when
+    a decision sends the run elsewhere. One somebody has started, written on
+    or attached to is a record of real work and is never removed.
+    """
+    # started_at is NOT evidence of anything. Every task is marked live the
+    # moment it is created — there is no "accept" step in this software —
+    # so a task nobody has looked at still carries one.
+    return bool(task.submitted_at or task.closed_at or task.completion_note
+                or task.comments or task.attachments
+                or task.status not in (TaskStatus.PENDING,
+                                       TaskStatus.IN_PROGRESS))
+
+
+def replan(db: Session, inst: FlowInstance, assigner: User) -> None:
+    """Lay out the rest of the run, with a planned date on every step.
+
+    Called when the run starts and again whenever it moves, so the plan
+    stays true: a decision that sends the flow elsewhere drops the steps
+    that are no longer coming and adds the ones that now are, and a step
+    finished three days late pushes the dates after it along rather than
+    handing somebody a task that was already overdue when it arrived.
+
+    Only steps AHEAD of where the run is are touched. Live work, finished
+    work, and anything anybody has so much as opened are left exactly as
+    they are.
+    """
+    if inst.completed_at or inst.cancelled_at:
+        return
+    path = straight_path(inst.flow, inst.current_position)
+    if not path:
+        return
+    ahead = path[1:]
+    keep_ids = {s.id for s in ahead}
+
+    # Steps that were planned and are not coming after all.
+    for t in list(inst.tasks):
+        if t.flow_waiting and t.flow_step_id not in keep_ids and not _touched(t):
+            db.delete(t)
+    db.flush()
+
+    # The chain starts from when the step being worked on is due to finish.
+    live = [t for t in inst.tasks
+            if t.flow_step_id == path[0].id and t.status in _LIVE_TASK_STATES]
+    prev_due = max((t.due_at for t in live), default=clock.now())
+
+    for step in ahead:
+        mine = [t for t in inst.tasks
+                if t.flow_step_id == step.id and t.status in _LIVE_TASK_STATES]
+        if mine:
+            # Already planned. Re-date whatever is still waiting and
+            # untouched, so a late step moves what comes after it.
+            for t in mine:
+                if t.flow_waiting and not _touched(t):
+                    t.due_at = _planned_due(db, inst, step, t.doer, prev_due)
+            prev_due = max(t.due_at for t in mine)
+            continue
+        people = step_people(db, inst, step)
+        if not people:
+            # Nobody to plan it for — a position nobody holds, or a step
+            # whose doer is picked at run time. It is still a real step and
+            # still opens when its turn comes; it just cannot be shown to
+            # anybody in advance, and inventing a name for it would be
+            # worse than leaving it off the plan.
+            prev_due = clock.add_span(prev_due, "hours", 24)
+            continue
+        made = [_spawn_step_task(db, inst, step, p, assigner,
+                                 waiting=True, opens_at=prev_due)
+                for p in people]
+        prev_due = max(t.due_at for t in made)
+    db.flush()
+
+
+def _planned_due(db: Session, inst: FlowInstance, step: FlowStep,
+                 doer: User, opens_at: datetime) -> datetime:
+    """The date a step is planned for, if it opens at `opens_at`."""
+    base = _deadline_base(db, inst, step, opens_at)
+    unit = step.tat_unit or "hours"
+    value = step.tat_value if step.tat_value is not None else (step.tat_hours or 0)
+    if unit == clock.FORM_UNIT:
+        want = _answered_moment(inst, step.due_from_field or "")
+        if want is None:
+            want = clock.add_span(opens_at, "hours", 24)
+    elif unit in clock.CALENDAR_UNITS:
+        want = clock.next_occurrence(base, unit, value)
+    else:
+        want = clock.add_span(base, unit, value)
+    due_at, _moved = holidays.shift_due(db, inst.org_id, want,
+                                        doer.branch_id if doer else None)
+    return due_at
+
+
+def _activate(db: Session, inst: FlowInstance, step: FlowStep,
+              fallback: User, assigner: User) -> Task | None:
+    """Hand a planned step over for real, or open it if it was not planned.
+
+    Returns None when the step is already finished — somebody got on with
+    it early, which they are allowed to do — so the caller can carry on
+    past it rather than reopening work that is done.
+    """
+    mine = [t for t in inst.tasks if t.flow_step_id == step.id]
+    live = [t for t in mine if t.status in _LIVE_TASK_STATES]
+    if not live:
+        # Done EARLY means finished while it was still only planned — the
+        # flag is left on it for exactly this reason. A step finished the
+        # ordinary way, when its turn came, must still be reopened: that is
+        # what a rework loop is, and treating "already completed" as "no
+        # need" would send a rejected bill sailing past the step it was
+        # rejected back to.
+        if mine and all(t.status == TaskStatus.COMPLETED and t.flow_waiting
+                        for t in mine):
+            return None
+        return _open_step(db, inst, step, fallback, assigner)
+
+    first = None
+    for t in live:
+        if not t.flow_waiting:
+            first = first or t
+            continue
+        t.flow_waiting = False
+        # The deadline was an estimate while the step was waiting. Now the
+        # step has really opened, a TAT counted from "when this step opens"
+        # is counted from this moment — otherwise a run that slipped three
+        # days would hand somebody a task that was already overdue.
+        t.due_at = _planned_due(db, inst, step, t.doer, clock.now())
+        notify.queue(
+            db, t.doer, "flow_step_ready", t,
+            title=step.title, flow=inst.flow.name, reference=inst.reference,
+            due=t.due_at.strftime("%d %b, %I:%M %p"),
+        )
+        first = first or t
+    return first
 
 
 def start_flow(db: Session, flow: Flow, reference: str, starter: User,
@@ -252,6 +459,10 @@ def start_flow(db: Session, flow: Flow, reference: str, starter: User,
 
     first = flow.steps[0]
     _open_step(db, inst, first, starter, starter, doer_overrides)
+    # And everything after it, each with the date it is planned for, so the
+    # people on steps 2, 3 and 4 can see what is coming instead of being
+    # surprised by it on the day.
+    replan(db, inst, starter)
     db.commit()
     return inst
 
@@ -320,6 +531,24 @@ def advance_flow(db: Session, task: Task) -> Task | None:
     if inst.held_at is not None or inst.cancelled_at is not None:
         return None
 
+    # Somebody getting on with a later step early does not move the run.
+    #
+    # Every step is visible from the moment the form is submitted and any of
+    # them can be marked, which is deliberate. But the run is still sitting
+    # on step 1: advancing from step 3 because step 3 was ticked would skip
+    # the two steps in between and leave their work open behind it. The
+    # early tick is kept — when the run reaches that step it finds it
+    # already done and carries straight past.
+    # The flag stays on. It is how a step finished BEFORE its turn is told
+    # apart from one finished when its turn came, which is what stops a
+    # rework loop skipping the step it was sent back to.
+    if task.flow_waiting:
+        db.commit()
+        return None
+    if task.flow_step and task.flow_step.position != inst.current_position:
+        db.commit()
+        return None
+
     # A step several people share only counts as finished when the last of
     # them finishes. Moving on after the first would quietly cancel the work
     # of everybody else, which is the opposite of asking three people to do
@@ -370,8 +599,36 @@ def advance_flow(db: Session, task: Task) -> Task | None:
         db.commit()
         return None
 
-    inst.current_position = nxt.position
-    new_task = _open_step(db, inst, nxt, task.doer, task.assigner)
+    # Walk forward until a step that still needs doing. A step somebody got
+    # on with early is already finished, and reopening it would throw their
+    # work away and ask for it twice.
+    new_task = None
+    guard = 0
+    while nxt is not None and guard < MAX_PLANNED_STEPS:
+        guard += 1
+        inst.current_position = nxt.position
+        new_task = _activate(db, inst, nxt, task.doer, task.assigner)
+        if new_task is not None:
+            break
+        done_early = [t for t in inst.tasks if t.flow_step_id == nxt.id]
+        target = nxt.route((done_early[-1].decision if done_early else None)
+                           or "pass")
+        if target is None:
+            nxt = next((s for s in steps if s.position > nxt.position), None)
+        elif target == 0:
+            nxt = None
+        else:
+            nxt = next((s for s in steps if s.position == target), None)
+
+    if new_task is None:
+        inst.completed_at = clock.now()
+        db.commit()
+        return None
+
+    # The plan is redrawn every time the run moves: a decision that sends it
+    # elsewhere drops the steps that are no longer coming, and a step
+    # finished late pushes the dates after it along.
+    replan(db, inst, task.assigner)
     db.commit()
     return new_task
 

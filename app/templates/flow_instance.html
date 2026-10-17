@@ -104,6 +104,12 @@
 {% endif %}
 
 <h2>Step tasks</h2>
+<p class="m" style="margin:0 0 10px">Every step of this run was laid out when
+  the start form was submitted, each with the date it is planned for, so
+  nobody is waiting to find out what is coming. The run is on
+  <strong>step {{ inst.current_position }}</strong>; the steps after it are
+  marked <em>planned</em> — visible, not chased, not scored, and their dates
+  are confirmed as each one opens.</p>
 {{ task_table(tasks) }}
 
 {% if inst.context and inst.context != '{}' %}

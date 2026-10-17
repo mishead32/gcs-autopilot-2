@@ -29,6 +29,14 @@ from ..models import Priority, Recurrence, Task, TaskSource
 
 def needs_chasing(task: Task) -> bool:
     """True when the desk is expected to follow this task up."""
+    if task.flow_waiting:
+        # An FMS step whose turn has not come round yet. It is visible to
+        # its doer with the date it is planned for — that is the point of
+        # planning the whole run up front — but there is nothing to chase:
+        # the person cannot be behind on work the run has not reached, and
+        # a desk handed every step of every running flow would stop ticking
+        # any of them.
+        return False
     if task.source != TaskSource.RECURRING:
         # FMS, delegation and help-desk work: all of it, every priority.
         return True
@@ -50,5 +58,8 @@ def why_skipped(task: Task) -> str | None:
     """A sentence for anybody wondering where a task went, or None."""
     if needs_chasing(task):
         return None
+    if task.flow_waiting:
+        return ("This step's turn has not come round yet — it is shown with "
+                "its planned date so the doer can see it coming.")
     return ("Daily checklist work is only chased when it is high priority — "
             "this one is " + task.priority.value + ".")

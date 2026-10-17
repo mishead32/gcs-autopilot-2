@@ -32,7 +32,20 @@
     {# Status and audit are both chips about where the task stands, so they
        stack in one column rather than claiming two. #}
     <td class="statecell">
+      {# A step whose turn has not come reads as PLANNED, not IN PROGRESS.
+         Every step of an FMS run is created the moment the start form is
+         submitted — and every new task is marked live on creation, there
+         being no "accept" step — so without this the three steps nobody
+         has reached would all claim to be under way. #}
+      {% if t.waiting_label %}
+      <span class="chip planned" title="{{ t.waiting_label }}. The whole run
+            was laid out when the start form was submitted. You can get on
+            with it early if you like — it is not chased and not scored until
+            its turn comes, and the date is confirmed when the step opens."
+        >planned</span>
+      {% else %}
       <span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span>
+      {% endif %}
       <a class="chip audit_{{ t.audit_state.value }}" href="/tasks/{{ t.id }}#audit"
          title="Open the audit for this task">{{ t.audit_label }}</a>
       {# A false mark is the one audit outcome that costs the doer points, so

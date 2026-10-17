@@ -1979,9 +1979,20 @@ with _SLP() as _d:
     check("the start values are stored on the run", "BILL-77" in (_inst.context or ""))
 
 def _open_step(iid):
+    """The task the run is actually ON right now.
+
+    Every step of a run is created when the start form is submitted, each
+    with the date it is planned for, so "the first task that is not closed"
+    no longer means "the step being worked on" — it could be step 4,
+    sitting in its doer's list with a date three weeks out. The live step is
+    the one at the run's current position that is not still waiting.
+    """
     with _SLP() as _d:
+        inst = _d.get(_FI, iid)
         rows = [t for t in _d.scalars(_sp(_TP).where(_TP.flow_instance_id == iid)).all()
-                if t.status not in (_TSF.COMPLETED, _TSF.CANCELLED)]
+                if t.status not in (_TSF.COMPLETED, _TSF.CANCELLED)
+                and not t.flow_waiting
+                and t.flow_step and t.flow_step.position == inst.current_position]
         return (rows[0].id, rows[0].flow_step.position) if rows else (None, None)
 
 amit = login("amit@gcs.local")
@@ -5521,6 +5532,8 @@ class _FakeTask:
         self.status = _STF.COMPLETED if closed else _STF.IN_PROGRESS
         self.source, self.priority = _SRF.DELEGATION, _PRF.LOW
         self.false_marked, self.audit_score = False, None
+        # Delegation work is never an FMS step waiting its turn.
+        self.flow_waiting = False
     @property
     def weight(self): return 1
     @property
@@ -7877,15 +7890,20 @@ with _slK() as _d:
 admin.post(f"/flows/{_fMid}/start", data={"reference": f"SMOKE STOCK {RUN}"})
 with _slK() as _d:
     _iM = _d.scalar(_spK(_FIM).where(_FIM.flow_id == _fMid))
-    _t1M = _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iM.id)).all()
+    # Step 1 only. The whole run is laid out when the form is submitted, so
+    # step 2's task exists too — waiting, with the date it is planned for.
+    _t1M = [t for t in _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iM.id)).all()
+            if t.flow_step.position == 1]
     _iMid = _iM.id
 check("starting the run opens one task per person", len(_t1M) == 3, len(_t1M))
 check("one each, nobody missed", sorted(t.doer_id for t in _t1M) == sorted(_idsM))
 
 def _step_positions():
+    """Positions whose turn has actually come — not the ones merely planned."""
     with _slK() as _d:
         return [t.flow_step.position for t in
-                _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iMid)).all()]
+                _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iMid)).all()
+                if not t.flow_waiting]
 
 _doneM = 0
 for _tm in _t1M:
@@ -7904,7 +7922,7 @@ for _tm in _t1M:
 
 with _slK() as _d:
     _t2M = [t for t in _d.scalars(_spK(_TM).where(_TM.flow_instance_id == _iMid)).all()
-            if t.flow_step.position == 2]
+            if t.flow_step.position == 2 and not t.flow_waiting]
 check("and the next step opens once, not three times", len(_t2M) == 1, len(_t2M))
 
 # A decision step cannot be shared: two people could pick two outcomes and
@@ -8283,7 +8301,12 @@ check("a WEEKLY job at LOW still is — only DAILY is narrowed",
       _chaseable(_RecC.WEEKLY, _PrC.LOW) is True)
 
 with _slK() as _d:
-    _fmsT = _d.scalar(_spK(_TC).where(_TC.source == _TsC.FLOW))
+    # A LIVE step. Every step of a run exists from the moment the start
+    # form is submitted, and the ones whose turn has not come are
+    # deliberately not chased — picking one of those here would be testing
+    # the opposite rule by accident.
+    _fmsT = _d.scalar(_spK(_TC).where(_TC.source == _TsC.FLOW,
+                                      _TC.flow_waiting.is_(False)))
     _delT = _d.scalar(_spK(_TC).where(_TC.source == _TsC.DELEGATION,
                                       _TC.priority == _PrC.LOW))
     check("FMS work is chased at every priority",
@@ -8765,6 +8788,244 @@ check("the refusal now mentions ticking an existing person instead",
       "Also covers" in admin.post(f"/flows/{_pFid}/start",
                                   data={"reference": f"SMOKE POS GONE {RUN}",
                                         "run_branch": str(_brDid)}).text)
+
+
+print("\n== the whole run is planned out the moment the form is submitted ==")
+# The complaint: a four-step flow showed step 1 and nothing else. The person
+# on step 3 had no idea anything was coming until the day it landed, could
+# not book around it, and a flow that runs for three weeks looked like a
+# task that appeared out of nowhere.
+#
+#   form submitted  16 Oct
+#   step 1, TAT 1 day   -> 17 Oct
+#   step 2, TAT 2 days  -> 19 Oct
+#   step 3, TAT 1 day   -> 20 Oct
+#   step 4, TAT 1 day   -> 21 Oct
+#
+# All four exist from the start, each with its planned date.
+from app.models import (Flow as _FlW, FlowInstance as _FIW, Task as _TW,
+                        TaskStatus as _TSW, User as _UW)
+from app.services import flows as _fsvW, chasing as _chW, scoring as _scW
+
+with _slK() as _d:
+    _fourW = [u.id for u in _d.scalars(_spK(_UW).where(_UW.active.is_(True))
+                                       .order_by(_UW.id)).all()
+              if u.receives_work][:4]
+_flowW = f"SMOKE four steps planned {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowW, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Step one", "Step two", "Step three", "Step four"],
+    "step_doer": [str(i) for i in _fourW], "step_doers": ["", "", "", ""],
+    "step_tat_unit": ["days", "days", "days", "days"],
+    "step_tat": ["1", "2", "1", "1"],
+    "step_priority": ["medium"] * 4, "step_instructions": [""] * 4,
+    "step_howto": [""] * 4, "step_fields": [""] * 4,
+    "step_audit": ["0"] * 4, "step_proof": ["0"] * 4,
+    "step_decision": ["0"] * 4, "step_yes": [""] * 4,
+    "step_next": ["", "", "", "0"], "step_no": [""] * 4,
+    "step_fail": [""] * 4, "step_due_from": [""] * 4})
+with _slK() as _d:
+    _fWid = _d.scalar(_spK(_FlW).where(_FlW.name == _flowW)).id
+
+admin.post(f"/flows/{_fWid}/start", data={"reference": f"SMOKE PLAN {RUN}"})
+with _slK() as _d:
+    _iW = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fWid)).all()[-1]
+    _rows = sorted(_d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iW.id)).all(),
+                   key=lambda t: t.flow_step.position)
+    _iWid = _iW.id
+    check("all four steps exist from the moment the form was submitted",
+          [t.flow_step.position for t in _rows] == [1, 2, 3, 4],
+          [t.flow_step.position for t in _rows])
+    check("each one went to its own doer",
+          [t.doer_id for t in _rows] == _fourW, [t.doer_id for t in _rows])
+    check("only step 1 is live work", [t.flow_waiting for t in _rows]
+          == [False, True, True, True], [t.flow_waiting for t in _rows])
+
+    # The dates chain: each step counted from when the one before it is due.
+    _d1, _d2, _d3, _d4 = [t.due_at for t in _rows]
+    check("step 2 is planned two days after step 1 is due",
+          (_d2 - _d1).days == 2, str(_d2 - _d1))
+    check("step 3 a day after step 2", (_d3 - _d2).days == 1, str(_d3 - _d2))
+    check("step 4 a day after step 3", (_d4 - _d3).days == 1, str(_d4 - _d3))
+    check("so the last step's date is four days past the first's",
+          (_d4 - _d1).days == 4, str(_d4 - _d1))
+
+    # Visible, but not work anybody is behind on.
+    check("a planned step is not chased", not _chW.needs_chasing(_rows[2]))
+    check("and says why if anybody asks",
+          "turn has not come" in (_chW.why_skipped(_rows[2]) or ""))
+    check("the live step IS chased", _chW.needs_chasing(_rows[0]))
+    check("a planned step is never shown as overdue, whatever its date",
+          not _rows[3].is_overdue)
+    check("and it says on the row that it is only planned",
+          "planned" in _rows[2].waiting_label, _rows[2].waiting_label)
+    # Out of the score until its turn: nobody is marked late for waiting on
+    # a colleague.
+    _owedW, _ = _scW.window_tasks(_rows, _dtC(2020, 1, 1), _dtC(2030, 1, 1))
+    check("planned steps are out of the score until their turn comes",
+          [t.flow_step.position for t in _owedW] == [1],
+          [t.flow_step.position for t in _owedW])
+
+# The doer of step 3 can see it on their own list, with its date, today.
+with _slK() as _d:
+    _t3W = [t for t in _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iWid)).all()
+            if t.flow_step.position == 3][0]
+    _em3W, _t3Wid = _d.get(_UW, _t3W.doer_id).email, _t3W.id
+_c3W = TestClient(app)
+_c3W.post("/login", data={"email": _em3W, "password": "gcs1234"})
+_mineW = _c3W.get("/tasks?scope=mine&status=open").text
+check("the doer of step 3 can see it on their own list today",
+      f"/tasks/{_t3Wid}" in _mineW)
+check("marked as planned rather than as today's job", "chip planned" in _mineW)
+
+# When step 1 is marked, step 2 goes live — it is not created then, it was
+# already there.
+_t1W = [t for t in _rows if t.flow_step.position == 1][0]
+with _slK() as _d:
+    _em1W = _d.get(_UW, _t1W.doer_id).email
+_c1W = TestClient(app)
+_c1W.post("/login", data={"email": _em1W, "password": "gcs1234"})
+_c1W.post(f"/tasks/{_t1W.id}/submit", data={"completion_note": "done"})
+with _slK() as _d:
+    _rows2 = sorted(_d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iWid)).all(),
+                    key=lambda t: t.flow_step.position)
+    check("marking step 1 did not create a second task for step 2",
+          len(_rows2) == 4, len(_rows2))
+    check("it turned the one that was already there into live work",
+          _rows2[1].id == _rows[1].id and not _rows2[1].flow_waiting)
+    check("and the run moved to step 2",
+          _d.get(_FIW, _iWid).current_position == 2)
+    check("steps 3 and 4 are still planned",
+          [t.flow_waiting for t in _rows2] == [False, False, True, True])
+
+print("\n== a later step can be got on with early ==")
+# Any step can be marked at any time. Doing step 3 while the run is on step
+# 2 must not skip step 2, and when the run reaches step 3 it must not ask
+# for it again.
+_t3bW = [t for t in _rows2 if t.flow_step.position == 3][0]
+_c3W.post(f"/tasks/{_t3bW.id}/submit", data={"completion_note": "got ahead"})
+with _slK() as _d:
+    check("finishing a later step early does not move the run",
+          _d.get(_FIW, _iWid).current_position == 2)
+    _st2W = [t for t in _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iWid)).all()
+             if t.flow_step.position == 2][0]
+    check("step 2 is still open, where it was", _st2W.status != _TSW.COMPLETED)
+    _em2W, _t2Wid = _d.get(_UW, _st2W.doer_id).email, _st2W.id
+_c2W = TestClient(app)
+_c2W.post("/login", data={"email": _em2W, "password": "gcs1234"})
+_c2W.post(f"/tasks/{_t2Wid}/submit", data={"completion_note": "done"})
+with _slK() as _d:
+    _instW = _d.get(_FIW, _iWid)
+    _allW = _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iWid)).all()
+    check("the run walks straight past the step that was already done",
+          _instW.current_position == 4, _instW.current_position)
+    check("without asking for it a second time",
+          len([t for t in _allW if t.flow_step.position == 3]) == 1)
+    check("and step 4 is live now",
+          not [t for t in _allW if t.flow_step.position == 4][0].flow_waiting)
+    check("still four tasks in all, one per step", len(_allW) == 4, len(_allW))
+
+
+print("\n== a decision redraws the plan ==")
+# A decision cannot be read before somebody makes it, so the plan follows
+# the first outcome and is redrawn the moment a real decision is taken.
+# Showing nothing past the first decision would put most flows back to one
+# step at a time, which is the thing being fixed.
+_flowD = f"SMOKE decision replan {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowD, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Prepare", "Approve it", "Pay it", "File the rejection"],
+    "step_doer": [str(i) for i in _fourW], "step_doers": ["", "", "", ""],
+    "step_tat_unit": ["days"] * 4, "step_tat": ["1"] * 4,
+    "step_priority": ["medium"] * 4, "step_instructions": [""] * 4,
+    "step_howto": [""] * 4, "step_fields": [""] * 4,
+    "step_audit": ["0"] * 4, "step_proof": ["0"] * 4,
+    # Step 2 decides: approved -> step 3 (pay), rejected -> step 4 (file).
+    "step_decision": ["0", "1", "0", "0"],
+    "step_yes": ["", "Approved", "", ""],
+    "step_next": ["", "3", "0", "0"],
+    "step_no": ["", "Rejected", "", ""],
+    "step_fail": ["", "4", "", ""], "step_due_from": [""] * 4})
+with _slK() as _d:
+    _fDid = _d.scalar(_spK(_FlW).where(_FlW.name == _flowD)).id
+admin.post(f"/flows/{_fDid}/start", data={"reference": f"SMOKE DEC {RUN}"})
+with _slK() as _d:
+    _iD = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fDid)).all()[-1]
+    _iDid = _iD.id
+    _planD = sorted(t.flow_step.position for t in
+                    _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iDid)).all())
+    check("the plan follows the first outcome: 1, 2, then 3",
+          _planD == [1, 2, 3], _planD)
+    check("the other branch is not planned — it may never happen",
+          4 not in _planD)
+    _t1D = [t for t in _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iDid)).all()
+            if t.flow_step.position == 1][0]
+    _em1D, _t1Did = _d.get(_UW, _t1D.doer_id).email, _t1D.id
+_c1D = TestClient(app)
+_c1D.post("/login", data={"email": _em1D, "password": "gcs1234"})
+_c1D.post(f"/tasks/{_t1Did}/submit", data={"completion_note": "prepared"})
+
+with _slK() as _d:
+    _t2D = [t for t in _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iDid)).all()
+            if t.flow_step.position == 2][0]
+    _em2D, _t2Did = _d.get(_UW, _t2D.doer_id).email, _t2D.id
+_c2D = TestClient(app)
+_c2D.post("/login", data={"email": _em2D, "password": "gcs1234"})
+_c2D.post(f"/tasks/{_t2Did}/submit", data={"decision": "fail",
+                                           "completion_note": "rejected"})
+with _slK() as _d:
+    _afterD = sorted(t.flow_step.position for t in
+                     _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iDid)).all())
+    check("rejecting it drops the step that is no longer coming",
+          3 not in _afterD, _afterD)
+    check("and brings in the one that now is", 4 in _afterD, _afterD)
+    check("the run is on it", _d.get(_FIW, _iDid).current_position == 4)
+
+print("\n== a step finished late pushes the plan along ==")
+# Step 1 due the 17th, finished the 20th: step 2 must not arrive already
+# overdue. Its TAT is counted from when it really opens, and the dates after
+# it move with it.
+_flowL = f"SMOKE late pushes plan {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowL, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["First", "Second", "Third"],
+    "step_doer": [str(i) for i in _fourW[:3]], "step_doers": ["", "", ""],
+    "step_tat_unit": ["days"] * 3, "step_tat": ["1", "1", "1"],
+    "step_priority": ["medium"] * 3, "step_instructions": [""] * 3,
+    "step_howto": [""] * 3, "step_fields": [""] * 3,
+    "step_audit": ["0"] * 3, "step_proof": ["0"] * 3,
+    "step_decision": ["0"] * 3, "step_yes": [""] * 3,
+    "step_next": ["", "", "0"], "step_no": [""] * 3,
+    "step_fail": [""] * 3, "step_due_from": [""] * 3})
+with _slK() as _d:
+    _fLid = _d.scalar(_spK(_FlW).where(_FlW.name == _flowL)).id
+admin.post(f"/flows/{_fLid}/start", data={"reference": f"SMOKE LATE {RUN}"})
+with _slK() as _d:
+    _iL = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fLid)).all()[-1]
+    _iLid = _iL.id
+    _rowsL = sorted(_d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iLid)).all(),
+                    key=lambda t: t.flow_step.position)
+    _plannedS2 = _rowsL[1].due_at
+    _t1L = _rowsL[0]
+    _em1L, _t1Lid = _d.get(_UW, _t1L.doer_id).email, _t1L.id
+    # Pretend step 1 dragged on: its deadline was three days ago.
+    _t1L.due_at = _ckT.now() - _tdF(days=3)
+    _d.commit()
+_c1L = TestClient(app)
+_c1L.post("/login", data={"email": _em1L, "password": "gcs1234"})
+_c1L.post(f"/tasks/{_t1Lid}/submit", data={"completion_note": "late but done"})
+with _slK() as _d:
+    _rowsL2 = sorted(_d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iLid)).all(),
+                     key=lambda t: t.flow_step.position)
+    check("step 2 does not arrive already overdue", not _rowsL2[1].is_overdue,
+          str(_rowsL2[1].due_at))
+    check("its deadline is counted from when it really opened",
+          _rowsL2[1].due_at > _ckT.now(), str(_rowsL2[1].due_at))
+    check("and step 3's planned date moved along with it",
+          _rowsL2[2].due_at > _rowsL2[1].due_at)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
