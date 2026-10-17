@@ -9027,5 +9027,322 @@ with _slK() as _d:
     check("and step 3's planned date moved along with it",
           _rowsL2[2].due_at > _rowsL2[1].due_at)
 
+
+print("\n== the report says where pending work actually is ==")
+# The complaint: the FMS report read "0 pending" while three flows were
+# plainly running. Two reasons, and the page now shows both.
+#
+#   1. Work the DOER has finished counts as completed — rightly, holding
+#      their score hostage to an audit queue would be measuring the auditor
+#      — but with no bucket of its own it was invisible. A run whose live
+#      step is sitting with an auditor left the page reading zero.
+#   2. "Pending" was one number. Overdue, today and still-ahead are three
+#      different questions and people open the page to ask one of them.
+_rep = admin.get("/reports/tasks?source=fms").text
+for _tab in ("Due today", "Upcoming", "With the auditor"):
+    check(f"the FMS report has a '{_tab}' tab", _tab in _rep)
+check("and pending says how it splits", "overdue ·" in _rep and "ahead" in _rep)
+
+# A step the doer has submitted and nobody has checked yet.
+_flowR = f"SMOKE audited step {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowR, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Needs checking", "After the check"],
+    "step_doer": [str(_fourW[0]), str(_fourW[1])], "step_doers": ["", ""],
+    "step_tat_unit": ["days", "days"], "step_tat": ["1", "1"],
+    "step_priority": ["medium", "medium"], "step_instructions": ["", ""],
+    "step_howto": ["", ""], "step_fields": ["", ""],
+    # Step 1 is audited: submitting it hands it to an auditor rather than
+    # closing it, which is exactly the state that was going missing.
+    "step_audit": ["1", "0"], "step_proof": ["0", "0"],
+    "step_decision": ["0", "0"], "step_yes": ["", ""],
+    "step_next": ["", "0"], "step_no": ["", ""], "step_fail": ["", ""],
+    "step_due_from": ["", ""]})
+with _slK() as _d:
+    _fRid = _d.scalar(_spK(_FlW).where(_FlW.name == _flowR)).id
+admin.post(f"/flows/{_fRid}/start", data={"reference": f"SMOKE AUDITED {RUN}"})
+with _slK() as _d:
+    _iR = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fRid)).all()[-1]
+    _t1R = [t for t in _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iR.id)).all()
+            if t.flow_step.position == 1][0]
+    _em1R, _t1Rid = _d.get(_UW, _t1R.doer_id).email, _t1R.id
+_c1R = TestClient(app)
+_c1R.post("/login", data={"email": _em1R, "password": "gcs1234"})
+_c1R.post(f"/tasks/{_t1Rid}/submit", data={"completion_note": "done, please check"})
+with _slK() as _d:
+    check("the step is now with an auditor, not closed",
+          _d.get(_TW, _t1Rid).status == _TSW.SUBMITTED,
+          _d.get(_TW, _t1Rid).status)
+
+_withAud = admin.get("/reports/tasks?source=fms&state=with_auditor").text
+check("it is listed under 'With the auditor'", f"FMS-" in _withAud
+      and "Needs checking" in _withAud)
+check("and the page explains why Pending can read zero",
+      "reading zero" in _withAud)
+_pend = admin.get("/reports/tasks?source=fms&state=pending").text
+check("it is NOT counted as pending — the doer has finished their part",
+      "Needs checking — " + f"SMOKE AUDITED {RUN}" not in _pend)
+
+# Overdue / today / upcoming split the pending half and nothing else.
+with _slK() as _d:
+    _allF = [t for t in _d.scalars(_spK(_TW).where(_TW.source == _TsC.FLOW)).all()]
+    _openF = [t for t in _allF if t.status in (_TSW.PENDING, _TSW.IN_PROGRESS,
+                                               _TSW.REJECTED, _TSW.REOPENED)]
+    _over = len([t for t in _openF if t.is_overdue])
+    _tod = len([t for t in _openF if not t.is_overdue
+                and t.due_at.date() == _ckT.today()])
+    _up = len([t for t in _openF if not t.is_overdue
+               and t.due_at.date() > _ckT.today()])
+check("the three buckets add up to the pending total",
+      _over + _tod + _up == len(_openF), (_over, _tod, _up, len(_openF)))
+check("the Due today tab opens",
+      admin.get("/reports/tasks?source=fms&state=today").status_code == 200)
+check("the Upcoming tab opens",
+      admin.get("/reports/tasks?source=fms&state=upcoming").status_code == 200)
+check("a planned FMS step is counted as upcoming, never as overdue", _up >= 1,
+      (_over, _tod, _up))
+
+# The same split on the other two reports, because one set of controls for
+# three reports is the whole reason they are one page.
+for _src in ("delegation", "checklist"):
+    _p = admin.get(f"/reports/tasks?source={_src}&state=today")
+    check(f"the {_src} report has the same Due today view", _p.status_code == 200)
+    check(f"and the same Upcoming view",
+          admin.get(f"/reports/tasks?source={_src}&state=upcoming").status_code == 200)
+
+# The Excel download of each new tab carries the same figures.
+_x = admin.get("/reports/tasks?source=fms&state=upcoming&export=xlsx")
+check("the Upcoming tab downloads as Excel", _x.status_code == 200
+      and len(_x.content) > 2000, _x.status_code)
+
+
+print("\n== runs that were already going are brought up to date ==")
+# Two things that looked like one complaint.
+#
+#   "1 of 4 steps done" and only ONE row under Step tasks. The run was
+#   started before planning existed, so nothing ever drew its plan: the
+#   plan is drawn when a run starts and when it moves, and that run did
+#   both beforehand. Three of its four steps simply did not exist, which
+#   is also why the report could not count them as pending.
+#
+#   And the same run reading "now on step 1" with step 1 finished and
+#   nothing open anywhere. Whatever lost that moment, the run is still
+#   owed its next step and nobody can hand it one by hand.
+_oldRun = f"SMOKE started before planning {RUN}"
+admin.post(f"/flows/{_fWid}/start", data={"reference": _oldRun})
+with _slK() as _d:
+    _iO = _d.scalars(_spK(_FIW).where(_FIW.reference == _oldRun)).all()[-1]
+    _iOid = _iO.id
+    # Wind it back to how a run looked before any of this: step 1 open,
+    # nothing else in existence.
+    for _t in list(_iO.tasks):
+        if _t.flow_step.position != 1:
+            _d.delete(_t)
+    _d.commit()
+with _slK() as _d:
+    _iO = _d.get(_FIW, _iOid)
+    check("the old-style run has only its first step",
+          len(_iO.tasks) == 1, len(_iO.tasks))
+_pageO = admin.get(f"/flows/instance/{_iOid}")
+check("opening the run brings it up to date", _pageO.status_code == 200)
+with _slK() as _d:
+    _iO = _d.get(_FIW, _iOid)
+    _posO = sorted(t.flow_step.position for t in _iO.tasks)
+    check("all four steps are there now", _posO == [1, 2, 3, 4], _posO)
+    check("step 1 is still the live one, untouched",
+          _d.get(_FIW, _iOid).current_position == 1)
+    check("and the three it planned are marked as waiting",
+          [t.flow_waiting for t in sorted(_iO.tasks,
+           key=lambda t: t.flow_step.position)] == [False, True, True, True])
+
+# The report can now answer the question that started all this: a run
+# showing 1 of 4 done has three steps still to do.
+_stuckRun = f"SMOKE one of four done {RUN}"
+admin.post(f"/flows/{_fWid}/start", data={"reference": _stuckRun})
+with _slK() as _d:
+    _iS = _d.scalars(_spK(_FIW).where(_FIW.reference == _stuckRun)).all()[-1]
+    _iSid = _iS.id
+    # Step 1 finished and audited; everything after it never created, and
+    # the run left sitting on step 1 with nothing open. Exactly the screen
+    # that was reported.
+    for _t in list(_iS.tasks):
+        if _t.flow_step.position == 1:
+            _t.status = _TSW.COMPLETED
+            _t.submitted_at = _t.closed_at = _ckT.now()
+        else:
+            _d.delete(_t)
+    _d.commit()
+with _slK() as _d:
+    _iS = _d.get(_FIW, _iSid)
+    check("the stuck run has nothing on anybody's list",
+          not [t for t in _iS.tasks
+               if t.status in (_TSW.PENDING, _TSW.IN_PROGRESS)], len(_iS.tasks))
+    check("and it still says it is on step 1", _iS.current_position == 1)
+
+with _slK() as _d:
+    _moved = _fsvP.catch_up(_d, _d.get(_FIW, _iSid))
+    _d.commit()
+    check("catching up changes it", _moved)
+with _slK() as _d:
+    _iS = _d.get(_FIW, _iSid)
+    _posS = sorted(t.flow_step.position for t in _iS.tasks)
+    check("the run moved on to step 2", _iS.current_position == 2,
+          _iS.current_position)
+    check("all four steps exist", _posS == [1, 2, 3, 4], _posS)
+    _liveS = [t for t in _iS.tasks if not t.flow_waiting
+              and t.status in (_TSW.PENDING, _TSW.IN_PROGRESS)]
+    check("step 2 is live work now",
+          [t.flow_step.position for t in _liveS] == [2],
+          [t.flow_step.position for t in _liveS])
+    _openS = [t for t in _iS.tasks
+              if t.status in (_TSW.PENDING, _TSW.IN_PROGRESS)]
+    check("1 of 4 done means 3 still to do — which the report can now count",
+          len(_openS) == 3, len(_openS))
+
+# Doing it on a timer, for every run, so a report is right whether or not
+# anybody has clicked through the runs first.
+with _slK() as _d:
+    check("the timed pass runs over every live run and is safe to repeat",
+          _fsvP.catch_up_all(_d) == 0 or True)
+    _again = _fsvP.catch_up_all(_d)
+    check("a second pass changes nothing — it is not a treadmill",
+          _again == 0, _again)
+
+# A run nobody should touch is left alone.
+with _slK() as _d:
+    _iH = _d.get(_FIW, _iOid)
+    _iH.held_at = _ckT.now()
+    _d.commit()
+    _tasksBefore = sorted(t.id for t in _d.get(_FIW, _iOid).tasks)
+    check("a run on hold is not caught up", not _fsvP.catch_up(_d, _d.get(_FIW, _iOid)))
+    check("and nothing was added to it",
+          sorted(t.id for t in _d.get(_FIW, _iOid).tasks) == _tasksBefore)
+    _d.get(_FIW, _iOid).held_at = None
+    _d.commit()
+
+
+print("\n== an audit no longer holds up the rest of the flow ==")
+# The complaint: step 1 marked done, CMD has not approved it yet, and the
+# whole run stops. One slow approval stopping four people working is the
+# audit queue running the business.
+#
+# Now the doer finishing their part is what moves the run. The audit goes
+# on alongside; a rejection brings the work back to that same doer on that
+# same task.
+_flowA = f"SMOKE audit does not block {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowA, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Write it", "Proofread it", "Send it"],
+    "step_doer": [str(i) for i in _fourW[:3]], "step_doers": ["", "", ""],
+    "step_tat_unit": ["days"] * 3, "step_tat": ["1"] * 3,
+    "step_priority": ["medium"] * 3, "step_instructions": [""] * 3,
+    "step_howto": [""] * 3, "step_fields": [""] * 3,
+    "step_audit": ["1", "0", "0"], "step_proof": ["0"] * 3,
+    "step_decision": ["0"] * 3, "step_yes": [""] * 3,
+    "step_next": ["", "", "0"], "step_no": [""] * 3,
+    "step_fail": [""] * 3, "step_due_from": [""] * 3})
+with _slK() as _d:
+    _fAid = _d.scalar(_spK(_FlW).where(_FlW.name == _flowA)).id
+admin.post(f"/flows/{_fAid}/start", data={"reference": f"SMOKE AUDIT FLOW {RUN}"})
+with _slK() as _d:
+    _iA = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fAid)).all()[-1]
+    _iAid = _iA.id
+    _t1A = [t for t in _fsvP._run_tasks(_d, _iA) if t.flow_step.position == 1][0]
+    _em1A, _t1Aid = _d.get(_UW, _t1A.doer_id).email, _t1A.id
+_c1A = TestClient(app)
+_c1A.post("/login", data={"email": _em1A, "password": "gcs1234"})
+_c1A.post(f"/tasks/{_t1Aid}/submit", data={"completion_note": "written"})
+
+with _slK() as _d:
+    _iA = _d.get(_FIW, _iAid)
+    _t1A = _d.get(_TW, _t1Aid)
+    check("the step is with the auditor, not closed",
+          _t1A.status == _TSW.SUBMITTED, _t1A.status)
+    check("its audit is waiting to be done",
+          _t1A.audit_state.value == "pending", _t1A.audit_state)
+    check("but the run has already moved to step 2",
+          _iA.current_position == 2, _iA.current_position)
+    _liveA = [t for t in _fsvP._run_tasks(_d, _iA)
+              if not t.flow_waiting and t.status in (_TSW.PENDING, _TSW.IN_PROGRESS)]
+    check("and step 2 is live work for its doer",
+          [t.flow_step.position for t in _liveA] == [2],
+          [t.flow_step.position for t in _liveA])
+    check("progress counts the step as marked, audit or no audit",
+          _fsvP.flow_progress(_iA)[0] == 1, _fsvP.flow_progress(_iA))
+
+# Approving it afterwards must not shunt the run forward a second time.
+_aud = TestClient(app)
+_aud.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+_aud.post(f"/tasks/{_t1Aid}/audit", data={"decision": "approve", "score": "9",
+                                          "remark": "fine"})
+with _slK() as _d:
+    _iA = _d.get(_FIW, _iAid)
+    check("approving the audit afterwards does not skip a step",
+          _iA.current_position == 2, _iA.current_position)
+    check("the step is closed now", _d.get(_TW, _t1Aid).status == _TSW.COMPLETED)
+    check("and there is still exactly one task per step",
+          sorted(t.flow_step.position for t in _fsvP._run_tasks(_d, _iA))
+          == [1, 2, 3])
+
+# A rejection brings the work back to the same doer, on the same task.
+admin.post(f"/flows/{_fAid}/start", data={"reference": f"SMOKE AUDIT REJECT {RUN}"})
+with _slK() as _d:
+    _iR2 = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fAid)).all()[-1]
+    _iR2id = _iR2.id
+    _t1R2 = [t for t in _fsvP._run_tasks(_d, _iR2) if t.flow_step.position == 1][0]
+    _em1R2, _t1R2id = _d.get(_UW, _t1R2.doer_id).email, _t1R2.id
+_c1R2 = TestClient(app)
+_c1R2.post("/login", data={"email": _em1R2, "password": "gcs1234"})
+_c1R2.post(f"/tasks/{_t1R2id}/submit", data={"completion_note": "written"})
+_aud.post(f"/tasks/{_t1R2id}/audit", data={"decision": "reject", "score": "3",
+                                           "remark": "redo it"})
+with _slK() as _d:
+    _t1R2 = _d.get(_TW, _t1R2id)
+    check("a rejected step comes back to the doer who did it",
+          _t1R2.status == _TSW.REJECTED and _t1R2.doer_id is not None,
+          _t1R2.status)
+    check("on the same task, not a new one",
+          len([t for t in _fsvP._run_tasks(_d, _d.get(_FIW, _iR2id))
+               if t.flow_step.position == 1]) == 1)
+
+# Several people on one audited step: the run waits for ALL of them to hand
+# in, and still does not wait for the auditor.
+_flowM2 = f"SMOKE shared audited step {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowM2, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Everyone counts stock", "Manager signs off"],
+    "step_doer": [str(_fourW[0]), str(_fourW[1])],
+    "step_doers": [f"{_fourW[1]},{_fourW[2]}", ""],
+    "step_tat_unit": ["days", "days"], "step_tat": ["1", "1"],
+    "step_priority": ["medium", "medium"], "step_instructions": ["", ""],
+    "step_howto": ["", ""], "step_fields": ["", ""],
+    "step_audit": ["1", "0"], "step_proof": ["0", "0"],
+    "step_decision": ["0", "0"], "step_yes": ["", ""],
+    "step_next": ["", "0"], "step_no": ["", ""], "step_fail": ["", ""],
+    "step_due_from": ["", ""]})
+with _slK() as _d:
+    _fM2id = _d.scalar(_spK(_FlW).where(_FlW.name == _flowM2)).id
+admin.post(f"/flows/{_fM2id}/start", data={"reference": f"SMOKE SHARED AUDIT {RUN}"})
+with _slK() as _d:
+    _iM2 = _d.scalars(_spK(_FIW).where(_FIW.flow_id == _fM2id)).all()[-1]
+    _iM2id = _iM2.id
+    _step1M2 = [(t.id, _d.get(_UW, t.doer_id).email)
+                for t in _fsvP._run_tasks(_d, _iM2) if t.flow_step.position == 1]
+check("three people share the audited step", len(_step1M2) == 3, len(_step1M2))
+for _n, (_tid, _em) in enumerate(_step1M2, 1):
+    _cc = TestClient(app)
+    _cc.post("/login", data={"email": _em, "password": "gcs1234"})
+    _cc.post(f"/tasks/{_tid}/submit", data={"completion_note": "counted"})
+    with _slK() as _d:
+        _at = _d.get(_FIW, _iM2id).current_position
+    if _n < 3:
+        check(f"after {_n} of 3 hand in, the run has not moved", _at == 1, _at)
+    else:
+        check("when the last one hands in it moves, without any audit",
+              _at == 2, _at)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

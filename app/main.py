@@ -25,6 +25,7 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       cmd as cmd_router)
 from .services import recurring
 from .services import detective
+from .services import flows as flow_svc
 from .templating import templates
 from . import lastview
 
@@ -144,6 +145,16 @@ async def _daily_spawn():
             looked = await asyncio.to_thread(detective.top_up)
             if looked:
                 print(f"Task Detective: checked {looked} task(s)")
+
+            # Every FMS run that is still going: give it a plan if it
+            # started before plans existed, and unstick it if its last step
+            # closed and nothing opened after it. On a timer rather than
+            # when somebody opens the run, because a report nobody can
+            # trust until somebody has clicked through every run is not a
+            # report.
+            caught = await asyncio.to_thread(_catch_up_runs)
+            if caught:
+                print(f"FMS: brought {caught} run(s) up to date")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -155,6 +166,11 @@ async def _daily_spawn():
 def _spawn_once() -> int:
     with SessionLocal() as db:
         return recurring.run_spawn(db)
+
+
+def _catch_up_runs() -> int:
+    with SessionLocal() as db:
+        return flow_svc.catch_up_all(db)
 
 
 @asynccontextmanager

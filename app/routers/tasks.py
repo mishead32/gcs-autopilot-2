@@ -987,6 +987,14 @@ async def submit_task(task_id: int, request: Request,
         task.status = TaskStatus.SUBMITTED
         task.audit_state = AuditState.PENDING
         db.commit()
+        # And the flow moves on, WITHOUT waiting for the audit. The doer has
+        # finished their part; whether anybody has checked it yet is a
+        # question about the auditor, and a flow that waits on an audit
+        # queue is a flow where one slow approval stops four people working.
+        # The audit carries on alongside, and if it ends in a rejection the
+        # work comes back to this doer on this same task.
+        if task.flow_instance_id:
+            flow_svc.advance_flow(db, task)
     else:
         task.status = TaskStatus.COMPLETED
         task.closed_at = task.submitted_at

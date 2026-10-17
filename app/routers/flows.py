@@ -748,6 +748,12 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
     inst = db.get(FlowInstance, instance_id)
     if not inst or inst.org_id != user.org_id:
         raise HTTPException(404, "Not found")
+    # Opening a run is the moment somebody is asking what it is doing, so it
+    # is a fair moment to make sure the answer is true: a run started before
+    # the plan existed gets one now, and one that got stuck is unstuck. It
+    # does nothing at all to a run that is already right.
+    if flow_svc.catch_up(db, inst):
+        db.commit()
     tasks = db.scalars(
         select(Task).where(Task.flow_instance_id == inst.id).order_by(Task.created_at)
     ).all()

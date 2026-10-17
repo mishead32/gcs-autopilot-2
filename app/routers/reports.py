@@ -344,8 +344,9 @@ def task_report(request: Request, source: str = "delegation",
     f = build_filters(db, user, "/reports/tasks", date_from, date_to, branch,
                       doer, priority, state, hidden={"source": source},
                       q=q, basis=basis)
-    if f.state not in ("pending", "completed", "overdue", "audit_pending",
-                       "audit_done", "false", "all"):
+    if f.state not in ("pending", "completed", "overdue", "today", "upcoming",
+                       "with_auditor", "audit_pending", "audit_done", "false",
+                       "all"):
         f.state = "pending"
 
     base = _apply_common(_scoped(user, select(Task)).where(Task.source == src), f)
@@ -362,7 +363,21 @@ def task_report(request: Request, source: str = "delegation",
         _between(base.where(Task.status.in_(FINISHED_STATES)), col, f)).all())
 
     now = clock.now()
-    overdue = [t for t in pending if t.due_at < now]
+    today = clock.today()
+    # Pending work, split the way anybody actually reads a list of it: what
+    # is already late, what is for today, and what is still ahead. One
+    # number for all three says how much there is and nothing about whether
+    # anybody is behind.
+    #
+    # is_overdue rather than a bare date comparison, so this is the same
+    # rule that turns a row red everywhere else — and so an FMS step whose
+    # turn has not come round is never called late for a date that is only
+    # a plan.
+    overdue = [t for t in pending if t.is_overdue]
+    due_today = [t for t in pending if not t.is_overdue
+                 and t.due_at.date() == today]
+    upcoming = [t for t in pending if not t.is_overdue
+                and t.due_at.date() > today]
     on_time = [t for t in completed if t.was_on_time]
 
     # The audit picture, over everything in the window rather than only the
@@ -372,9 +387,18 @@ def task_report(request: Request, source: str = "delegation",
     audit_pending = [t for t in everything if t.audit_state == AuditState.PENDING]
     audit_done = [t for t in everything if t.audit_state == AuditState.COMPLETED]
     false_marks = [t for t in everything if t.false_marked]
+    # Finished by the doer, not yet checked by anybody.
+    #
+    # It counts as completed — the doer did their part, and holding their
+    # score hostage to an audit queue would be measuring the auditor. But
+    # with no bucket of its own it was invisible: three flows plainly mid-
+    # run, and a report saying nothing was pending, because every live step
+    # happened to be sitting with an auditor.
     with_auditor = [t for t in completed if t.status == TaskStatus.SUBMITTED]
 
     rows = {"pending": _sorted(pending), "overdue": _sorted(overdue),
+            "today": _sorted(due_today), "upcoming": _sorted(upcoming),
+            "with_auditor": _sorted(with_auditor, by_close=True),
             "completed": _sorted(completed, by_close=True),
             "audit_pending": _sorted(audit_pending),
             "audit_done": _sorted(audit_done, by_close=True),
@@ -390,6 +414,10 @@ def task_report(request: Request, source: str = "delegation",
         summary = [
             ("Pending", len(pending), f"{_weight(pending)} score weight"),
             ("Overdue", len(overdue), "of the pending tasks"),
+            ("Due today", len(due_today), "of the pending tasks"),
+            ("Upcoming", len(upcoming), "of the pending tasks"),
+            ("With the auditor", len(with_auditor),
+             "finished by the doer, not yet checked"),
             ("Completed", len(completed), f"{_weight(completed)} score weight"),
             ("Completion rate", f"{round(len(completed) / total * 100, 1) if total else 0.0}%",
              f"{round(len(on_time) / len(completed) * 100, 1) if completed else 0.0}% on time"),
@@ -408,7 +436,9 @@ def task_report(request: Request, source: str = "delegation",
     return templates.TemplateResponse(request, "report_tasks.html", {
         "user": user, "f": f, "cfg": cfg, "source": source, "rows": rows,
         "counts": {"pending": len(pending), "completed": len(completed),
-                   "overdue": len(overdue), "all": total,
+                   "overdue": len(overdue), "today": len(due_today),
+                   "upcoming": len(upcoming),
+                   "with_auditor": len(with_auditor), "all": total,
                    "audit_pending": len(audit_pending),
                    "audit_done": len(audit_done),
                    "false": len(false_marks)},

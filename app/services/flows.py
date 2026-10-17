@@ -315,7 +315,19 @@ def _touched(task: Task) -> bool:
                                        TaskStatus.IN_PROGRESS))
 
 
-def replan(db: Session, inst: FlowInstance, assigner: User) -> None:
+def _run_tasks(db: Session, inst: FlowInstance) -> list[Task]:
+    """Every task of this run, read FRESH from the database.
+
+    Not inst.tasks. That collection is loaded once and does not notice rows
+    added later in the same request, so a plan drawn right after a step was
+    opened would not see the step it had just opened — and the check for
+    "did anything change" would answer no and throw the work away.
+    """
+    return list(db.scalars(
+        select(Task).where(Task.flow_instance_id == inst.id)).all())
+
+
+def replan(db: Session, inst: FlowInstance, assigner: User) -> int:
     """Lay out the rest of the run, with a planned date on every step.
 
     Called when the run starts and again whenever it moves, so the plan
@@ -329,33 +341,40 @@ def replan(db: Session, inst: FlowInstance, assigner: User) -> None:
     they are.
     """
     if inst.completed_at or inst.cancelled_at:
-        return
+        return 0
     path = straight_path(inst.flow, inst.current_position)
     if not path:
-        return
+        return 0
     ahead = path[1:]
     keep_ids = {s.id for s in ahead}
+    changed = 0
+    rows = _run_tasks(db, inst)
 
     # Steps that were planned and are not coming after all.
-    for t in list(inst.tasks):
+    for t in rows:
         if t.flow_waiting and t.flow_step_id not in keep_ids and not _touched(t):
             db.delete(t)
+            changed += 1
     db.flush()
+    rows = _run_tasks(db, inst)
 
     # The chain starts from when the step being worked on is due to finish.
-    live = [t for t in inst.tasks
+    live = [t for t in rows
             if t.flow_step_id == path[0].id and t.status in _LIVE_TASK_STATES]
     prev_due = max((t.due_at for t in live), default=clock.now())
 
     for step in ahead:
-        mine = [t for t in inst.tasks
+        mine = [t for t in rows
                 if t.flow_step_id == step.id and t.status in _LIVE_TASK_STATES]
         if mine:
             # Already planned. Re-date whatever is still waiting and
             # untouched, so a late step moves what comes after it.
             for t in mine:
                 if t.flow_waiting and not _touched(t):
-                    t.due_at = _planned_due(db, inst, step, t.doer, prev_due)
+                    fresh = _planned_due(db, inst, step, t.doer, prev_due)
+                    if fresh != t.due_at:
+                        t.due_at = fresh
+                        changed += 1
             prev_due = max(t.due_at for t in mine)
             continue
         people = step_people(db, inst, step)
@@ -370,8 +389,10 @@ def replan(db: Session, inst: FlowInstance, assigner: User) -> None:
         made = [_spawn_step_task(db, inst, step, p, assigner,
                                  waiting=True, opens_at=prev_due)
                 for p in people]
+        changed += len(made)
         prev_due = max(t.due_at for t in made)
     db.flush()
+    return changed
 
 
 def _planned_due(db: Session, inst: FlowInstance, step: FlowStep,
@@ -401,7 +422,7 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
     it early, which they are allowed to do — so the caller can carry on
     past it rather than reopening work that is done.
     """
-    mine = [t for t in inst.tasks if t.flow_step_id == step.id]
+    mine = [t for t in _run_tasks(db, inst) if t.flow_step_id == step.id]
     live = [t for t in mine if t.status in _LIVE_TASK_STATES]
     if not live:
         # Done EARLY means finished while it was still only planned — the
@@ -433,6 +454,108 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
         )
         first = first or t
     return first
+
+
+def catch_up(db: Session, inst: FlowInstance) -> bool:
+    """Make one run tell the truth: unstick it, then plan the rest of it.
+
+    Two things this fixes, both visible on the same screen.
+
+    A run that was ALREADY GOING when planning arrived has no plan — the
+    plan is drawn when a run starts and whenever it moves, and that run did
+    both before any of this existed. So a four-step flow with one step done
+    showed one row, and a report asking how much FMS work was outstanding
+    answered nothing, because three of its four steps did not exist yet.
+
+    And a run can be stuck: its current step finished, nothing opened after
+    it, and the run sat there reading "1 of 4 done · now on step 1" with
+    not one task on anybody's list. Whatever lost that moment — an audit
+    approved while the server was restarting, an error halfway through —
+    the run is still owed its next step, and nobody can give it one by
+    hand.
+
+    Returns True when something was actually changed, so a caller can skip
+    a pointless commit.
+    """
+    if inst.completed_at or inst.cancelled_at or inst.held_at:
+        return False
+    steps = sorted(inst.flow.steps, key=lambda s: s.position)
+    if not steps:
+        return False
+    assigner = inst.started_by
+    moved = False
+
+    guard = 0
+    while guard < MAX_PLANNED_STEPS:
+        guard += 1
+        step = next((s for s in steps if s.position == inst.current_position), None)
+        if step is None:
+            # The step it was sitting on has since been deleted from the
+            # flow. Ending the run is honest; silently sliding it somewhere
+            # else would hide that the flow was changed underneath it.
+            inst.completed_at = clock.now()
+            moved = True
+            break
+
+        mine = [t for t in _run_tasks(db, inst) if t.flow_step_id == step.id]
+        if [t for t in mine if t.status in _WITH_DOER]:
+            break                       # somebody has it; the run is fine
+
+        if not mine:
+            # Never opened at all. Open it — this is the live step.
+            _open_step(db, inst, step, assigner, assigner)
+            db.flush()
+            moved = True
+            break
+
+        # Every task for this step is closed, and nothing came after it.
+        # Follow where the step says to go, exactly as finishing it would.
+        closed = sorted(mine, key=lambda t: (t.closed_at or t.submitted_at
+                                             or t.due_at))
+        target = step.route(closed[-1].decision or "pass")
+        if target is None:
+            nxt = next((s for s in steps if s.position > step.position), None)
+        elif target == 0:
+            nxt = None
+        else:
+            nxt = next((s for s in steps if s.position == target), None)
+        if nxt is None:
+            inst.completed_at = clock.now()
+            moved = True
+            break
+        inst.current_position = nxt.position
+        moved = True
+
+    changed = replan(db, inst, assigner)
+    db.flush()
+    return moved or changed > 0
+
+
+def catch_up_all(db: Session, limit: int = 200) -> int:
+    """Every run that is still going. Returns how many were changed.
+
+    Runs on a timer rather than when somebody opens a page, so the reports
+    are right whether or not anybody has been looking at the runs — which
+    is the whole point of a report.
+    """
+    live = db.scalars(
+        select(FlowInstance)
+        .where(FlowInstance.completed_at.is_(None),
+               FlowInstance.cancelled_at.is_(None),
+               FlowInstance.held_at.is_(None))
+        .order_by(FlowInstance.id).limit(limit)
+    ).all()
+    changed = 0
+    for inst in live:
+        try:
+            if catch_up(db, inst):
+                changed += 1
+        except Exception as exc:                       # one bad run, not all
+            db.rollback()
+            print(f"Could not catch up run {inst.id}: {exc!r}")
+    if changed:
+        db.commit()
+    return changed
 
 
 def start_flow(db: Session, flow: Flow, reference: str, starter: User,
@@ -501,9 +624,10 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
 def _siblings_open(db: Session, task: Task) -> bool:
     """Is anybody else still working on this same step of this same run?
 
-    Only tasks that are still live count. An earlier pass of a rework loop
-    has already been closed, so a step that comes round twice is not held
-    up by its own history.
+    Still with the DOER, not merely unclosed: somebody who has handed their
+    part in has finished it, and the run should not wait on an auditor to
+    say so. An earlier pass of a rework loop has already been closed, so a
+    step that comes round twice is not held up by its own history.
     """
     if not task.flow_step_id:
         return False
@@ -511,7 +635,7 @@ def _siblings_open(db: Session, task: Task) -> bool:
         Task.flow_instance_id == task.flow_instance_id,
         Task.flow_step_id == task.flow_step_id,
         Task.id != task.id,
-        Task.status.in_(_LIVE_TASK_STATES))))
+        Task.status.in_(_WITH_DOER))))
 
 
 # A rework loop that never converges would spawn tasks forever. Nobody legs
@@ -610,7 +734,8 @@ def advance_flow(db: Session, task: Task) -> Task | None:
         new_task = _activate(db, inst, nxt, task.doer, task.assigner)
         if new_task is not None:
             break
-        done_early = [t for t in inst.tasks if t.flow_step_id == nxt.id]
+        done_early = [t for t in _run_tasks(db, inst)
+                      if t.flow_step_id == nxt.id]
         target = nxt.route((done_early[-1].decision if done_early else None)
                            or "pass")
         if target is None:
@@ -644,7 +769,8 @@ def flow_progress(inst: FlowInstance) -> tuple[int, int]:
     total = len(inst.flow.steps)
     if inst.completed_at:
         return total, total
-    done = sum(1 for t in inst.tasks if t.status == TaskStatus.COMPLETED)
+    done = sum(1 for t in inst.tasks
+               if t.status in (TaskStatus.COMPLETED, TaskStatus.SUBMITTED))
     return min(done, total), total
 
 
@@ -655,6 +781,16 @@ def flow_progress(inst: FlowInstance) -> tuple[int, int]:
 _LIVE_TASK_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
                      TaskStatus.SUBMITTED, TaskStatus.REJECTED,
                      TaskStatus.REOPENED)
+
+# Still with the DOER — not yet handed in. Deliberately narrower than the
+# list above, which also counts work sitting with an auditor.
+#
+# The difference is what decides when a run moves. A step is finished when
+# the people doing it have finished it; whether anybody has checked it yet
+# is a question about the auditor, and a flow that waits on an audit queue
+# is a flow where one slow approval stops four people working.
+_WITH_DOER = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
+              TaskStatus.REJECTED, TaskStatus.REOPENED)
 
 
 def _open_tasks(db: Session, inst: FlowInstance) -> list[Task]:

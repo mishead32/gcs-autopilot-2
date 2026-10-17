@@ -29,14 +29,41 @@
 
 <div class="grid g3">
   <div class="kpi warn"><div class="n">{{ counts.pending }}</div>
-    <div class="l">Pending</div><div class="m">{{ weights.pending }} score weight</div></div>
+    <div class="l">Pending</div>
+    <div class="m">{{ counts.overdue }} overdue · {{ counts.today }} today ·
+      {{ counts.upcoming }} ahead</div></div>
   <div class="kpi bad"><div class="n">{{ counts.overdue }}</div>
-    <div class="l">Overdue</div><div class="m">of the pending tasks</div></div>
+    <div class="l">Overdue</div><div class="m">the date has gone and the doer still has it</div></div>
   <div class="kpi ok"><div class="n">{{ counts.completed }}</div>
     <div class="l">Completed</div><div class="m">{{ weights.completed }} score weight</div></div>
   <div class="kpi total"><div class="n">{{ rate }}%</div>
     <div class="l">Completion rate</div>
     <div class="m">{{ on_time_rate }}% of those were on time</div></div>
+</div>
+
+{# Pending, split the way anybody actually reads it. One number for all
+   three says how much there is and nothing about whether anybody is
+   behind — which is the question people open this page to ask.
+
+   "With the auditor" sits here rather than only under Audit because of
+   what it explains: work the doer has finished counts as completed, so a
+   flow plainly mid-run can leave this page reading nothing pending, with
+   every live step sitting in an audit queue. #}
+<div class="grid g3" style="margin-top:14px">
+  <div class="kpi bad"><div class="n">{{ counts.overdue }}</div>
+    <div class="l">Overdue</div>
+    <div class="m"><a href="{{ f.url(state='overdue') }}">see them</a></div></div>
+  <div class="kpi warn"><div class="n">{{ counts.today }}</div>
+    <div class="l">Due today</div>
+    <div class="m"><a href="{{ f.url(state='today') }}">see them</a></div></div>
+  <div class="kpi"><div class="n">{{ counts.upcoming }}</div>
+    <div class="l">Upcoming</div>
+    <div class="m">planned for a later day ·
+      <a href="{{ f.url(state='upcoming') }}">see them</a></div></div>
+  <div class="kpi"><div class="n">{{ counts.with_auditor }}</div>
+    <div class="l">With the auditor</div>
+    <div class="m">finished by the doer, not yet checked ·
+      <a href="{{ f.url(state='with_auditor') }}">see them</a></div></div>
 </div>
 
 {# The audit side of the same window. Kept apart from the four figures above
@@ -56,6 +83,8 @@
 
 <div class="tabs" style="margin-top:18px">
   {% for k, label in [('pending', 'Pending'), ('overdue', 'Overdue'),
+                      ('today', 'Due today'), ('upcoming', 'Upcoming'),
+                      ('with_auditor', 'With the auditor'),
                       ('completed', 'Completed'), ('audit_pending', 'Audit pending'),
                       ('audit_done', 'Audit completed'), ('false', 'False marking'),
                       ('all', 'Both')] %}
@@ -65,6 +94,8 @@
 </div>
 
 {% set state_titles = {'pending': 'Pending', 'overdue': 'Overdue',
+                       'today': 'Due today', 'upcoming': 'Upcoming',
+                       'with_auditor': 'With the auditor',
                        'completed': 'Completed', 'audit_pending': 'Audit pending',
                        'audit_done': 'Audit completed', 'false': 'False marking',
                        'all': 'Pending and completed'} %}
@@ -72,6 +103,19 @@
 {% if f.state == 'completed' %}
 <p class="sub" style="margin-top:-8px">Finished by the doer, including work
   still with an auditor. It scores once the audit closes.</p>
+{% elif f.state == 'with_auditor' %}
+<p class="sub" style="margin-top:-8px">The doer has finished these and they
+  are waiting to be checked. They count as completed — the doer did their
+  part — which is why a flow that is plainly mid-run can leave
+  <strong>Pending</strong> reading zero: its live step is sitting here.</p>
+{% elif f.state == 'upcoming' %}
+<p class="sub" style="margin-top:-8px">Planned for a later day. For FMS this
+  includes the steps of a run whose turn has not come round yet — every step
+  is laid out when the start form is submitted, so the whole run is visible
+  from day one.</p>
+{% elif f.state == 'today' %}
+<p class="sub" style="margin-top:-8px">Due today and still with the doer.
+  Nothing here is late yet.</p>
 {% endif %}
 {{ task_table(rows) }}
 {% endblock %}
