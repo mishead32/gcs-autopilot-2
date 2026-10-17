@@ -8529,5 +8529,242 @@ check("the spans and the calendar rules are all still on offer",
           ("hours", "days", "weeks", "months", "minutes", "monthday",
            "weekday", "fortnight")))
 
+
+print("\n== one flow for every company: a step can name a position, not a person ==")
+# The question it answers: every company has its own accountant, so does the
+# same FMS have to be built five times with five different names on it? No —
+# the step says "Accounts" and the run finds whoever that is at whichever
+# company the run is for. Five copies of a flow drift: a change made once
+# has to be made five times, and the day somebody forgets, two companies are
+# quietly running different processes.
+from app.models import (Branch as _BrP, Department as _DpP, Flow as _FlP,
+                        FlowInstance as _FIP, Task as _TP, User as _UP,
+                        Role as _RoP)
+from app.security import hash_password as _hpP
+from app.services import flows as _fsvP
+
+_POS = f"SMOKE Accounts {RUN}"
+with _slK() as _d:
+    _orgP = _d.scalar(_spK(_UP).where(_UP.email == "mis@gcs.local")).org_id
+    _brA, _brB, _brC = _d.scalars(_spK(_BrP).where(_BrP.org_id == _orgP)
+                                  .order_by(_BrP.id)).all()[:3]
+    _aIds = {}
+    # The same position at two companies, held by two different people —
+    # and a third company with nobody in it at all, which is the case that
+    # has to be caught before a run starts rather than three days into one.
+    for _br, _who in ((_brA, "SMOKE Accountant A"), (_brB, "SMOKE Accountant B")):
+        _dp = _DpP(org_id=_orgP, branch_id=_br.id, name=_POS)
+        _d.add(_dp); _d.flush()
+        _u = _UP(org_id=_orgP, name=f"{_who} {RUN}",
+                 email=f"{_who.replace(' ', '.').lower()}.{RUN}@gcs.local",
+                 password_hash=_hpP("gcs1234"), role=_RoP.DOER,
+                 branch_id=_br.id, department_id=_dp.id)
+        _u.set_rights([]); _d.add(_u); _d.flush()
+        _aIds[_br.id] = (_u.id, _u.name)
+    _brAid, _brBid, _brCid = _brA.id, _brB.id, _brC.id
+    _brAname, _brCname = _brA.name, _brC.name
+    _d.commit()
+
+check("the position is offered on the step card, not just people",
+      f'value="dept:{_POS}"' in admin.get("/flows/new").text)
+
+_posFlow = f"SMOKE one flow many companies {RUN}"
+admin.post("/flows/new", data={
+    "name": _posFlow, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""], "sf_options": [""],
+    "step_title": ["Pass the bill"], "step_doer": [f"dept:{_POS}"],
+    "step_doers": [""], "step_tat_unit": ["days"], "step_tat": ["2"],
+    "step_priority": ["medium"], "step_instructions": [""], "step_howto": [""],
+    "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
+    "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+    "step_no": [""], "step_fail": [""], "step_due_from": [""]})
+with _slK() as _d:
+    _pF = _d.scalar(_spK(_FlP).where(_FlP.name == _posFlow))
+    check("the step saved the position", _pF.steps[0].doer_dept == _POS,
+          _pF.steps[0].doer_dept)
+    check("and nobody's name with it", _pF.steps[0].default_doer_id is None)
+    _pFid = _pF.id
+
+# The whole point: ONE flow, two companies, two different people.
+admin.post(f"/flows/{_pFid}/start",
+           data={"reference": f"SMOKE POS A {RUN}", "run_branch": str(_brAid)})
+admin.post(f"/flows/{_pFid}/start",
+           data={"reference": f"SMOKE POS B {RUN}", "run_branch": str(_brBid)})
+with _slK() as _d:
+    _runs = _d.scalars(_spK(_FIP).where(_FIP.flow_id == _pFid)
+                       .order_by(_FIP.id)).all()
+    check("both runs came off the same flow", len(_runs) == 2, len(_runs))
+    _t1 = _d.scalar(_spK(_TP).where(_TP.flow_instance_id == _runs[0].id))
+    _t2 = _d.scalar(_spK(_TP).where(_TP.flow_instance_id == _runs[1].id))
+    check("the first company's run went to that company's person",
+          _t1.doer_id == _aIds[_brAid][0], _t1.doer.name)
+    check("the second company's run went to the other one",
+          _t2.doer_id == _aIds[_brBid][0], _t2.doer.name)
+    check("so one flow served two companies without being copied",
+          _t1.doer_id != _t2.doer_id)
+    check("and each run remembers which company it is for",
+          (_runs[0].branch_id, _runs[1].branch_id) == (_brAid, _brBid))
+
+# A company with nobody in the position: refused at the start, with the fix
+# in the message, rather than discovered by whoever is holding the work.
+_noOne = admin.post(f"/flows/{_pFid}/start",
+                    data={"reference": f"SMOKE POS C {RUN}",
+                          "run_branch": str(_brCid)})
+check("a company with nobody in that position cannot start the run",
+      _noOne.status_code == 400, _noOne.status_code)
+check("and the refusal says which company and which position",
+      _brCname in _noOne.text and _POS in _noOne.text)
+check("not choosing a company at all is refused too",
+      admin.post(f"/flows/{_pFid}/start",
+                 data={"reference": f"SMOKE POS NONE {RUN}",
+                       "run_branch": ""}).status_code == 400)
+
+# A position can be two people at one company, and a decision step may have
+# exactly one — two people could pick two different outcomes.
+check("a decision step cannot be given a position",
+      admin.post("/flows/new", data={
+          "name": f"SMOKE pos decision {RUN}", "description": "", "branch_id": "",
+          "sf_label": [""], "sf_type": ["text"], "sf_required": [""],
+          "sf_options": [""],
+          "step_title": ["Approve"], "step_doer": [f"dept:{_POS}"],
+          "step_doers": [""], "step_tat_unit": ["days"], "step_tat": ["1"],
+          "step_priority": ["medium"], "step_instructions": [""],
+          "step_howto": [""], "step_fields": [""], "step_audit": ["0"],
+          "step_proof": ["0"], "step_decision": ["1"], "step_yes": ["Yes"],
+          "step_next": ["0"], "step_no": ["No"], "step_fail": ["0"],
+          "step_due_from": [""]}).status_code == 400)
+
+# Named extras alongside a position would be silently dropped when the run
+# resolves it, so they are refused rather than ignored.
+with _slK() as _d:
+    _someoneP = [u for u in _d.scalars(_spK(_UP).where(_UP.active.is_(True))).all()
+                 if u.receives_work][0].id
+check("a position plus extra names is refused rather than quietly dropped",
+      admin.post("/flows/new", data={
+          "name": f"SMOKE pos extras {RUN}", "description": "", "branch_id": "",
+          "sf_label": [""], "sf_type": ["text"], "sf_required": [""],
+          "sf_options": [""],
+          "step_title": ["Pass it"], "step_doer": [f"dept:{_POS}"],
+          "step_doers": [str(_someoneP)], "step_tat_unit": ["days"],
+          "step_tat": ["1"], "step_priority": ["medium"],
+          "step_instructions": [""], "step_howto": [""], "step_fields": [""],
+          "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
+          "step_yes": [""], "step_next": ["0"], "step_no": [""],
+          "step_fail": [""], "step_due_from": [""]}).status_code == 400)
+
+# Resolution is by NAME, across companies — not by the department row's id,
+# which would pin the step back to one company.
+with _slK() as _d:
+    _peopleA = _fsvP.dept_people(_d, _orgP, _brAid, _POS)
+    _peopleC = _fsvP.dept_people(_d, _orgP, _brCid, _POS)
+    check("the position resolves at the company that has it",
+          [u.id for u in _peopleA] == [_aIds[_brAid][0]])
+    check("and resolves to nobody at the company that does not",
+          _peopleC == [])
+    check("case and stray spaces do not make it a different position",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brAid, "  " + _POS.upper())]
+          == [_aIds[_brAid][0]])
+    _pFreload = _d.get(_FlP, _pFid)
+    check("the flow page names the position instead of a person",
+          _POS in admin.get(f"/flows/{_pFid}").text)
+
+check("the start form asks which company when a position is in play",
+      'name="run_branch"' in admin.get(f"/flows/{_pFid}").text)
+# Escaped, because "Bodyzone Fitness & Spa" reaches the page as
+# "&amp;" — the page is right, a bare substring check would not be.
+check("and the run page says which company it was for",
+      _brAname.replace("&", "&amp;")
+      in admin.get(f"/flows/instance/{_runs[0].id}").text)
+
+# Editing the flow must offer the position back, still chosen.
+check("editing keeps the position selected",
+      f'value="dept:{_POS}"' in " ".join(admin.get(f"/flows/{_pFid}/edit").text.split()))
+
+
+print("\n== one accountant, two companies ==")
+# The case: Alok does the accounts for Bodyzone AND Spa Kora. He belongs to
+# one of them — that is his desk, his manager, his working days — and covers
+# the other. Without somewhere to say so, the only ways to express it are a
+# second login per company or a copy of every flow per company, and both are
+# worse than a tick on the one record that is true.
+with _slK() as _d:
+    _brD = [b for b in _d.scalars(_spK(_BrP).where(_BrP.org_id == _orgP)
+                                  .order_by(_BrP.id)).all()
+            if b.id not in (_brAid, _brBid, _brCid)][0]
+    _brDid, _brDname = _brD.id, _brD.name
+
+_ALOK = f"SMOKE Alok {RUN}"
+with _slK() as _d:
+    _dpAl = _DpP(org_id=_orgP, branch_id=_brCid, name=_POS)
+    _d.add(_dpAl); _d.flush()
+    _alok = _UP(org_id=_orgP, name=_ALOK, email=f"alok.{RUN}@gcs.local",
+                password_hash=_hpP("gcs1234"), role=_RoP.DOER,
+                branch_id=_brCid, department_id=_dpAl.id)
+    _alok.set_rights([])
+    # He belongs to the third company, and also covers the second (which has
+    # its own accountant) and the fourth (which has nobody).
+    _alok.set_extra_branches([_brBid, _brDid, _brCid])
+    _d.add(_alok); _d.flush()
+    _alokId = _alok.id
+    check("his own company is not stored as one he 'also' covers",
+          _alok.extra_branch_ids == [_brBid, _brDid], _alok.also_branch_ids)
+    check("he is found for every company he covers",
+          _alok.covers(_brBid) and _alok.covers(_brCid) and _alok.covers(_brDid))
+    check("and not for one he does not", not _alok.covers(_brAid))
+    _d.commit()
+
+with _slK() as _d:
+    check("the company he belongs to finds him",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brCid, _POS)] == [_alokId])
+    # The point of the whole feature: a company with nobody of its own in
+    # the position is served by the person who covers it.
+    check("a company with nobody of its own gets the person who covers it",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brDid, _POS)] == [_alokId],
+          [u.name for u in _fsvP.dept_people(_d, _orgP, _brDid, _POS)])
+    # And the day that company hires its own, nobody has to remember to
+    # untick anything: its own person always comes first.
+    check("but a company with its own person in the position keeps that person",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brBid, _POS)]
+          == [_aIds[_brBid][0]],
+          [u.name for u in _fsvP.dept_people(_d, _orgP, _brBid, _POS)])
+    check("and a company he does not cover still has nobody",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brAid, _POS)]
+          == [_aIds[_brAid][0]])
+
+# End to end: the run that was refused for the fourth company now goes
+# through, to him, off the same flow as everybody else's.
+_okNow = admin.post(f"/flows/{_pFid}/start",
+                    data={"reference": f"SMOKE POS COVERED {RUN}",
+                          "run_branch": str(_brDid)})
+check("a run for the company he covers now starts", _okNow.status_code == 200,
+      _okNow.status_code)
+with _slK() as _d:
+    _cRun = _d.scalars(_spK(_FIP).where(_FIP.flow_id == _pFid,
+                                        _FIP.branch_id == _brDid)).all()[-1]
+    _cTask = _d.scalar(_spK(_TP).where(_TP.flow_instance_id == _cRun.id))
+    check("and it went to him", _cTask.doer_id == _alokId, _cTask.doer.name)
+    check("off the very same flow, still not copied", _cRun.flow_id == _pFid)
+
+# The cover is a tick somebody made, not something the software infers.
+with _slK() as _d:
+    _al = _d.get(_UP, _alokId)
+    _al.set_extra_branches([])
+    _d.commit()
+    check("untick it and that company has nobody again",
+          _fsvP.dept_people(_d, _orgP, _brDid, _POS) == [])
+    check("while his own company still finds him",
+          [u.id for u in _fsvP.dept_people(_d, _orgP, _brCid, _POS)] == [_alokId])
+
+# The tick lives on the person's own screen, where somebody would look.
+_uPage = " ".join(admin.get(f"/admin/users/{_alokId}").text.split())
+check("the people screen offers the companies somebody also covers",
+      'name="also_branches"' in _uPage)
+check("and does not offer their own company as one of them",
+      f'name="also_branches" value="{_brCid}"' not in _uPage)
+check("the refusal now mentions ticking an existing person instead",
+      "Also covers" in admin.post(f"/flows/{_pFid}/start",
+                                  data={"reference": f"SMOKE POS GONE {RUN}",
+                                        "run_branch": str(_brDid)}).text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -17,7 +17,9 @@
       <li>
         <div class="t">{{ s.position }}. {{ s.title }}</div>
         <div class="m">
-          {{ s.default_doer.name if s.default_doer else 'Doer picked at run time' }}
+          {% if s.doer_dept %}whoever is in <strong>{{ s.doer_dept }}</strong>
+            at this run's company{% else %}{{ s.default_doer.name if s.default_doer
+            else 'Doer picked at run time' }}{% endif %}
           · TAT {{ s.tat_label }}{% if s.due_from_pos %}, counted from step
           {{ s.due_from_pos }}'s planned date{% else %}, counted from when this
           step opens{% endif %}
@@ -86,6 +88,22 @@
         <div class="m" style="margin-top:4px">
           These are carried through every step of this run.
         </div>
+        {% endif %}
+        {# Which company this run is for. Asked rather than taken from
+           whoever is clicking: most of this work is started at Head Office
+           for a branch, so "the starter's company" would be wrong nearly
+           every time. A flow tied to one company does not ask at all. #}
+        {% if not flow.branch and branches %}
+        <label>Which company is this run for{{ '' if positions else ' (optional)' }}</label>
+        <select name="run_branch" {{ 'required' if positions }}>
+          <option value="">— choose —</option>
+          {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+        </select>
+        {% if positions %}
+        <div class="m" style="margin-top:4px">This flow has steps assigned to
+          a position ({{ positions|unique|join(', ') }}), so it needs to know
+          whose. The step goes to whoever holds it at the company you pick.</div>
+        {% endif %}
         {% endif %}
         <label>First step doer (override)</label>
         <select name="first_doer"><option value="">Use default</option>

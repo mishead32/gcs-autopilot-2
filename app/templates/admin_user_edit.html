@@ -30,6 +30,31 @@
       </div></div>
   </div>
 
+  {# One person, several companies.
+
+     An accountant doing Bodyzone and Spa Kora belongs to one of them —
+     that is their desk and their working days — and covers the other.
+     Without somewhere to say so the only ways to express it are a second
+     login per company or a copy of every flow per company, and both are
+     worse than a tick here.
+
+     Only matters for steps assigned to a POSITION. Named steps are
+     unaffected by any of it. #}
+  {% if branches %}
+  <label style="margin-top:18px">Also covers these companies</label>
+  <div class="m">For flow steps assigned to a <strong>position</strong> rather
+    than a name. Tick a company here and this person is found for its runs
+    too — unless that company has somebody of its own in the same
+    department, who always comes first.</div>
+  <div class="rights" style="margin-top:8px">
+    {% for b in branches %}{% if b.id != target.branch_id %}
+    <label class="inline"><input type="checkbox" name="also_branches"
+      value="{{ b.id }}" {{ 'checked' if b.id in target.extra_branch_ids }}>
+      {{ b.name }}</label>
+    {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+
   <label style="margin-top:18px">Rights</label>
   {% if target.id == user.id %}
     <div class="danger-box" style="margin-top:6px">

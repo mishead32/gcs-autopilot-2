@@ -306,6 +306,15 @@ class User(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    # The other companies this person covers, comma-separated branch ids.
+    #
+    # One accountant often does two or three of the group's companies. They
+    # belong to one of them — that is their desk, their manager, their
+    # working days — but a flow step that asks for "Accounts" has to find
+    # them for runs of the others too. Without this, the only ways to say it
+    # are a second login per company, or a copy of the flow per company, and
+    # both are worse than a list of ids on the one record that is true.
+    also_branch_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     name: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(160), index=True)
@@ -328,6 +337,42 @@ class User(Base):
     org: Mapped[Organization] = relationship(back_populates="users")
     branch: Mapped[Branch | None] = relationship()
     department: Mapped[Department | None] = relationship()
+
+    @property
+    def extra_branch_ids(self) -> list[int]:
+        """The other companies this person covers, without their own."""
+        out = []
+        for raw in (self.also_branch_ids or "").split(","):
+            raw = raw.strip()
+            if raw.isdigit() and int(raw) != self.branch_id and int(raw) not in out:
+                out.append(int(raw))
+        return out
+
+    @property
+    def covers_branch_ids(self) -> list[int]:
+        """Every company this person can be found for, their own one first.
+
+        Order carries meaning: a company's OWN person is the answer wherever
+        they exist, and somebody who merely also covers it is the stand-in.
+        """
+        out = [self.branch_id] if self.branch_id else []
+        return out + self.extra_branch_ids
+
+    def covers(self, branch_id: int | None) -> bool:
+        return branch_id is not None and branch_id in self.covers_branch_ids
+
+    def set_extra_branches(self, ids) -> None:
+        clean = []
+        for raw in ids or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            # Their own company is not an "also" — storing it there would
+            # make them look shared when they are not.
+            if n != self.branch_id and n not in clean:
+                clean.append(n)
+        self.also_branch_ids = ",".join(str(n) for n in clean) or None
 
     @property
     def right_set(self) -> set[str]:
@@ -580,6 +625,20 @@ class FlowStep(Base):
         if self.default_doer_id and self.default_doer_id not in out:
             out.insert(0, self.default_doer_id)
         return out
+    # Who does it, said as a POSITION instead of a name: "Accounts", and
+    # the run finds whoever is in Accounts at the company that run is for.
+    #
+    # This is what stops a flow being copied five times just because five
+    # companies have five different accountants. Copies drift: a change made
+    # once has to be made five times, and the day somebody forgets, two
+    # companies are quietly running different processes.
+    #
+    # Stored as the department's NAME, not its id, for the same reason an
+    # anchor stores a question's label: there is one Accounts row per
+    # company, so an id would pin the step back to one company — exactly
+    # what this exists to avoid.
+    doer_dept: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
     # Turnaround time, as a unit and a number: 30 minutes, 2 days, 1 month.
     # tat_hours is the original column and is kept so older rows and the
     # bulk importer keep working; tat_unit/tat_value are what the engine
@@ -708,6 +767,17 @@ class FlowInstance(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     flow_id: Mapped[int] = mapped_column(ForeignKey("flows.id"))
     reference: Mapped[str] = mapped_column(String(200))   # member name / lead id / invoice no
+    # Which company this particular run is for.
+    #
+    # One flow, every company. A step that says "Accounts" rather than a
+    # name needs to know WHOSE accounts, and the honest place to ask is when
+    # the run is started: the person starting it knows, and taking it from
+    # whoever happens to be clicking would be wrong every time somebody at
+    # Head Office starts a run for a branch — which is most of this work.
+    #
+    # Nullable: every run started before this existed has no answer, and
+    # inventing one for them would be a lie.
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     started_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -733,6 +803,7 @@ class FlowInstance(Base):
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     flow: Mapped[Flow] = relationship()
+    branch: Mapped[Branch | None] = relationship()
     started_by: Mapped[User] = relationship(foreign_keys=[started_by_id])
     held_by: Mapped[User | None] = relationship(foreign_keys=[held_by_id])
     cancelled_by: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_id])

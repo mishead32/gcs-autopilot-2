@@ -156,6 +156,9 @@ async def update_user(user_id: int, request: Request, user: User = Depends(manag
     target.phone = (form.get("phone") or "").strip() or None
     target.branch_id = int(form["branch_id"]) if form.get("branch_id") else None
     target.department_id = int(form["department_id"]) if form.get("department_id") else None
+    # Set AFTER branch_id, because their own company is never stored as an
+    # "also" — the setter needs to know which one that is.
+    target.set_extra_branches(form.getlist("also_branches"))
 
     # never let someone strip their own admin rights and lock themselves out
     if target.id != user.id:

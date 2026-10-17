@@ -9,6 +9,7 @@
   <div>
     <h1>{{ inst.reference }}</h1>
     <p class="sub">
+      {% if inst.branch %}For {{ inst.branch.name }} ·{% endif %}
       Started {{ inst.started_at|dt }} by {{ inst.started_by.name }}
       <span class="chip run_{{ inst.state|replace(' ','_') }}">{{ inst.state }}</span>
       {% if inst.held_days %}<span class="chip">{{ inst.held_days }} day(s) on hold so far</span>{% endif %}

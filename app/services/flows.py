@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..models import (
-    Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus, TaskSource, User
+    Department, Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus,
+    TaskSource, User
 )
 from . import notify, holidays
 
@@ -64,6 +65,72 @@ def _answered_moment(inst: FlowInstance, label: str) -> datetime | None:
             continue
         return when.replace(hour=FIELD_DATE_HOUR) if bare else when
     return None
+
+
+def dept_people(db: Session, org_id: int, branch_id: int | None,
+                dept_name: str | None) -> list[User]:
+    """Everybody holding a position at one company: "Accounts at Spa Kora".
+
+    Matched on the department's NAME rather than its id, because there is a
+    separate Accounts row under every company — matching the id would pin
+    the step to one of them, which is the whole thing this avoids.
+
+    Case and stray spaces are ignored: "accounts " and "Accounts" are the
+    same position to everybody except a database.
+    """
+    if not dept_name or not branch_id:
+        return []
+    want = dept_name.strip().lower()
+    if not want:
+        return []
+    rows = db.scalars(
+        select(User).join(Department, User.department_id == Department.id)
+        .where(User.org_id == org_id, User.active.is_(True),
+               func.lower(func.trim(Department.name)) == want)
+        .order_by(User.name)
+    ).all()
+    # Owners and admins hand work out; nobody hands work to them. An admin
+    # who happens to sit in the Accounts department is not the accountant.
+    rows = [u for u in rows if u.receives_work]
+
+    # Somebody's OWN company beats somebody who merely also covers it.
+    #
+    # One accountant doing Bodyzone and Spa Kora belongs to one of them and
+    # covers the other. The day Spa Kora hires its own, Spa Kora's runs
+    # should go to the new person without anybody having to remember to
+    # take Spa Kora off the first one's record — and Bodyzone's runs should
+    # carry on exactly as before. So the stand-in is used only where the
+    # company has nobody of its own.
+    own = [u for u in rows if u.branch_id == branch_id]
+    if own:
+        return own
+    return [u for u in rows if branch_id in u.extra_branch_ids]
+
+
+def step_people(db: Session, inst: FlowInstance, step: FlowStep) -> list[User]:
+    """Who this step opens for on THIS run — names, or a position resolved."""
+    if step.doer_dept:
+        return dept_people(db, inst.org_id, inst.branch_id, step.doer_dept)
+    people = [db.get(User, i) for i in step.doer_ids]
+    return [p for p in people if p is not None and p.active]
+
+
+def missing_positions(db: Session, flow: Flow, branch_id: int | None) -> list[str]:
+    """Positions this flow needs that the chosen company has nobody in.
+
+    Checked before a run is started rather than when the step comes round,
+    because a step that cannot find its person is found three days later by
+    whoever is holding the work — and by then the run is half done.
+    """
+    gaps = []
+    for step in flow.steps:
+        if not step.doer_dept:
+            continue
+        if dept_people(db, flow.org_id, branch_id, step.doer_dept):
+            continue
+        if step.doer_dept not in gaps:
+            gaps.append(step.doer_dept)
+    return gaps
 
 
 def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep) -> datetime:
@@ -163,7 +230,8 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
 
 def start_flow(db: Session, flow: Flow, reference: str, starter: User,
                doer_overrides: dict[int, int] | None = None,
-               context: dict | None = None) -> FlowInstance:
+               context: dict | None = None,
+               branch_id: int | None = None) -> FlowInstance:
     """doer_overrides maps flow_step.id -> user.id for steps with no default doer."""
     if not flow.steps:
         raise ValueError("This flow has no steps configured.")
@@ -172,6 +240,9 @@ def start_flow(db: Session, flow: Flow, reference: str, starter: User,
         org_id=flow.org_id,
         flow_id=flow.id,
         reference=reference,
+        # A flow tied to one company says so itself; otherwise it is asked
+        # when the run is started.
+        branch_id=branch_id or flow.branch_id,
         started_by_id=starter.id,
         current_position=flow.steps[0].position,
         context=json.dumps(context or {}),
@@ -204,9 +275,12 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
     if override:
         people = [db.get(User, override)]
     else:
-        people = [db.get(User, i) for i in step.doer_ids]
-        people = [p for p in people if p is not None and p.active]
+        people = step_people(db, inst, step)
     if not people:
+        # A step assigned to a position should never get here — the run was
+        # refused at the start if the company had nobody in it. If it does
+        # (somebody left, mid-run), the work still has to go somewhere, and
+        # the person in front of it is a better answer than nowhere.
         people = [fallback]
 
     made = [_spawn_step_task(db, inst, step, p, assigner) for p in people]

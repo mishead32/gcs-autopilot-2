@@ -15,6 +15,8 @@ from . import models as _models      # noqa: F401 — registers every table on B
 ADDITIONS = {
     "users": [
         ("rights", "TEXT DEFAULT ''"),
+        # The other companies somebody covers, on top of their own.
+        ("also_branch_ids", "TEXT"),
         ("bm_delegation", "INTEGER DEFAULT 60"),
         ("bm_checklist", "INTEGER DEFAULT 20"),
         ("bm_fms", "INTEGER DEFAULT 20"),
@@ -61,6 +63,9 @@ ADDITIONS = {
         ("weekly_off", "INTEGER DEFAULT 6"),
     ],
     "flow_instances": [
+        # Which company a run is for. NULL on every run started before this
+        # existed, which is the truth: nobody was asked.
+        ("branch_id", "INTEGER"),
         ("held_at", "DATETIME"),
         ("held_by_id", "INTEGER"),
         ("hold_reason", "TEXT"),
@@ -80,6 +85,8 @@ ADDITIONS = {
         ("due_from_pos", "INTEGER"),
         ("due_from_field", "VARCHAR(160)"),
         ("extra_doer_ids", "TEXT"),
+        # A step assigned to a position rather than a person.
+        ("doer_dept", "VARCHAR(120)"),
         ("how_to", "TEXT"),
         # Left NULL on purpose for flows built before routing existed — the
         # engine reads NULL as "whatever comes next in order", so every

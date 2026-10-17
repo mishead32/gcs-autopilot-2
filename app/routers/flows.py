@@ -8,7 +8,8 @@ import json
 
 from ..db import get_db
 from ..deps import current_user, manager_up, require_right
-from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Priority,
+from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Department,
+                      Priority,
                       Right, FIELD_TYPES, BUILDER_FIELD_TYPES)
 from ..services import flows as flow_svc, xlsx
 from ..templating import templates
@@ -111,7 +112,22 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "field_types": BUILDER_FIELD_TYPES,
+        "dept_names": _position_names(db, user.org_id),
     })
+
+
+def _position_names(db: Session, org_id: int) -> list[str]:
+    """Every position that exists anywhere in the group, once each.
+
+    Departments are stored per company — there is an Accounts row under
+    Spa Kora and another under BIPS — but a step names the POSITION, not one
+    company's copy of it. So the list is the distinct names, and whichever
+    company a run is for supplies the person.
+    """
+    rows = db.scalars(select(Department.name)
+                      .where(Department.org_id == org_id)).all()
+    return sorted({(n or "").strip() for n in rows if (n or "").strip()},
+                  key=str.lower)
 
 
 def _read_steps(form) -> list[dict]:
@@ -163,6 +179,15 @@ def _read_steps(form) -> list[dict]:
         """'field:Bill Date' -> 'Bill Date'. Anything else -> None."""
         raw = (values[i] if i < len(values) else "").strip()
         return raw[6:].strip()[:160] or None if raw.startswith("field:") else None
+
+    def _dept(i) -> str | None:
+        """'dept:Accounts' -> 'Accounts'. A name or a blank -> None."""
+        raw = (doers[i] if i < len(doers) else "").strip()
+        return raw[5:].strip()[:120] or None if raw.startswith("dept:") else None
+
+    def _doer_id(i) -> int | None:
+        raw = (doers[i] if i < len(doers) else "").strip()
+        return int(raw) if raw.isdigit() else None
 
     def _unit(i) -> str:
         raw = tat_units[i] if i < len(tat_units) else ""
@@ -222,7 +247,11 @@ def _read_steps(form) -> list[dict]:
             "position": len(out) + 1,
             "title": title.strip(),
             "instructions": (instr[i] if i < len(instr) else "").strip() or None,
-            "default_doer_id": int(doers[i]) if i < len(doers) and doers[i] else None,
+            "default_doer_id": _doer_id(i),
+            # "Accounts", resolved to a person per company when the run
+            # starts. Mutually exclusive with a name by construction: it is
+            # one dropdown with one value.
+            "doer_dept": _dept(i),
             # Stripped of whoever is already named in "Who does it": the same
             # person on a step twice is one person, and leaving them in both
             # places means changing the primary doer would quietly leave the
@@ -304,13 +333,31 @@ def _check_routes(rows: list[dict]) -> None:
         if r["due_from_pos"] == r["position"]:
             raise HTTPException(
                 400, f"{where} cannot start its clock from itself.")
+        # A position can resolve to more than one person, and a decision
+        # step may have exactly one — two people could pick two different
+        # outcomes and the flow would have to go both ways at once.
+        if r["is_decision"] and r["doer_dept"]:
+            raise HTTPException(
+                400, f"{where} is a decision step, so it has to name one "
+                     f"person rather than a position: “{r['doer_dept']}” "
+                     "could be two people at some companies, and two people "
+                     "could choose two different outcomes.")
+        # Named extras alongside a position would be dropped when the run
+        # resolves the position, so they are refused rather than ignored.
+        if r["doer_dept"] and r.get("extra_doer_ids"):
+            raise HTTPException(
+                400, f"{where} is assigned to “{r['doer_dept']}”, so the "
+                     "names under “Also done by” cannot be used too — the "
+                     "position already decides who gets it. Clear the names, "
+                     "or give the step a person instead of a position.")
         if r["is_decision"] and r["fail_step_pos"] is None:
             raise HTTPException(
                 400, f"{where} is a decision step, so it needs a step number "
                      "for the second outcome too (or 0 to end the flow there).")
 
 
-STEP_COLUMNS = ("title", "instructions", "how_to", "default_doer_id", "tat_hours",
+STEP_COLUMNS = ("title", "instructions", "how_to", "default_doer_id", "doer_dept",
+                "tat_hours",
                 "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
                 "extra_doer_ids",
                 "requires_audit", "requires_attachment", "capture_fields",
@@ -357,8 +404,15 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
     doers = db.scalars(
         select(User).where(User.org_id == user.org_id, User.active.is_(True)).order_by(User.name)
     ).all()
+    branches = db.scalars(
+        select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
+    ).all()
     return templates.TemplateResponse(request, "flow_detail.html", {
         "user": user, "flow": flow, "instances": instances, "doers": doers,
+        "branches": branches,
+        # Which positions this flow names, so the start form can say what
+        # the company it is about to run for will have to have somebody in.
+        "positions": [s.doer_dept for s in flow.steps if s.doer_dept],
         "progress": {i.id: flow_svc.flow_progress(i) for i in instances},
     })
 
@@ -415,6 +469,7 @@ def edit_flow_form(flow_id: int, request: Request,
         "field_types": BUILDER_FIELD_TYPES, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
+        "dept_names": _position_names(db, user.org_id),
         "runs": runs, "live": live,
     })
 
@@ -561,6 +616,36 @@ async def start_flow(flow_id: int, request: Request,
     if first and form.get("first_doer"):
         overrides[first.id] = int(form["first_doer"])
 
+    # Which company this run is for. A flow tied to one company answers for
+    # itself; otherwise it is asked, and any step assigned to a position
+    # rather than a person needs the answer.
+    raw_branch = (form.get("run_branch") or "").strip()
+    run_branch = int(raw_branch) if raw_branch.isdigit() else flow.branch_id
+    if run_branch is not None:
+        picked = db.get(Branch, run_branch)
+        if not picked or picked.org_id != user.org_id:
+            raise HTTPException(400, "That is not one of your companies.")
+    positions = [s.doer_dept for s in flow.steps if s.doer_dept]
+    if positions and run_branch is None:
+        raise HTTPException(
+            400, "This flow has steps assigned to a position rather than a "
+                 "person, so it needs to know which company this run is for. "
+                 "Choose one at the top of the start form.")
+    # Checked now rather than when the step comes round: a step that cannot
+    # find its person is otherwise discovered three days later by whoever is
+    # holding the work, with the run already half done.
+    gaps = flow_svc.missing_positions(db, flow, run_branch)
+    if gaps:
+        company = db.get(Branch, run_branch)
+        raise HTTPException(
+            400, f"{company.name if company else 'That company'} has nobody "
+                 f"in {', '.join(gaps)}. Either add the person under "
+                 f"Setup → Users with that company and department, or — if "
+                 f"somebody at another company already does "
+                 f"{company.name if company else 'it'} as well — open their "
+                 f"record and tick {company.name if company else 'this company'} "
+                 "under “Also covers these companies”.")
+
     # Whatever this particular flow asks for at the start — a bill number, a
     # member name — goes straight into the run's context, where every later
     # step can read it.
@@ -587,7 +672,8 @@ async def start_flow(flow_id: int, request: Request,
                      f"'{field['label']}'.")
         context[field["label"]] = value
 
-    inst = flow_svc.start_flow(db, flow, reference, user, overrides, context)
+    inst = flow_svc.start_flow(db, flow, reference, user, overrides, context,
+                               branch_id=run_branch)
     return RedirectResponse(f"/flows/instance/{inst.id}", status_code=303)
 
 
