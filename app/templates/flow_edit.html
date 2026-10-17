@@ -30,7 +30,21 @@
         {% for b in branches %}
         <option value="{{ b.id }}" {{ 'selected' if b.id == flow.branch_id }}>{{ b.name }}</option>
         {% endfor %}
-      </select></div>
+      </select>
+      {# The box people read as "which company does this flow belong to",
+         and then build the same flow five times.
+
+         It is not that. It says which companies may USE this template.
+         "All" is one flow every company runs; the company a particular RUN
+         is for is picked on the start form, every time, and that is what
+         sends a step assigned to a position to the right person. Naming one
+         company here is for a process that genuinely exists at one company
+         and nowhere else. #}
+      <div class="m" style="margin-top:4px">Leave it on <strong>All
+        branches</strong> unless this process exists at one company and
+        nowhere else. It does <em>not</em> decide who does the work — the
+        company each run is for is chosen when the run is started, so one
+        flow serves every company.</div></div>
   </div>
   <label>Description</label>
   <textarea name="description" style="min-height:56px">{{ flow.description or '' }}</textarea>

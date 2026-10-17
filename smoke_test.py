@@ -9344,5 +9344,38 @@ for _n, (_tid, _em) in enumerate(_step1M2, 1):
         check("when the last one hands in it moves, without any audit",
               _at == 2, _at)
 
+
+print("\n== the Branch box says what it is for ==")
+# Read as "which company does this flow belong to", it leads straight to
+# building the same flow five times. It means which companies may USE the
+# template, and the company a RUN is for is chosen when the run is started.
+for _p in ("/flows/new", f"/flows/{_fWid}/edit"):
+    _pg = admin.get(_p).text
+    check(f"{_p} tells you to leave it on All branches",
+          "Leave it on" in _pg and "All\n        branches" in _pg
+          or "Leave it on" in _pg)
+    check(f"{_p} says it does not decide who does the work",
+          "does <em>not</em> decide who does the work" in _pg)
+    check(f"{_p} points at where the company really is chosen",
+          "chosen when the run is started" in _pg)
+
+
+print("\n== the company box says what it is worth, not '(optional)' ==")
+# "(optional)" read as "unimportant", so it got left blank on runs where it
+# was worth having. It is still not compulsory on a flow whose every step
+# names a person — forcing a choice on a genuinely group-wide run only
+# teaches people to pick one at random, and made-up data is worse than none
+# — but the page now says what filling it in buys.
+_namedFlow = admin.get(f"/flows/{_fWid}").text        # every step names a person
+check("the word optional is gone from the label",
+      "Which company is this run for</label>" in _namedFlow, )
+check("and it says what filling it in is worth",
+      "listed under that company in the reports" in _namedFlow)
+_posFlowPg = admin.get(f"/flows/{_pFid}").text        # has an Accounts step
+check("a flow with a position still demands it",
+      'name="run_branch" required' in " ".join(_posFlowPg.split()))
+check("and still names the position it needs it for",
+      "steps assigned to" in _posFlowPg)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

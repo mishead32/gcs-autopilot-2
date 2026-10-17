@@ -94,7 +94,7 @@
            for a branch, so "the starter's company" would be wrong nearly
            every time. A flow tied to one company does not ask at all. #}
         {% if not flow.branch and branches %}
-        <label>Which company is this run for{{ '' if positions else ' (optional)' }}</label>
+        <label>Which company is this run for</label>
         <select name="run_branch" {{ 'required' if positions }}>
           <option value="">— choose —</option>
           {% for b in branches %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
@@ -103,6 +103,19 @@
         <div class="m" style="margin-top:4px">This flow has steps assigned to
           a position ({{ positions|unique|join(', ') }}), so it needs to know
           whose. The step goes to whoever holds it at the company you pick.</div>
+        {% else %}
+        {# Not compulsory on a flow where every step names a person — nothing
+           depends on the answer, and forcing a choice on a run that is
+           genuinely group-wide only teaches people to pick one at random.
+           Made-up data is worse than none.
+
+           It used to say "(optional)", which read as "unimportant" and got
+           it left blank on runs where it was worth having. What it is worth
+           is now said plainly instead. #}
+        <div class="m" style="margin-top:4px">Every step of this flow names a
+          person, so nothing here depends on this. Fill it in anyway and the
+          run is listed under that company in the reports and on the run
+          itself — worth doing unless the run is genuinely group-wide.</div>
         {% endif %}
         {% endif %}
         <label>First step doer (override)</label>
