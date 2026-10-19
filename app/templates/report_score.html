@@ -3,7 +3,7 @@
 {% from "_export.html" import excel_btn %}
 {% block title %}EM score report · {{ APP_NAME }}{% endblock %}
 
-{% macro score_row(name, sub, card, link='') %}
+{% macro score_row(name, sub, card, link='', who_id=none) %}
 <tr>
   <td>{% if link %}<a href="{{ link }}"><strong>{{ name }}</strong></a>
       {% else %}<strong>{{ name }}</strong>{% endif %}
@@ -14,10 +14,24 @@
       of {{ card.scored_by_system }}</div>
     {% endif %}</td>
   <td class="{{ 'overdue' if card.gap < 0 }}">{{ card.gap }}</td>
+  {# Each half of the penalty links to the tasks behind it. Without that
+     the figure cannot be checked: the score and the Delegation report can
+     both be right and still disagree, because they are asked different
+     questions, and reconciling them by eye meant reading every row. #}
   {% for s in card.source_list %}
   <td class="bif">
     <b>{{ s.subtotal }}</b>
-    <div class="m">not done {{ s.not_done_penalty }} · late {{ s.late_penalty }}</div>
+    <div class="m">not done
+      {% if who_id and s.not_done_penalty %}
+      <a href="{{ f.url(path='/reports/score/behind', doer=who_id,
+                        source=s.key, kind='not_done') }}"
+         title="The tasks behind this figure">{{ s.not_done_penalty }}</a>
+      {% else %}{{ s.not_done_penalty }}{% endif %} · late
+      {% if who_id and s.late_penalty %}
+      <a href="{{ f.url(path='/reports/score/behind', doer=who_id,
+                        source=s.key, kind='late') }}"
+         title="The tasks behind this figure">{{ s.late_penalty }}</a>
+      {% else %}{{ s.late_penalty }}{% endif %}</div>
     <div class="m">{{ s.completed }} of {{ s.planned }} weight closed</div>
   </td>
   {% endfor %}
@@ -96,7 +110,7 @@
     {% for s in heads %}<th>{{ s.label }}</th>{% endfor %}
     <th>False marking</th><th>Completed</th><th>On time</th></tr>
   {% for r in people %}
-  {{ score_row(r.user.name, r.user.branch.name if r.user.branch else 'No branch', r.card) }}
+  {{ score_row(r.user.name, r.user.branch.name if r.user.branch else 'No branch', r.card, who_id=r.user.id) }}
   {% endfor %}
   {% if not people %}
   <tr><td colspan="{{ 6 + heads|length }}" class="m">No scored work in this range.</td></tr>

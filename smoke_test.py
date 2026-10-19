@@ -9520,5 +9520,111 @@ with _slK() as _d:
           not _d.scalars(_spK(_FIW).where(
               _FIW.reference == f"SMOKE BADFILE {RUN}")).all())
 
+
+print("\n== the EM score shows which tasks are behind each figure ==")
+# The complaint, and it was a fair one. The score said four weight of
+# delegation was NOT DONE for 12–17 Oct. The Delegation report for exactly
+# the same dates said 0 pending, 0 overdue, 100% complete. Both were right:
+# the report asks "is it finished now", the score asks "was it finished in
+# those dates". Reconciling them meant reading every row by eye.
+from app.models import Task as _TB, User as _UB, Priority as _PB, \
+     TaskSource as _TSB, TaskStatus as _STB
+from app.services import scoring as _scB
+from datetime import timedelta as _tdB
+
+with _slK() as _d:
+    _admB = _d.scalar(_spK(_UB).where(_UB.email == "mis@gcs.local"))
+    _whoB = [u for u in _d.scalars(_spK(_UB).where(_UB.active.is_(True))).all()
+             if u.receives_work][0]
+    _whoBid, _emB = _whoB.id, _whoB.email
+    _winFrom, _winTo = _dtC(2026, 10, 12), _dtC(2026, 10, 17)
+    # 1. Due inside the window and handed in inside it — the ordinary case.
+    _ok = _TB(org_id=_admB.org_id, title=f"SMOKE in-window {RUN}",
+              assigner_id=_admB.id, doer_id=_whoBid, priority=_PB.MEDIUM,
+              source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 14, 18),
+              status=_STB.COMPLETED, submitted_at=_dtC(2026, 10, 14, 11),
+              closed_at=_dtC(2026, 10, 14, 11), requires_attachment=False)
+    # 2. Due inside the window, handed in AFTER it. Finished now — so the
+    #    Delegation report calls it complete — but not done in the window.
+    _latr = _TB(org_id=_admB.org_id, title=f"SMOKE finished after {RUN}",
+                assigner_id=_admB.id, doer_id=_whoBid, priority=_PB.MEDIUM,
+                source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 16, 18),
+                status=_STB.COMPLETED, submitted_at=_dtC(2026, 10, 18, 10),
+                closed_at=_dtC(2026, 10, 18, 10), requires_attachment=False)
+    # 3. Due BEFORE the window, still open when it began — carried in. Its
+    #    planned date is outside the dates, so the Delegation report filtered
+    #    on planned date never shows it at all.
+    _carr = _TB(org_id=_admB.org_id, title=f"SMOKE carried in {RUN}",
+                assigner_id=_admB.id, doer_id=_whoBid, priority=_PB.LOW,
+                source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 9, 18),
+                status=_STB.IN_PROGRESS, requires_attachment=False)
+    _d.add_all([_ok, _latr, _carr]); _d.commit()
+    _okId, _latrId, _carrId = _ok.id, _latr.id, _carr.id
+
+_fromS, _toS = "2026-10-12", "2026-10-17"
+with _slK() as _d:
+    _mine = _d.scalars(_spK(_TB).where(_TB.doer_id == _whoBid,
+                                       _TB.source == _TSB.DELEGATION)).all()
+    _owed, _closed = _scB.window_tasks(
+        _mine, _dtC(2026, 10, 12), _dtC(2026, 10, 17, 23, 59, 59))
+    _ids = {t.id for t in _owed}
+    _shut = {t.id for t in _closed}
+    check("the one finished inside the window counts as done",
+          _okId in _ids and _okId in _shut)
+    check("the one finished AFTER the window is on the hook but not done",
+          _latrId in _ids and _latrId not in _shut)
+    check("and the one carried in from before it is on the hook too",
+          _carrId in _ids and _carrId not in _shut)
+
+# The Delegation report, on planned date, shows the first two as complete and
+# nothing pending — which is exactly what was reported as a contradiction.
+_repB = admin.get(f"/reports/tasks?source=delegation&doer={_whoBid}"
+                  f"&date_from={_fromS}&date_to={_toS}&state=completed").text
+check("the Delegation report calls the late-finished one complete",
+      f"SMOKE finished after {RUN}" in _repB)
+_pendB = admin.get(f"/reports/tasks?source=delegation&doer={_whoBid}"
+                   f"&date_from={_fromS}&date_to={_toS}&state=pending").text
+check("and shows it as nothing pending",
+      f"SMOKE finished after {RUN}" not in _pendB)
+
+# The new page says which tasks the score meant, and why each one counts.
+_behind = admin.get(f"/reports/score/behind?doer={_whoBid}&source=delegation"
+                    f"&kind=not_done&date_from={_fromS}&date_to={_toS}")
+check("the breakdown page opens", _behind.status_code == 200, _behind.status_code)
+_bt = _behind.text
+check("it lists the one finished after the window",
+      f"SMOKE finished after {RUN}" in _bt)
+check("saying it was handed in after these dates", "AFTER these dates" in _bt)
+check("it lists the one carried in", f"SMOKE carried in {RUN}" in _bt)
+check("saying it was carried in", "carried in" in _bt)
+check("and does NOT list the one finished on time inside the window",
+      f"SMOKE in-window {RUN}" not in _bt)
+check("it says plainly that this is not the same as pending today",
+      "not mean still pending today" in _bt)
+
+# And the EM score links to it, so nobody has to know the URL.
+_scoreB = admin.get(f"/reports/score?date_from={_fromS}&date_to={_toS}").text
+check("the EM score links through to the breakdown",
+      "/reports/score/behind" in _scoreB)
+
+# The late half has its own list.
+_lateB = admin.get(f"/reports/score/behind?doer={_whoBid}&source=delegation"
+                   f"&kind=late&date_from={_fromS}&date_to={_toS}")
+check("the late breakdown opens too", _lateB.status_code == 200)
+check("and counts only work handed in inside the window, after its date",
+      f"SMOKE finished after {RUN}" not in _lateB.text)
+
+# It shows somebody else's scored work, so it takes the same right the EM
+# score report itself takes.
+with _slK() as _d:
+    _plainB = [u.email for u in _d.scalars(_spK(_UB).where(_UB.active.is_(True))).all()
+               if u.receives_work and not u.can_see_all_reports][0]
+_cB = TestClient(app)
+_cB.post("/login", data={"email": _plainB, "password": "gcs1234"})
+check("a doer without the reports right cannot open it",
+      _cB.get(f"/reports/score/behind?doer={_whoBid}&source=delegation"
+              f"&kind=not_done&date_from={_fromS}&date_to={_toS}"
+              ).status_code == 403)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

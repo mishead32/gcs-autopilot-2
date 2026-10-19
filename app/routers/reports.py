@@ -143,7 +143,13 @@ class Filters:
         return f"{self.path}?{qs}" if qs else self.path
 
     def url(self, **over) -> str:
-        """This page's URL with a few filter values changed."""
+        """This page's URL with a few filter values changed.
+
+        path= points the same filters at a DIFFERENT report, which is how
+        the EM score links through to the tasks behind one of its figures
+        without the dates or the employee being retyped.
+        """
+        path = over.pop("path", None) or self.path
         q = dict(self.hidden)
         q.update({"date_from": self.f_from, "date_to": self.f_to,
                   "branch": self.branch_id or "", "doer": self.doer_id or "",
@@ -151,7 +157,7 @@ class Filters:
                   "q": self.q, "basis": self.basis})
         q.update(over)
         q = {k: v for k, v in q.items() if v not in ("", None)}
-        return f"{self.path}?{urlencode(q)}"
+        return f"{path}?{urlencode(q)}"
 
     @property
     def presets(self) -> list[tuple[str, str, bool]]:
@@ -668,6 +674,82 @@ def score_report(request: Request, date_from: str = "", date_to: str = "",
         "avg": avg, "headcount": len(people),
         "best": people[0] if people else None,
         "worst": people[-1] if people else None,
+    })
+
+
+@router.get("/reports/score/behind", response_class=HTMLResponse)
+def score_behind(request: Request, doer: int, source: str = "delegation",
+                 kind: str = "not_done", date_from: str = "", date_to: str = "",
+                 user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """The tasks behind one figure on the EM score.
+
+    Written because the figure could not be checked. The score said four
+    weight of delegation was not done; the Delegation report for the same
+    dates said nothing was pending and everything was complete. Both were
+    right — they answer different questions — but there was no way to see
+    WHICH tasks the score meant, so the only way to reconcile them was to
+    read every row by eye.
+
+    This lists them, and says of each one exactly why it counted.
+    """
+    if not user.can_see_all_reports:
+        raise HTTPException(
+            403, "This shows somebody else\u2019s scored work, so it needs the "
+                 "\u201cSee everyone\u2019s reports\u201d right.")
+    if source not in SOURCES:
+        raise HTTPException(404, "Unknown work type.")
+    if kind not in ("not_done", "late"):
+        kind = "not_done"
+    target = db.get(User, doer)
+    if not target or target.org_id != user.org_id:
+        raise HTTPException(404, "Employee not found.")
+
+    f = build_filters(db, user, "/reports/score/behind", date_from, date_to,
+                      "", str(doer), hidden={"source": source, "kind": kind},
+                      default_days=30)
+    start = datetime.combine(f.date_from, datetime.min.time())
+    end = datetime.combine(f.date_to, datetime.max.time())
+
+    rows = db.scalars(_scoped(user, select(Task))
+                      .where(Task.doer_id == doer,
+                             Task.source == SOURCES[source]["src"])).all()
+    owed, closed = scoring.window_tasks(rows, start, end)
+    shut = {t.id for t in closed}
+
+    if kind == "late":
+        picked = [t for t in owed if t.id in shut and t.was_on_time is False]
+    else:
+        picked = [t for t in owed if t.id not in shut]
+    picked = sorted(picked, key=lambda t: t.due_at)
+
+    def why(t: Task) -> str:
+        """One sentence per task, so nothing has to be worked out by hand."""
+        handed = scoring.handed_in(t)
+        if kind == "late":
+            return (f"Handed in {handed.strftime('%d %b, %I:%M %p')} \u2014 after "
+                    f"its planned {t.due_at.strftime('%d %b, %I:%M %p')}")
+        if handed is None:
+            if t.due_at < start:
+                return ("Still not handed in. It was due before these dates and "
+                        "was still open when they began, so it is carried in.")
+            return "Still not handed in."
+        if handed > end:
+            return (f"Handed in {handed.strftime('%d %b %Y, %I:%M %p')} \u2014 "
+                    f"AFTER these dates. Done now, but not inside this window.")
+        return "Counted elsewhere."
+
+    carried = [t for t in picked if t.due_at < start]
+    later = [t for t in picked
+             if scoring.handed_in(t) is not None and scoring.handed_in(t) > end]
+    still = [t for t in picked if scoring.handed_in(t) is None]
+
+    return templates.TemplateResponse(request, "report_behind.html", {
+        "user": user, "f": f, "target": target, "source": source,
+        "cfg": SOURCES[source], "kind": kind, "rows": picked,
+        "why": why, "weight": _weight(picked),
+        "owed_weight": _weight([t for t in owed]),
+        "carried": len(carried), "later": len(later), "still": len(still),
+        "start": start, "end": end,
     })
 
 
