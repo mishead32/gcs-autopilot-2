@@ -9626,5 +9626,84 @@ check("a doer without the reports right cannot open it",
               f"&kind=not_done&date_from={_fromS}&date_to={_toS}"
               ).status_code == 403)
 
+
+print("\n== finishing early is not a penalty ==")
+# A real one, found on the live site. DEL-341: due 14 Oct 11:59 PM, handed in
+# 10 Oct 05:50 PM — four days EARLY, marked on time, COMPLETED.
+#
+# Scored for 12–17 Oct it used to land in "on the hook" because its DATE is
+# in that week, and in nobody's "completed" list, because it was completed
+# the week before. The score read it as not done. Finishing early cost the
+# doer points, which is the exact opposite of what the score is for — and
+# no screen could explain it, because the task plainly says COMPLETED, on
+# time.
+with _slK() as _d:
+    _admE = _d.scalar(_spK(_UB).where(_UB.email == "mis@gcs.local"))
+    _whoE = [u for u in _d.scalars(_spK(_UB).where(_UB.active.is_(True))).all()
+             if u.receives_work][0]
+    _early = _TB(org_id=_admE.org_id, title=f"SMOKE finished early {RUN}",
+                 assigner_id=_admE.id, doer_id=_whoE.id, priority=_PB.LOW,
+                 source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 14, 23, 59),
+                 status=_STB.COMPLETED, submitted_at=_dtC(2026, 10, 10, 17, 50),
+                 closed_at=_dtC(2026, 10, 10, 17, 50), requires_attachment=False)
+    _d.add(_early); _d.commit()
+    _earlyId, _whoEid = _early.id, _whoE.id
+
+with _slK() as _d:
+    _rowsE = _d.scalars(_spK(_TB).where(_TB.id == _earlyId)).all()
+    check("the task itself says it was on time", _rowsE[0].was_on_time is True)
+
+    # The week it was DUE in, but finished before.
+    _o, _c = _scB.window_tasks(_rowsE, _dtC(2026, 10, 12),
+                               _dtC(2026, 10, 17, 23, 59, 59))
+    check("it is not on the hook for the week after it was finished",
+          _o == [], [t.title for t in _o])
+    check("and is not counted as closed there either", _c == [])
+
+    # The week it was actually finished in — where it belongs.
+    _o2, _c2 = _scB.window_tasks(_rowsE, _dtC(2026, 10, 5),
+                                 _dtC(2026, 10, 11, 23, 59, 59))
+    check("it counts in the week it was finished", [t.id for t in _o2] == [_earlyId])
+    check("as work completed", [t.id for t in _c2] == [_earlyId])
+
+    # A window covering both: counted once, and done.
+    _o3, _c3 = _scB.window_tasks(_rowsE, _dtC(2026, 10, 5),
+                                 _dtC(2026, 10, 17, 23, 59, 59))
+    check("a window spanning both counts it exactly once",
+          len(_o3) == 1 and len(_c3) == 1)
+
+    # The whole card, to be sure the penalty is gone.
+    _cardE = _scB._build(*_scB.window_tasks(
+        _rowsE, _dtC(2026, 10, 12), _dtC(2026, 10, 17, 23, 59, 59)))
+    check("so the week after carries no 'not done' for it",
+          _cardE.not_done == 0, _cardE.not_done)
+    _cardF = _scB._build(*_scB.window_tasks(
+        _rowsE, _dtC(2026, 10, 5), _dtC(2026, 10, 11, 23, 59, 59)))
+    check("and the week it was done in scores it as done and on time",
+          _cardF.completed == 1 and _cardF.on_time == 1 and _cardF.late == 0,
+          (_cardF.completed, _cardF.on_time, _cardF.late))
+
+# The things this must NOT have broken.
+with _slK() as _d:
+    _stillLate = _TB(org_id=_admE.org_id, title=f"SMOKE late one {RUN}",
+                     assigner_id=_admE.id, doer_id=_whoEid, priority=_PB.LOW,
+                     source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 13, 18),
+                     status=_STB.COMPLETED, submitted_at=_dtC(2026, 10, 16, 9),
+                     closed_at=_dtC(2026, 10, 16, 9), requires_attachment=False)
+    _neverDone = _TB(org_id=_admE.org_id, title=f"SMOKE never done {RUN}",
+                     assigner_id=_admE.id, doer_id=_whoEid, priority=_PB.LOW,
+                     source=_TSB.DELEGATION, due_at=_dtC(2026, 10, 13, 18),
+                     status=_STB.IN_PROGRESS, requires_attachment=False)
+    _d.add_all([_stillLate, _neverDone]); _d.commit()
+    _pair = [_d.get(_TB, _stillLate.id), _d.get(_TB, _neverDone.id)]
+    _oL, _cL = _scB.window_tasks(_pair, _dtC(2026, 10, 12),
+                                 _dtC(2026, 10, 17, 23, 59, 59))
+    check("work handed in late, inside the window, still counts as late",
+          len(_cL) == 1 and _cL[0].was_on_time is False)
+    _cardL = _scB._build(_oL, _cL)
+    check("and work never handed in still counts as not done",
+          _cardL.not_done == 1 and _cardL.late == 1,
+          (_cardL.not_done, _cardL.late))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -391,7 +391,20 @@ def window_tasks(tasks, start: datetime, end: datetime):
         if t.flow_waiting and done_at is None:
             continue
         shut_in = done_at is not None and start <= done_at <= end
-        due_in = start <= t.due_at <= end
+        # Finished BEFORE this period began. It belongs to the period it was
+        # finished in, and it is counted there — as work done, on time.
+        done_before = done_at is not None and done_at < start
+        # Due in the period, and not already finished before it started.
+        #
+        # That second half is the whole of a bug worth spelling out. A task
+        # due on the 14th that the doer handed in on the 10th — four days
+        # EARLY, marked on time — used to land in this period's "on the
+        # hook" list because of its date, and in nobody's "completed" list,
+        # because it was completed the week before. The score read it as not
+        # done. Finishing early was penalised, which is the exact opposite
+        # of what the score is for, and no screen anywhere would explain it:
+        # the task plainly says COMPLETED, on time.
+        due_in = start <= t.due_at <= end and not done_before
         # Open when the period began: either never finished, or finished
         # after the period started. Work finished BEFORE the period belongs
         # to the period it was finished in, not to this one.
