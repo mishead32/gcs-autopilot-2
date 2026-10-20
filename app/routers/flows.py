@@ -334,15 +334,16 @@ def _check_routes(rows: list[dict]) -> None:
         if r["due_from_pos"] == r["position"]:
             raise HTTPException(
                 400, f"{where} cannot start its clock from itself.")
-        # A position can resolve to more than one person, and a decision
-        # step may have exactly one — two people could pick two different
-        # outcomes and the flow would have to go both ways at once.
-        if r["is_decision"] and r["doer_dept"]:
-            raise HTTPException(
-                400, f"{where} is a decision step, so it has to name one "
-                     f"person rather than a position: “{r['doer_dept']}” "
-                     "could be two people at some companies, and two people "
-                     "could choose two different outcomes.")
+        # A decision step assigned to a POSITION used to be refused here.
+        # That was the wrong moment to ask. While a flow is being built
+        # nobody knows which company it will run for, so the question
+        # "could this be two people?" has no answer yet and the refusal was
+        # on a maybe — which left one flow per company as the only way to
+        # use a position on a decision step, the exact thing positions
+        # exist to avoid.
+        #
+        # It is checked when a RUN starts instead, where the company is
+        # known and the answer is a fact. See _one_decider below.
         # Named extras alongside a position would be dropped when the run
         # resolves the position, so they are refused rather than ignored.
         if r["doer_dept"] and r.get("extra_doer_ids"):
@@ -640,6 +641,25 @@ async def start_flow(flow_id: int, request: Request,
     # Checked now rather than when the step comes round: a step that cannot
     # find its person is otherwise discovered three days later by whoever is
     # holding the work, with the run already half done.
+    # A decision step has to come down to ONE person: two people choosing
+    # two different outcomes is a flow that must go two ways at once. With a
+    # position that is only knowable now, when the company is.
+    for step in flow.steps:
+        if not (step.is_decision and step.doer_dept):
+            continue
+        holders = flow_svc.dept_people(db, flow.org_id, run_branch,
+                                       step.doer_dept)
+        if len(holders) > 1:
+            company = db.get(Branch, run_branch)
+            raise HTTPException(
+                400, f"Step {step.position} ({step.title}) is a decision "
+                     f"step, and {company.name if company else 'that company'} "
+                     f"has {len(holders)} people in {step.doer_dept}: "
+                     + ", ".join(h.name for h in holders) +
+                     ". Two of them could choose two different outcomes, so "
+                     "the flow would have to go both ways at once. Either "
+                     "give that step one person by name, or leave one person "
+                     "in that department at this company.")
     gaps = flow_svc.missing_positions(db, flow, run_branch)
     if gaps:
         company = db.get(Branch, run_branch)

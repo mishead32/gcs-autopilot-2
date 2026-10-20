@@ -8642,11 +8642,17 @@ check("not choosing a company at all is refused too",
                  data={"reference": f"SMOKE POS NONE {RUN}",
                        "run_branch": ""}).status_code == 400)
 
-# A position can be two people at one company, and a decision step may have
-# exactly one — two people could pick two different outcomes.
-check("a decision step cannot be given a position",
+# A decision step CAN be given a position.
+#
+# It used to be refused here, while the flow was being built — and that was
+# the wrong moment to ask. Nobody knows yet which company the flow will run
+# for, so "could this be two people?" had no answer and the refusal was on a
+# maybe. It left one flow per company as the only way to put a position on a
+# decision step, which is the exact thing positions exist to avoid.
+_decFlow = f"SMOKE pos decision {RUN}"
+check("a decision step CAN be given a position while building",
       admin.post("/flows/new", data={
-          "name": f"SMOKE pos decision {RUN}", "description": "", "branch_id": "",
+          "name": _decFlow, "description": "", "branch_id": "",
           "sf_label": [""], "sf_type": ["text"], "sf_required": [""],
           "sf_options": [""],
           "step_title": ["Approve"], "step_doer": [f"dept:{_POS}"],
@@ -8655,7 +8661,50 @@ check("a decision step cannot be given a position",
           "step_howto": [""], "step_fields": [""], "step_audit": ["0"],
           "step_proof": ["0"], "step_decision": ["1"], "step_yes": ["Yes"],
           "step_next": ["0"], "step_no": ["No"], "step_fail": ["0"],
-          "step_due_from": [""]}).status_code == 400)
+          "step_due_from": [""]}).status_code == 200)
+with _slK() as _d:
+    _decId = _d.scalar(_spK(_FlP).where(_FlP.name == _decFlow)).id
+
+# One person in that position at that company — the ordinary case, and the
+# one that used to be impossible.
+_oneOk = admin.post(f"/flows/{_decId}/start",
+                    data={"reference": f"SMOKE DEC ONE {RUN}",
+                          "run_branch": str(_brAid)})
+check("and a run starts fine where the position is one person",
+      _oneOk.status_code == 200, _oneOk.status_code)
+
+# Two people in it at that company: NOW it is refused, because now it is a
+# fact rather than a maybe.
+with _slK() as _d:
+    _second = _UP(org_id=_orgP, name=f"SMOKE Second accountant {RUN}",
+                  email=f"second.acct.{RUN}@gcs.local",
+                  password_hash=_hpP("gcs1234"), role=_RoP.DOER,
+                  branch_id=_brAid,
+                  department_id=_d.scalar(_spK(_DpP).where(
+                      _DpP.name == _POS, _DpP.branch_id == _brAid)).id)
+    _second.set_rights([]); _d.add(_second); _d.commit()
+_twoBad = admin.post(f"/flows/{_decId}/start",
+                     data={"reference": f"SMOKE DEC TWO {RUN}",
+                           "run_branch": str(_brAid)})
+check("but refused where that position really is two people",
+      _twoBad.status_code == 400, _twoBad.status_code)
+check("and the refusal names them, so it can be acted on",
+      "Second accountant" in _twoBad.text and "both ways at once" in _twoBad.text)
+check("a company where it is still one person is unaffected",
+      admin.post(f"/flows/{_decId}/start",
+                 data={"reference": f"SMOKE DEC OTHER {RUN}",
+                       "run_branch": str(_brBid)}).status_code == 200)
+with _slK() as _d:
+    # Put the company back to one accountant, so the checks further down
+    # are testing the position and not this test's leftovers.
+    _d.get(_UP, _second.id if hasattr(_second, "id") else 0)
+    _sec = _d.scalar(_spK(_UP).where(_UP.email == f"second.acct.{RUN}@gcs.local"))
+    _sec.active = False
+    _d.commit()
+check("and once that second person is gone the run starts again",
+      admin.post(f"/flows/{_decId}/start",
+                 data={"reference": f"SMOKE DEC AGAIN {RUN}",
+                       "run_branch": str(_brAid)}).status_code == 200)
 
 # Named extras alongside a position would be silently dropped when the run
 # resolves it, so they are refused rather than ignored.
@@ -8843,13 +8892,21 @@ with _slK() as _d:
           == [False, True, True, True], [t.flow_waiting for t in _rows])
 
     # The dates chain: each step counted from when the one before it is due.
+    #
+    # Checked as an ORDER and a span rather than an exact gap per step. A
+    # planned date never falls on a closed day — it is pulled back to the
+    # working day before — so a one-day gap landing on a Sunday is a
+    # zero-day gap, and asserting the exact number makes this test fail on
+    # whichever weekday it happens to be run.
     _d1, _d2, _d3, _d4 = [t.due_at for t in _rows]
-    check("step 2 is planned two days after step 1 is due",
-          (_d2 - _d1).days == 2, str(_d2 - _d1))
-    check("step 3 a day after step 2", (_d3 - _d2).days == 1, str(_d3 - _d2))
-    check("step 4 a day after step 3", (_d4 - _d3).days == 1, str(_d4 - _d3))
-    check("so the last step's date is four days past the first's",
-          (_d4 - _d1).days == 4, str(_d4 - _d1))
+    check("step 2 is planned about two days after step 1 is due",
+          1 <= (_d2 - _d1).days <= 2, str(_d2 - _d1))
+    check("step 3 after step 2", _d3 >= _d2, (str(_d2), str(_d3)))
+    check("step 4 after step 3", _d4 >= _d3, (str(_d3), str(_d4)))
+    check("and each step is planned later than the one before it",
+          _d1 <= _d2 <= _d3 <= _d4)
+    check("so the last step's date is several days past the first's",
+          3 <= (_d4 - _d1).days <= 5, str(_d4 - _d1))
 
     # Visible, but not work anybody is behind on.
     check("a planned step is not chased", not _chW.needs_chasing(_rows[2]))

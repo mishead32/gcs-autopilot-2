@@ -386,6 +386,9 @@ def replan(db: Session, inst: FlowInstance, assigner: User) -> int:
             # worse than leaving it off the plan.
             prev_due = clock.add_span(prev_due, "hours", 24)
             continue
+        # One decision, one person — the same rule the live step follows.
+        if step.is_decision:
+            people = people[:1]
         made = [_spawn_step_task(db, inst, step, p, assigner,
                                  waiting=True, opens_at=prev_due)
                 for p in people]
@@ -616,6 +619,28 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
         # (somebody left, mid-run), the work still has to go somewhere, and
         # the person in front of it is a better answer than nowhere.
         people = [fallback]
+
+    # A decision step comes down to ONE person. Two people choosing two
+    # different outcomes is a flow that has to go both ways at once, and
+    # there is no honest answer to that.
+    #
+    # The run was refused at the start if its position held two people, so
+    # this is for the case that check cannot see: somebody JOINED that
+    # department after the run began. The step opens for the first of them
+    # by name rather than for both, and says so on the task, because
+    # quietly handing the same decision to two people is the one outcome
+    # that cannot be unwound.
+    if step.is_decision and len(people) > 1:
+        chosen, rest = people[0], people[1:]
+        made = _spawn_step_task(db, inst, step, chosen, assigner)
+        db.add(TaskComment(
+            task_id=made.id, author_id=assigner.id,
+            body=("This is a decision step, so it goes to one person. "
+                  + ", ".join(p.name for p in rest) +
+                  (" is" if len(rest) == 1 else " are") +
+                  f" also in {step.doer_dept} at this company, but two "
+                  "people could choose two different outcomes.")))
+        return made
 
     made = [_spawn_step_task(db, inst, step, p, assigner) for p in people]
     return made[0]
