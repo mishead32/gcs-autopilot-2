@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}Escalation · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Escalation</h1>
+    <p class="sub">An overdue task climbs one level a day until it is closed.
+      Each message carries the task's own ID, so the reply names the work.</p>
+  </div>
+  <div>
+    <a class="btn ghost" href="/escalation/preview">See what would be sent</a>
+    <a class="btn ghost" href="/escalation/log">Escalation log</a>
+  </div>
+</div>
+
+{# ------------------------------------------------- the state of the thing #}
+<div class="grid g2 wide">
+  <form method="post" action="/escalation/settings" class="card">
+    <strong>Settings</strong>
+
+    <label class="check" style="margin-top:12px">
+      <input type="checkbox" name="esc_on" value="1"
+             {{ 'checked' if org.esc_on }}>
+      <span>Escalation is <strong>on</strong></span>
+    </label>
+    <div class="m" style="margin:4px 0 14px">
+      While this is off nothing is sent and nothing is recorded. Fill in the
+      levels below first — overdue work escalated to nobody looks, from the
+      outside, exactly like a system that is working.
+    </div>
+
+    <label>What counts as a day overdue</label>
+    <select name="working_days">
+      <option value="1" {{ 'selected' if org.esc_working_days }}>
+        Working days — a day the company was shut does not count</option>
+      <option value="" {{ 'selected' if not org.esc_working_days }}>
+        Calendar days — every day counts, Sundays and holidays included</option>
+    </select>
+    <div class="m" style="margin:6px 0 14px">
+      Each company's own closed day is already set on the Branches page, so
+      the offices skip Sunday and the gym and the spa do not. On calendar
+      days a task due on Saturday reaches the CMD on Tuesday, having spent
+      one of its three days on a day nobody was in.
+    </div>
+
+    <label>Which work escalates</label>
+    <select name="scope">
+      {% for key, text in scopes.items() %}
+      <option value="{{ key }}" {{ 'selected' if org.esc_scope == key }}>{{ text }}</option>
+      {% endfor %}
+    </select>
+    <div class="m" style="margin:6px 0 14px">
+      The recommended setting is the same rule the follow-up desk already
+      uses: a low-priority daily checklist job is not escalated to the CMD
+      for a missed Tuesday, and an FMS step whose turn has not come round is
+      never escalated at all.
+    </div>
+
+    <label>After the top level</label>
+    <select name="after_top">
+      {% for key, text in after_top.items() %}
+      <option value="{{ key }}" {{ 'selected' if org.esc_after_top == key }}>{{ text }}</option>
+      {% endfor %}
+    </select>
+
+    <label style="margin-top:14px">The check runs each morning from</label>
+    <select name="hour">
+      {% for h in range(0, 24) %}
+      <option value="{{ h }}" {{ 'selected' if org.esc_hour == h }}>
+        {{ '%02d:00'|format(h) }}</option>
+      {% endfor %}
+    </select>
+    <div class="m" style="margin:6px 0 0">
+      Once a day, on the date rather than on a timer — a restart, a second
+      web process, or pressing the button by hand cannot send the same
+      morning twice.
+      {% if org.esc_last_run %}
+      Last run <strong>{{ org.esc_last_run.strftime('%d %b %Y') }}</strong>.
+      {% else %}It has not run yet.{% endif %}
+    </div>
+
+    <div style="margin-top:16px"><button class="btn">Save settings</button></div>
+  </form>
+
+  <div>
+    <div class="card {{ '' if mail_on else 'warnbox' }}">
+      <strong>Email</strong>
+      <p class="m" style="margin:8px 0 0">{{ mail_status }}</p>
+      {% if not mail_on %}
+      <p class="m" style="margin:8px 0 0">
+        Set <code>MAIL_HOST</code>, <code>MAIL_PORT</code>,
+        <code>MAIL_USER</code>, <code>MAIL_PASS</code> and
+        <code>MAIL_FROM</code> in Render's own <strong>Environment</strong>
+        tab. The password belongs there and nowhere else — not in the
+        repository, not in a message, not in a chat. Until then every
+        escalation is still written down, with the reason it could not be
+        sent, so switching the mailbox on later shows exactly what the
+        morning would have sent.
+      </p>
+      {% endif %}
+    </div>
+
+    {% if gaps %}
+    <div class="card warnbox">
+      <strong>These companies would escalate to nobody</strong>
+      <p class="m" style="margin:8px 0 0">
+        {{ gaps|join(', ') }}. Either give each one its own levels, or fill in
+        the <strong>Every other company</strong> ladder — that one is used by
+        any company without its own, which is how the EA and the CMD are set
+        once instead of three times.
+      </p>
+    </div>
+    {% endif %}
+
+    {% if recent %}
+    <div class="card">
+      <strong>Last few escalations</strong>
+      <table style="margin-top:10px">
+        {% for e in recent %}
+        <tr>
+          <td style="white-space:nowrap"><a href="/escalation/log/{{ e.id }}"
+             class="refid">{{ e.task.ref or e.task_id }}</a></td>
+          <td><span class="chip {{ 'bad' if e.level >= 3 else 'normal' }}">{{ e.label }}</span></td>
+          <td>{{ e.to_name }}</td>
+          <td class="m">{{ e.day.strftime('%d %b') }}</td>
+          <td><span class="chip {{ {'sent':'ok','failed':'bad'}.get(e.status,'') }}">{{ e.status }}</span></td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="m" style="margin-top:10px"><a href="/escalation/log">The whole log →</a></p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/escalation/run" class="card">
+      <strong>Run the check now</strong>
+      <p class="m" style="margin:8px 0 12px">
+        For testing, and for a morning the site was asleep. Both buttons
+        write the escalations down, so one recorded without being sent is
+        not sent again tomorrow — that is the honest behaviour, and it means
+        the first button is a real dry run only once.
+        <a href="/escalation/preview">Seeing what would be sent</a> records
+        nothing at all, and is the safer place to start.
+      </p>
+      <button class="btn ghost" name="send" value="">Record without sending</button>
+      <button class="btn" name="send" value="1"
+              onclick="return confirm('Send the escalation emails now?')">Send now</button>
+    </form>
+  </div>
+</div>
+
+{# ------------------------------------------------------------- the ladder #}
+{# Not a .page-head: that lays its last child out as a row of buttons on the
+   right, and with a single child the heading itself ended up right-aligned. #}
+<div style="margin-top:28px">
+  <div>
+    <h2 style="margin:0">{{ branch.name if branch else 'Every other company' }}</h2>
+    <p class="sub" style="margin:4px 0 0">
+      {% if branch %}
+      This company's own levels. Any level left out here falls back to the
+      <a href="/escalation">Every other company</a> ladder — so the HOD can
+      differ per company while the EA and the CMD are set once.
+      {% else %}
+      The levels used by any company that has none of its own. This is where
+      the EA and the CMD belong, and it is what stops a company nobody
+      remembered — BIPS School, in the approved document — escalating to
+      nobody at all.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="tabs">
+  <a class="{{ 'active' if not branch_id }}" href="/escalation">Every other company</a>
+  {% for b in branches %}
+  <a class="{{ 'active' if branch_id == b.id }}" href="/escalation?scope={{ b.id }}">{{ b.name }}</a>
+  {% endfor %}
+</div>
+
+{% macro rung_fields(r, staff, prefix) %}
+  <label>Who hears about it</label>
+  <select name="user_id" onchange="
+    var t=this.form.querySelector('.typed'); if(t) t.hidden = !!this.value;">
+    <option value="">— type a name and address instead —</option>
+    {% for s in staff %}
+    <option value="{{ s.id }}" {{ 'selected' if r and r.user_id == s.id }}>
+      {{ s.name }}{% if s.email %} · {{ s.email }}{% endif %}</option>
+    {% endfor %}
+  </select>
+  <div class="m" style="margin:6px 0 10px">
+    Somebody on the system is the better answer: the address follows them
+    when it changes. Type one in for the CMD and the EA if they have no login.
+  </div>
+
+  <div class="typed" {{ 'hidden' if r and r.user_id }}>
+    <div class="row">
+      <div><label>Name</label>
+        <input name="to_name" maxlength="120" value="{{ r.to_name or '' if r }}"
+               placeholder="Santosh Ma'am"></div>
+      <div><label>Email address</label>
+        <input name="to_email" maxlength="160" value="{{ r.to_email or '' if r }}"
+               placeholder="name@gcsgroup.in"></div>
+    </div>
+  </div>
+
+  <label>How the email opens</label>
+  <input name="salutation" maxlength="120" value="{{ r.salutation or '' if r }}"
+         placeholder="Dear Santosh Ma'am">
+  <div class="m" style="margin:6px 0 10px">
+    Left empty it writes “Dear ” and the name. The CMD's level is worth
+    setting by hand — <em>Respected CMD Sir</em> — because a system that
+    writes to the CMD in the words used for a department head gets edited
+    by hand every single time.
+  </div>
+
+  <label>What the email says</label>
+  <textarea name="message" rows="3"
+            placeholder="Leave this empty unless you want to override the wording.">{{ r.message or '' if r }}</textarea>
+  <div class="m" style="margin:6px 0 10px">
+    This is the sentence between the greeting and the task's details. The
+    Task ID, task, doer, who assigned it, the company, the due date and the
+    days overdue are added underneath automatically — they are the point of
+    the email and cannot be left out by accident.
+    <strong>Best left empty.</strong> Empty means the software writes the
+    approved sentence for this level, and changes it in the one case where
+    the approved wording would be untrue: work that reaches this level by
+    the number of days it is overdue, without having been escalated below
+    it. Typing the approved text in here freezes that untrue version in.
+  </div>
+
+  <label class="check">
+    <input type="checkbox" name="urgent" value="1" {{ 'checked' if r and r.urgent }}>
+    <span>Mark the subject <strong>URGENT</strong></span></label>
+  <label class="check">
+    <input type="checkbox" name="cc_doer" value="1"
+           {{ 'checked' if (r.cc_doer if r else True) }}>
+    <span>Copy the doer — nobody is reported over their head unseen</span></label>
+  <label class="check">
+    <input type="checkbox" name="cc_earlier" value="1"
+           {{ 'checked' if (r.cc_earlier if r else True) }}>
+    <span>Copy every level already escalated to</span></label>
+  <label class="check">
+    <input type="checkbox" name="cc_assigner" value="1"
+           {{ 'checked' if r and r.cc_assigner }}>
+    <span>Copy whoever gave out the task</span></label>
+{% endmacro %}
+
+{% if rows %}
+<div class="grid g2 wide" style="margin-top:16px">
+  {% for r in rows %}
+  <form method="post" action="/escalation/rungs/{{ r.id }}" class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                gap:10px;margin:0 0 12px">
+      <strong>Level {{ r.level }} — day {{ r.level }} overdue</strong>
+      <span class="chip {{ 'bad' if r.urgent else 'normal' }}">{{ r.name }}</span>
+    </div>
+    {{ rung_fields(r, staff, 'r' ~ r.id) }}
+    <div style="margin-top:14px">
+      <button class="btn">Save level {{ r.level }}</button>
+      <button class="btn ghost" formaction="/escalation/rungs/{{ r.id }}/delete"
+              onclick="return confirm('Remove level {{ r.level }}? Overdue work will then stop at the level below.')">
+        Remove</button>
+    </div>
+  </form>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty" style="margin-top:16px">
+  No levels for {{ branch.name if branch else 'this ladder' }} yet.
+  {% if branch %}Overdue work here uses the
+  <a href="/escalation">Every other company</a> ladder.{% endif %}
+</div>
+{% endif %}
+
+<form method="post" action="/escalation/rungs" class="card" style="margin-top:16px">
+  <strong>Add a level to
+    {{ branch.name if branch else 'the every-other-company ladder' }}</strong>
+  <input type="hidden" name="scope" value="{{ branch_id or '' }}">
+  <label style="margin-top:10px">Level — and the number of days overdue that
+    triggers it</label>
+  <input name="level" type="number" min="1" max="20" value="{{ next_level }}" required>
+  {{ rung_fields(None, staff, 'new') }}
+  <div style="margin-top:14px"><button class="btn">Add this level</button></div>
+</form>
+
+{# ------------------------------------------------------- what is in force #}
+<div class="card" style="margin-top:20px">
+  <strong>What {{ branch.name if branch else 'a company with no ladder of its own' }}
+    actually escalates to</strong>
+  <p class="m" style="margin:8px 0 0">
+    Own levels and inherited ones, resolved the way the morning check
+    resolves them. A level with nobody to send to is not shown, because it
+    cannot be escalated to.
+  </p>
+  {% if effective %}
+  <table style="margin-top:12px">
+    <tr><th>Day overdue</th><th>Goes to</th><th>Email</th><th>From</th></tr>
+    {% for lvl in effective|sort %}
+    {% set r = effective[lvl] %}
+    <tr>
+      <td><strong>Day {{ lvl }}</strong></td>
+      <td>{{ r.name }}</td>
+      <td class="m">{{ r.email or '—' }}</td>
+      <td><span class="chip {{ 'ok' if r.branch_id else 'normal' }}">{{ r.where }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="m" style="margin-top:10px">
+    Past day {{ effective|max }},
+    {% if org.esc_after_top == 'repeat' %}
+    {{ effective[effective|max].name }} is reminded again every day until the
+    task is closed.
+    {% else %}
+    nothing further is sent — the top level has been told once, and the log
+    is the record.
+    {% endif %}
+  </p>
+  {% else %}
+  <div class="empty" style="margin-top:12px">Nobody. Overdue work here would
+    be escalated to no one.</div>
+  {% endif %}
+</div>
+{% endblock %}

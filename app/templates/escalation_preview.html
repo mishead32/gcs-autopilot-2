@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}What would be sent · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>What this morning would send</h1>
+    <p class="sub">{{ today.strftime('%A %d %b %Y') }} — the real check, run
+      with the sending switched off. Nothing here has been recorded and
+      nothing has been emailed.</p>
+  </div>
+  <a class="btn ghost" href="/escalation">← Escalation</a>
+</div>
+
+<div class="card" style="background:var(--tintbg, #EEF3F7)">
+  <strong>Why this page exists</strong>
+  <p class="m" style="margin:6px 0 0">
+    The first fair question about a system that emails the CMD is “who is
+    about to be emailed, and about what”. The only honest way to answer it
+    is to run the whole check — the same overdue list, the same ladders, the
+    same decision about what is owed next — and stop short of the database
+    row and the email. That is this page. It is Phase 5 of the approved
+    roadmap without the CMD's inbox being where the testing happens.
+  </p>
+  {% if not org.esc_on %}
+  <p class="m" style="margin:10px 0 0"><strong>Escalation is currently
+    off</strong>, so none of this is actually going out each morning. This
+    is what it would send on the day it is switched on.</p>
+  {% endif %}
+  {% if not mail_on %}
+  <p class="m" style="margin:10px 0 0"><strong>No mail server is set up
+    yet</strong> — {{ mail_status }} Each of these would be written down
+    with that reason on it rather than delivered.</p>
+  {% endif %}
+</div>
+
+{% if rows %}
+<p class="sub" style="margin:18px 0 10px">
+  <strong>{{ rows|length }}</strong> escalation(s) would go out.
+</p>
+
+{% for r in rows %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;
+              gap:12px;margin:0 0 12px">
+    <div>
+      <span class="chip lvl">L{{ r.level }}{% if r.repeat_n %} · reminder
+        {{ r.repeat_n }}{% endif %}</span>
+      <a class="refid" href="/tasks/{{ r.task.id }}">{{ r.task.ref or r.task.id }}</a>
+      <strong style="margin-left:6px">{{ r.task.title }}</strong>
+    </div>
+    <span class="chip {{ 'high' if r.late >= 3 else 'medium' }}">
+      {{ r.late }} day(s) overdue</span>
+  </div>
+
+  <table style="margin-bottom:12px">
+    <tr><td style="width:70px"><strong>To</strong></td>
+        <td>{{ r.to }}{% if r.email %} &lt;{{ r.email }}&gt;{% else %}
+            <span class="chip bad">no address</span>{% endif %}</td></tr>
+    {% if r.cc %}
+    <tr><td><strong>Cc</strong></td><td class="m">{{ r.cc|join(', ') }}</td></tr>
+    {% endif %}
+  </table>
+
+  <div class="esc-subject">{{ r.subject }}</div>
+  <div class="esc-body">{{ r.body }}</div>
+</div>
+{% endfor %}
+
+<form method="post" action="/escalation/run" class="card">
+  <strong>Happy with it?</strong>
+  <p class="m" style="margin:8px 0 12px">
+    Sending from here does exactly what is shown above, and writes each one
+    down so it cannot be sent a second time.
+  </p>
+  <button class="btn" name="send" value="1"
+          onclick="return confirm('Send these {{ rows|length }} escalation email(s) now?')">
+    Send these {{ rows|length }} now</button>
+  <a class="btn ghost" href="/escalation">Change the ladder first</a>
+</form>
+{% else %}
+<div class="empty" style="margin-top:18px">
+  Nothing would be sent this morning.
+</div>
+{% endif %}
+
+{% if skipped %}
+<h2 style="margin-top:28px">Overdue, but not escalated this morning</h2>
+<p class="sub">Each one with the reason. A system that silently leaves work
+  out is worse than one that escalates too much.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>ID</th><th>Task</th><th>Company</th><th>Overdue</th><th>Why not</th></tr>
+  {% for task, late, why in skipped %}
+  <tr>
+    <td class="refcell"><a class="refid" href="/tasks/{{ task.id }}">{{ task.ref or task.id }}</a></td>
+    <td><a href="/tasks/{{ task.id }}">{{ task.title }}</a></td>
+    <td class="m">{{ task.branch.name if task.branch else 'Head office' }}</td>
+    <td>{{ late }} day(s)</td>
+    <td class="m">{{ why }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

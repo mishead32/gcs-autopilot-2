@@ -9762,5 +9762,399 @@ with _slK() as _d:
           _cardL.not_done == 1 and _cardL.late == 1,
           (_cardL.not_done, _cardL.late))
 
+
+# ==========================================================================
+# Escalation — overdue work climbs the ladder, one rung a day
+# ==========================================================================
+print("\n-- Escalation --")
+
+from datetime import date as _dQ, timedelta as _tdQ
+from app.db import SessionLocal as _slQ
+from app.models import (Branch as _BrQ, Escalation as _EsQ,
+                        EscalationRule as _ErQ, Organization as _OgQ,
+                        Priority as _PrQ, Task as _TkQ, TaskSource as _TsQ,
+                        TaskStatus as _StQ, User as _UsQ)
+from app.services import escalation as _escQ
+from app.services import mail as _mlQ
+
+adminQ = login("mis@gcs.local")
+
+check("the escalation page opens", adminQ.get("/escalation").status_code == 200)
+check("the log opens", adminQ.get("/escalation/log").status_code == 200)
+check("and the preview opens", adminQ.get("/escalation/preview").status_code == 200)
+
+# Opening the page lays out the approved three rungs, empty, so the form
+# arrives with the right shape rather than blank.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_slctQ := __import__("sqlalchemy").select(_OgQ))
+    _seeded = _d.scalars(__import__("sqlalchemy").select(_ErQ)
+                         .where(_ErQ.branch_id.is_(None))).all()
+    check("three group-wide levels are laid out for a new system",
+          len(_seeded) >= 3, len(_seeded))
+    check("and the top one is marked urgent, as the approved template is",
+          any(r.urgent for r in _seeded))
+
+_SEL = __import__("sqlalchemy").select
+
+# ---------------------------------------------------------- the ladder ----
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _oidQ = _orgQ.id
+    _brsQ = _d.scalars(_SEL(_BrQ).where(_BrQ.org_id == _oidQ)
+                       .order_by(_BrQ.name)).all()
+    _hoQ = next(b for b in _brsQ if b.name == "GCS HO")
+    _bzQ = next(b for b in _brsQ if "Bodyzone" in b.name)
+    _bipsQ = next(b for b in _brsQ if "BIPS" in b.name)
+
+    # The group ladder gets the EA and the CMD; each company its own HOD.
+    _rQ = {r.level: r for r in _d.scalars(
+        _SEL(_ErQ).where(_ErQ.org_id == _oidQ,
+                         _ErQ.branch_id.is_(None))).all()}
+    _rQ[1].to_name, _rQ[1].to_email = "Group HOD", f"ghod-{RUN}@example.test"
+    _rQ[2].to_name, _rQ[2].to_email = "EA to CMD", f"ea-{RUN}@example.test"
+    _rQ[3].to_name, _rQ[3].to_email = "CMD Sir", f"cmd-{RUN}@example.test"
+    _rQ[3].salutation = "Respected CMD Sir"
+    for _b, _who in ((_hoQ, "Santosh Ma'am"), (_bzQ, "GM Sir")):
+        if not _d.scalar(_SEL(_ErQ).where(_ErQ.org_id == _oidQ,
+                                          _ErQ.branch_id == _b.id,
+                                          _ErQ.level == 1)):
+            _d.add(_ErQ(org_id=_oidQ, branch_id=_b.id, level=1,
+                        to_name=_who,
+                        to_email=f"{_who.split()[0].lower()}-{RUN}@example.test",
+                        cc_doer=True, cc_earlier=False))
+    _orgQ.esc_on = True
+    _orgQ.esc_after_top = "stop"
+    _orgQ.esc_scope = "chased"
+    _orgQ.esc_working_days = True
+    _d.commit()
+
+    _ladHO = _escQ.ladder(_d, _oidQ, _hoQ.id)
+    check("head office gets its own HOD on level 1",
+          _ladHO[1].name == "Santosh Ma'am", _ladHO[1].name)
+    check("and inherits the EA and the CMD from the group ladder",
+          _ladHO[2].name == "EA to CMD" and _ladHO[3].name == "CMD Sir",
+          (_ladHO[2].name, _ladHO[3].name))
+    _ladBZ = _escQ.ladder(_d, _oidQ, _bzQ.id)
+    check("Bodyzone gets GM Sir on level 1, not head office's HOD",
+          _ladBZ[1].name == "GM Sir", _ladBZ[1].name)
+    # The gap the approved document leaves: BIPS School has no ladder of its
+    # own. It must escalate to the group's rather than to nobody.
+    _ladBIPS = _escQ.ladder(_d, _oidQ, _bipsQ.id)
+    check("a company with no ladder of its own still escalates to somebody",
+          _ladBIPS and _ladBIPS[1].name == "Group HOD",
+          sorted(_ladBIPS))
+    check("so no company escalates to nobody",
+          _escQ.missing_ladders(_d, _oidQ) == [],
+          _escQ.missing_ladders(_d, _oidQ))
+    check("a level with nobody to send to is not a level",
+          all(r.email for r in _ladHO.values()))
+
+# ------------------------------------------------------- days overdue -----
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _hoQ = _d.scalar(_SEL(_BrQ).where(_BrQ.name == "GCS HO"))
+    _doerQ = _d.scalar(_SEL(_UsQ).where(_UsQ.branch_id == _hoQ.id,
+                                        _UsQ.active.is_(True)))
+    _bossQ = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    # Due on a Friday, so the Sunday after it falls inside the overdue run.
+    _friQ = _dQ(2026, 10, 16)
+    _tkQ = _TkQ(org_id=_orgQ.id, branch_id=_hoQ.id,
+                title=f"SMOKE escalation {RUN}", assigner_id=_bossQ.id,
+                doer_id=_doerQ.id, priority=_PrQ.HIGH,
+                source=_TsQ.DELEGATION, status=_StQ.PENDING,
+                due_at=_dtC(2026, 10, 16, 18), requires_attachment=False)
+    _d.add(_tkQ); _d.commit()
+    _tidQ = _tkQ.id
+    _refQ = _tkQ.ref
+
+    _monQ = _dQ(2026, 10, 19)          # the Monday after
+    check("a Friday deadline is two days overdue on the Monday, "
+          "because the Sunday nobody was in does not count",
+          _escQ.days_overdue(_d, _tkQ, _monQ, True) == 2,
+          _escQ.days_overdue(_d, _tkQ, _monQ, True))
+    check("and three on calendar days, where the Sunday does",
+          _escQ.days_overdue(_d, _tkQ, _monQ, False) == 3,
+          _escQ.days_overdue(_d, _tkQ, _monQ, False))
+    check("nothing is overdue on its own due date",
+          _escQ.days_overdue(_d, _tkQ, _dQ(2026, 10, 16), True) == 0)
+
+# --------------------------------------------------- one rung a day -------
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _tkQ = _d.get(_TkQ, _tidQ)
+
+    def _rungsOf(db, task):
+        return [(e.level, e.repeat_n, e.to_name)
+                for e in _escQ.already(db, task.id)]
+
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 17), send=False)      # Saturday
+    check("day 1 overdue goes to that company's own HOD",
+          _rungsOf(_d, _tkQ) == [(1, 0, "Santosh Ma'am")], _rungsOf(_d, _tkQ))
+
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 18), send=False)      # Sunday
+    check("the Sunday adds nothing — it is not a day overdue",
+          len(_rungsOf(_d, _tkQ)) == 1, _rungsOf(_d, _tkQ))
+
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 19), send=False)      # Monday
+    check("day 2 goes to the EA", _rungsOf(_d, _tkQ)[-1][:2] == (2, 0)
+          and _rungsOf(_d, _tkQ)[-1][2] == "EA to CMD", _rungsOf(_d, _tkQ))
+
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 20), send=False)
+    check("day 3 reaches the CMD",
+          _rungsOf(_d, _tkQ)[-1][:2] == (3, 0), _rungsOf(_d, _tkQ))
+
+    _was = len(_rungsOf(_d, _tkQ))
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 20), send=False, force=True)
+    check("running the check twice in one morning sends nothing twice",
+          len(_rungsOf(_d, _tkQ)) == _was, _rungsOf(_d, _tkQ))
+
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 21), send=False)
+    check("and with 'stop' set, nothing follows the CMD",
+          len(_rungsOf(_d, _tkQ)) == _was, _rungsOf(_d, _tkQ))
+
+    # The promise the approved document makes, enforced by the database
+    # rather than by the code remembering.
+    _dupQ = _EsQ(org_id=_orgQ.id, task_id=_tidQ, level=1, repeat_n=0,
+                 day=_dQ(2026, 11, 1), days_overdue=9, subject="x", body="y")
+    _d.add(_dupQ)
+    try:
+        _d.commit()
+        _twice = True
+    except Exception:
+        _d.rollback()
+        _twice = False
+    check("the database itself refuses a second escalation at the same level",
+          not _twice)
+
+# ------------------------------------------------------ the CC cascade ----
+with _slQ() as _d:
+    _tkQ = _d.get(_TkQ, _tidQ)
+    _sentQ = _escQ.already(_d, _tidQ)
+    _l1, _l2, _l3 = _sentQ[0], _sentQ[1], _sentQ[2]
+    check("level 1 copies the doer, so nobody is reported unseen",
+          _tkQ.doer.email in _l1.cc_list, _l1.cc_list)
+    check("level 2 copies the doer and the HOD already told",
+          any("santosh" in a for a in _l2.cc_list) and
+          _tkQ.doer.email in _l2.cc_list, _l2.cc_list)
+    check("level 3 copies the doer, the HOD and the EA",
+          any("santosh" in a for a in _l3.cc_list) and
+          any("ea-" in a for a in _l3.cc_list), _l3.cc_list)
+    check("and never copies the person it is addressed to",
+          _l3.to_email not in _l3.cc_list)
+
+    check("the subject names the task ID and the days overdue",
+          _refQ in _l1.subject and "overdue by 1 day" in _l1.subject,
+          _l1.subject)
+    check("the CMD's subject is marked urgent",
+          _l3.subject.startswith("[URGENT Escalation L3]"), _l3.subject)
+    check("the CMD is addressed as the approved template addresses him",
+          _l3.body.startswith("Respected CMD Sir,"), _l3.body[:40])
+    for _field in ("Task ID:", "Task:", "Doer:", "Assigned by:",
+                   "Due date:", "Days overdue:"):
+        check(f"every escalation states the {_field.strip(':')}",
+              _field in _l1.body, _field)
+    check("the message is kept on the row, as it was written",
+          _l1.body and _l1.subject)
+    check("the CMD's letter says the levels below were escalated, "
+          "because for this task they were",
+          "after escalation at every level below" in _l3.body, _l3.body[:160])
+
+# The one case where the approved wording would be a false statement: work
+# already well overdue the first morning this is switched on reaches the top
+# rung at once, having never been escalated below it. Telling the CMD it is
+# "still open after escalation to the HOD and the EA" would be untrue in
+# writing, over the group's name, to the person least able to check it.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _hoQ = _d.scalar(_SEL(_BrQ).where(_BrQ.name == "GCS HO"))
+    _doerQ = _d.scalar(_SEL(_UsQ).where(_UsQ.branch_id == _hoQ.id,
+                                        _UsQ.active.is_(True)))
+    _bossQ = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    _oldQ = _TkQ(org_id=_orgQ.id, branch_id=_hoQ.id,
+                 title=f"SMOKE long overdue {RUN}", assigner_id=_bossQ.id,
+                 doer_id=_doerQ.id, priority=_PrQ.HIGH,
+                 source=_TsQ.DELEGATION, status=_StQ.PENDING,
+                 due_at=_dtC(2026, 9, 10, 18), requires_attachment=False)
+    _d.add(_oldQ); _d.commit()
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 20), send=False, force=True)
+    _jumpQ = _escQ.already(_d, _oldQ.id)
+    check("work first seen long overdue goes straight to the top level",
+          len(_jumpQ) == 1 and _jumpQ[0].level == 3,
+          [(e.level, e.repeat_n) for e in _jumpQ])
+    check("and its letter does NOT claim an escalation that never happened",
+          "after escalation" not in _jumpQ[0].body, _jumpQ[0].body[:200])
+    check("it says how it got there instead",
+          "by the number of days it is overdue" in _jumpQ[0].body,
+          _jumpQ[0].body[:220])
+    check("the levels below are still copied in, so they are in the loop",
+          any("santosh" in a for a in _jumpQ[0].cc_list), _jumpQ[0].cc_list)
+    # And a level whose wording was typed in by hand still wins.
+    _r3Q = _d.scalar(_SEL(_ErQ).where(_ErQ.org_id == _orgQ.id,
+                                      _ErQ.branch_id.is_(None),
+                                      _ErQ.level == 3))
+    check("a new system leaves the wording empty so the software writes it",
+          _r3Q.message is None, _r3Q.message)
+
+# --------------------------------------------------------- repeat mode ----
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _orgQ.esc_after_top = "repeat"
+    _d.commit()
+    _before = len(_escQ.already(_d, _tidQ))
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 22), send=False)
+    _after = _escQ.already(_d, _tidQ)
+    check("with 'repeat' set, the top level is reminded again",
+          len(_after) == _before + 1 and _after[-1].repeat_n == 1,
+          [(e.level, e.repeat_n) for e in _after])
+    check("and the reminder says so rather than pretending to be new",
+          _after[-1].label == "L3 · reminder 1", _after[-1].label)
+    _orgQ.esc_after_top = "stop"
+    _d.commit()
+
+# ------------------------------------------------ what does NOT escalate --
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _tkQ = _d.get(_TkQ, _tidQ)
+
+    _tkQ.submitted_at = _dtC(2026, 10, 23, 9)
+    _tkQ.status = _StQ.SUBMITTED
+    _d.commit()
+    check("work the doer has handed in does not escalate, "
+          "even while an auditor still has it",
+          not _escQ.in_scope(_d.get(_TkQ, _tidQ), "chased"))
+
+    _tkQ.status = _StQ.COMPLETED
+    _tkQ.closed_at = _dtC(2026, 10, 23, 9)
+    _d.commit()
+    _kept = len(_escQ.already(_d, _tidQ))
+    _escQ.run(_d, _orgQ, on=_dQ(2026, 10, 24), send=False)
+    check("closing the task stops the ladder",
+          len(_escQ.already(_d, _tidQ)) == _kept)
+    check("and what already went out is kept as the record", _kept >= 3, _kept)
+
+    # A planned FMS step whose turn has not come. Nobody can be late for
+    # work the run has not reached.
+    _waitQ = _d.scalar(_SEL(_TkQ).where(_TkQ.flow_waiting.is_(True)))
+    if _waitQ is not None:
+        check("a planned FMS step whose turn has not come never escalates",
+              not _escQ.in_scope(_waitQ, "chased"))
+
+    _hoQ = _d.scalar(_SEL(_BrQ).where(_BrQ.name == "GCS HO"))
+    _doerQ = _d.scalar(_SEL(_UsQ).where(_UsQ.branch_id == _hoQ.id,
+                                        _UsQ.active.is_(True)))
+    _bossQ = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    _heldQ = _TkQ(org_id=_orgQ.id, branch_id=_hoQ.id,
+                  title=f"SMOKE held escalation {RUN}", assigner_id=_bossQ.id,
+                  doer_id=_doerQ.id, priority=_PrQ.HIGH,
+                  source=_TsQ.DELEGATION, status=_StQ.ON_HOLD,
+                  due_at=_dtC(2026, 10, 10, 18), requires_attachment=False)
+    _d.add(_heldQ); _d.commit()
+    check("a task frozen because its run was put on hold does not escalate",
+          not _escQ.in_scope(_d.get(_TkQ, _heldQ.id), "chased"))
+
+    _lowQ = _TkQ(org_id=_orgQ.id, branch_id=_hoQ.id,
+                 title=f"SMOKE low escalation {RUN}", assigner_id=_bossQ.id,
+                 doer_id=_doerQ.id, priority=_PrQ.LOW,
+                 source=_TsQ.DELEGATION, status=_StQ.PENDING,
+                 due_at=_dtC(2026, 10, 10, 18), requires_attachment=False)
+    _d.add(_lowQ); _d.commit()
+    check("on 'high priority only', low-priority work is left alone",
+          not _escQ.in_scope(_d.get(_TkQ, _lowQ.id), "high"))
+    check("but low-priority delegation does escalate on the default setting",
+          _escQ.in_scope(_d.get(_TkQ, _lowQ.id), "chased"))
+
+# ----------------------------------------------------------- the mailer ---
+check("with no mail server set, sending reports why rather than raising",
+      _mlQ.send(["somebody@example.test"], "s", "b") == (False,
+      "No mail server is set up yet.") or _mlQ.enabled())
+check("and an address that is not one is refused before any connection",
+      _mlQ.send(["not-an-address"], "s", "b")[0] is False)
+check("a blank and a duplicate address are dropped",
+      _mlQ.clean(["a@b.test", "", "A@B.test", "bad"]) == ["a@b.test"],
+      _mlQ.clean(["a@b.test", "", "A@B.test", "bad"]))
+check("the mail status line never contains the password",
+      "MAIL_PASS" not in _mlQ.status())
+
+# ------------------------------------------------- the pages, with data ---
+_rLogQ = adminQ.get("/escalation/log")
+check("the log lists what was raised",
+      _refQ in _rLogQ.text, _rLogQ.status_code)
+check("the log can be filtered down to one task",
+      _refQ in adminQ.get(f"/escalation/log?task={_refQ}").text)
+check("and filtered to one level",
+      adminQ.get("/escalation/log?level=3&status=queued").status_code == 200)
+with _slQ() as _d:
+    _oneQ = _escQ.already(_d, _tidQ)[0].id
+_rOneQ = adminQ.get(f"/escalation/log/{_oneQ}")
+# Jinja escapes the apostrophe, so the page carries "Ma&#39;am" — look for
+# the part of the name that survives escaping rather than weakening the check.
+check("one escalation shows the message exactly as it was written",
+      "Santosh" in _rOneQ.text and "Task ID" in _rOneQ.text,
+      _rOneQ.status_code)
+check("the task page shows the doer who has been told",
+      "Escalated to" in adminQ.get(f"/tasks/{_tidQ}").text)
+
+_rPageQ = adminQ.get("/escalation?scope=" + str(
+    _slQ().scalar(_SEL(_BrQ).where(_BrQ.name == "GCS HO")).id))
+check("a company's own ladder page opens and names its HOD",
+      "Santosh Ma'am" in _rPageQ.text, _rPageQ.status_code)
+
+# A level needs somewhere to send to. Saving one without is the mistake
+# that leaves overdue work escalating to nobody, so it is refused.
+_rBadQ = adminQ.post("/escalation/rungs",
+                     data={"scope": "", "level": "9", "user_id": "",
+                           "to_name": "Nobody", "to_email": ""})
+check("a level with no address is refused rather than saved empty",
+      _rBadQ.status_code == 400, _rBadQ.status_code)
+_rBad2Q = adminQ.post("/escalation/rungs",
+                      data={"scope": "", "level": "9", "user_id": "",
+                            "to_name": "Typo", "to_email": "not-an-address"})
+check("and an address that is not one is refused",
+      _rBad2Q.status_code == 400, _rBad2Q.status_code)
+_rDupQ = adminQ.post("/escalation/rungs",
+                     data={"scope": "", "level": "1", "user_id": "",
+                           "to_name": "Second", "to_email": "s@b.test"})
+check("a second level 1 on the same ladder is refused",
+      _rDupQ.status_code == 400, _rDupQ.status_code)
+
+# ------------------------------------------------------- the daily clock --
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _orgQ.esc_on = True
+    _orgQ.esc_hour = 0
+    _orgQ.esc_last_run = None
+    _d.commit()
+    check("the morning check is owed when it has not run today",
+          _escQ.due_today(_d, _orgQ))
+    _orgQ.esc_last_run = _clkQ if (_clkQ := __import__(
+        "app.clock", fromlist=["today"]).today()) else None
+    _d.commit()
+    check("and not owed once it has",
+          not _escQ.due_today(_d, _orgQ))
+    check("run_daily does nothing when it is not owed",
+          _escQ.run_daily(_d) is None)
+    _orgQ.esc_on = False
+    _orgQ.esc_last_run = None
+    _d.commit()
+    check("nothing runs at all while escalation is switched off",
+          not _escQ.due_today(_d, _orgQ)
+          and _escQ.run(_d, _orgQ, send=False)["ran"] is False)
+
+# Switching it on with an empty ladder is the one mistake that looks, from
+# the outside, exactly like a working system.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _savedQ = [(r.to_name, r.to_email, r.user_id) for r in _d.scalars(
+        _SEL(_ErQ).where(_ErQ.org_id == _orgQ.id,
+                         _ErQ.branch_id.is_(None)).order_by(_ErQ.level)).all()]
+    for _r in _d.scalars(_SEL(_ErQ).where(_ErQ.org_id == _orgQ.id)).all():
+        _d.delete(_r)
+    _d.commit()
+_rOnQ = adminQ.post("/escalation/settings",
+                    data={"esc_on": "1", "working_days": "1",
+                          "after_top": "stop", "scope": "chased", "hour": "9"})
+check("switching escalation on with no ladder at all is refused",
+      _rOnQ.status_code == 400, _rOnQ.status_code)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

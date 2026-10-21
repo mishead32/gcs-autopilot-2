@@ -19,7 +19,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
     HelpTicket, HelpStatus, REF_PREFIX,
-    Followup
+    Followup, Escalation
 )
 from ..services import (notify, flows as flow_svc, storage, holidays, xlsx,
                         detective, shrink)
@@ -652,6 +652,13 @@ def task_detail(task_id: int, request: Request,
         "can_false_mark": user.has(Right.FALSE_MARK)
                           and task.status in (TaskStatus.SUBMITTED, TaskStatus.COMPLETED)
                           and not task.false_marked,
+        # Who has already been told this is late. Shown to everybody who can
+        # see the task, the doer included: being escalated over somebody's
+        # head without their knowing is how the ladder stops being a
+        # management tool and becomes a grievance.
+        "escalations": db.scalars(
+            select(Escalation).where(Escalation.task_id == task.id)
+            .order_by(Escalation.level, Escalation.repeat_n)).all(),
     })
 
 

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Escalation log · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Escalation log</h1>
+    <p class="sub">Every escalation raised, against the Task ID, with the day,
+      the level and who it went to. This is the record the approved document
+      asks for, and it is why a task can never be escalated twice for the
+      same level.</p>
+  </div>
+  <a class="btn ghost" href="/escalation">← Escalation</a>
+</div>
+
+<form class="card" method="get" action="/escalation/log">
+  <div class="row">
+    <div><label>Task ID</label>
+      <input name="task" value="{{ task }}" placeholder="DEL-341"></div>
+    <div><label>Level</label>
+      <select name="level">
+        <option value="">Every level</option>
+        {% for l in levels %}
+        <option value="{{ l }}" {{ 'selected' if level == l|string }}>Level {{ l }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label>Delivery</label>
+      <select name="status">
+        <option value="">Any</option>
+        {% for s in ['sent', 'queued', 'failed'] %}
+        <option value="{{ s }}" {{ 'selected' if status == s }}>{{ s|title }}</option>
+        {% endfor %}
+      </select></div>
+    <div><label>Day</label>
+      <input type="date" name="day" value="{{ day }}"></div>
+    <div style="display:flex;align-items:flex-end;gap:8px">
+      <button class="btn">Filter</button>
+      <a class="btn ghost" href="/escalation/log">Clear</a></div>
+  </div>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <tr><th>Day</th><th>Level</th><th>Task ID</th><th>Task</th><th>Doer</th>
+    <th>Overdue</th><th>Went to</th><th>Delivery</th><th></th></tr>
+  {% for e in rows %}
+  <tr>
+    <td style="white-space:nowrap">{{ e.day.strftime('%d %b %Y') }}</td>
+    <td><span class="chip lvl">{{ e.label }}</span></td>
+    <td class="refcell"><a class="refid" href="/tasks/{{ e.task_id }}">
+      {{ e.task.ref or e.task_id }}</a></td>
+    <td><a href="/tasks/{{ e.task_id }}">{{ e.task.title }}</a>
+      <div class="m rowsub">{{ e.task.branch.name if e.task.branch else 'Head office' }}</div></td>
+    <td class="m">{{ e.task.doer.name if e.task.doer else '—' }}</td>
+    <td>{{ e.days_overdue }} day(s)</td>
+    <td>{{ e.to_name or '—' }}<div class="m rowsub">{{ e.to_email or '' }}</div></td>
+    <td><span class="chip {{ e.status }}">{{ e.status }}</span>
+      {% if e.error %}<div class="m rowsub">{{ e.error }}</div>{% endif %}</td>
+    <td><a class="btn sm ghost" href="/escalation/log/{{ e.id }}">The message</a></td>
+  </tr>
+  {% endfor %}
+</table></div>
+<p class="m" style="margin-top:10px">
+  {{ rows|length }} escalation(s){% if rows|length == 400 %} — the most recent
+  400. Narrow it with the filters above{% endif %}.
+  <strong>Queued</strong> means it was recorded but there was nowhere to send
+  it; <strong>failed</strong> means the mail server refused it, and the reason
+  is beside it.
+</p>
+{% else %}
+<div class="empty">
+  {% if task or level or status or day %}
+  Nothing matches those filters.
+  {% else %}
+  Nothing has been escalated yet.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -22,10 +22,12 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       followups as followups_router,
                       reports as reports_router,
                       detective as detective_router,
+                      escalation as escalation_router,
                       cmd as cmd_router)
 from .services import recurring
 from .services import detective
 from .services import flows as flow_svc
+from .services import escalation as escalation_svc
 from .templating import templates
 from . import lastview
 
@@ -155,6 +157,15 @@ async def _daily_spawn():
             caught = await asyncio.to_thread(_catch_up_runs)
             if caught:
                 print(f"FMS: brought {caught} run(s) up to date")
+
+            # The morning escalation check. It knows for itself whether it
+            # is owed — the date it last ran is stored, not a timer — so
+            # calling it every tick is how it survives a restart, a host
+            # that slept through nine o'clock, and a second web process,
+            # without any of them making it send twice.
+            raised = await asyncio.to_thread(_escalate)
+            if raised:
+                print(f"Escalation: {raised}")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -171,6 +182,20 @@ def _spawn_once() -> int:
 def _catch_up_runs() -> int:
     with SessionLocal() as db:
         return flow_svc.catch_up_all(db)
+
+
+def _escalate() -> str:
+    """This morning's escalation check, or "" when it was not owed."""
+    with SessionLocal() as db:
+        result = escalation_svc.run_daily(db, site=os.getenv("SITE_URL", ""))
+    if not result or not result["raised"]:
+        return ""
+    bits = [f"{result['raised']} raised"]
+    for key, word in (("sent", "emailed"), ("failed", "could not be sent"),
+                      ("queued", "recorded only")):
+        if result[key]:
+            bits.append(f"{result[key]} {word}")
+    return ", ".join(bits)
 
 
 @asynccontextmanager
@@ -371,6 +396,7 @@ app.include_router(followups_router.router)
 app.include_router(reports_router.router)
 app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
+app.include_router(escalation_router.router)
 
 
 @app.get("/healthz")
@@ -421,3 +447,27 @@ def cron_spawn(authorization: str | None = Header(default=None),
     with SessionLocal() as db:
         created = recurring.run_spawn(db)
     return JSONResponse({"created": created})
+
+
+@app.get("/cron/escalate")
+def cron_escalate(authorization: str | None = Header(default=None),
+                  key: str = ""):
+    """Run the morning escalation check.
+
+    Here for a host with no always-on process. On Render the background loop
+    already does this, and calling both is safe: the check is keyed to the
+    date it last ran and to a unique row per task and level, so neither of
+    them can send the same escalation twice.
+    """
+    if CRON_SECRET:
+        supplied = (authorization or "").removeprefix("Bearer ").strip() or key
+        if supplied != CRON_SECRET:
+            raise HTTPException(401, "Bad or missing cron secret")
+
+    with SessionLocal() as db:
+        result = escalation_svc.run_daily(db, site=os.getenv("SITE_URL", ""))
+    if result is None:
+        return JSONResponse({"ran": False,
+                             "why": "Not owed yet today, or escalation is off."})
+    result["day"] = str(result["day"])
+    return JSONResponse(result)

@@ -62,6 +62,18 @@ ADDITIONS = {
         ("start_month", "INTEGER"),
         ("anchor_on", "DATE"),
     ],
+    "organizations": [
+        # Escalation, group-wide switches. Off for an existing database on
+        # purpose: the ladder has to be filled in before anything is sent,
+        # and an upgrade that starts emailing the CMD by itself is not an
+        # upgrade.
+        ("esc_on", "BOOLEAN DEFAULT 0"),
+        ("esc_working_days", "BOOLEAN DEFAULT 1"),
+        ("esc_after_top", "VARCHAR(10) DEFAULT 'stop'"),
+        ("esc_scope", "VARCHAR(10) DEFAULT 'chased'"),
+        ("esc_hour", "INTEGER DEFAULT 9"),
+        ("esc_last_run", "DATE"),
+    ],
     "branches": [
         # Existing companies get Sunday off, which is true of every one of
         # them except the gym and the spa — those two are switched off by

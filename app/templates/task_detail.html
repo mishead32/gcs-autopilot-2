@@ -359,6 +359,35 @@
     </dialog>
     {% endif %}
 
+    {% if escalations %}
+    {# Who above the doer has already been told this is late. Visible to the
+       doer too, deliberately: an escalation nobody can see is a complaint
+       behind somebody's back, and the point of the ladder is to get the
+       task moved, not to build a file on a person. #}
+    <div class="card">
+      <strong>Escalated to</strong>
+      <table style="margin-top:12px">
+        {% for e in escalations %}
+        <tr>
+          <td style="width:84px"><span class="chip lvl">{{ e.label }}</span></td>
+          <td><strong>{{ e.to_name or '—' }}</strong>
+            <div class="m rowsub">{{ e.day.strftime('%d %b %Y') }} ·
+              {{ e.days_overdue }} day(s) overdue then</div></td>
+          <td style="text-align:right">
+            <span class="chip {{ e.status }}">{{ e.status }}</span>
+            {% if user.has_manage_user %}
+            <a class="m" href="/escalation/log/{{ e.id }}">the message</a>
+            {% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="m" style="margin-top:10px">
+        Closing this task stops the ladder where it is. Nothing further is
+        sent, and what has already gone is kept as the record.
+      </p>
+    </div>
+    {% endif %}
+
     {% if can_edit or can_delete %}
     <div class="card">
       <strong>Manage</strong>

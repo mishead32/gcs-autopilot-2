@@ -118,6 +118,11 @@
         <span class="ic">⊞</span><span class="lb">Departments</span></a>
       <a class="{{ 'active' if p.startswith('/admin/holidays') }}" href="/admin/holidays" title="Holidays">
         <span class="ic">☾</span><span class="lb">Holidays</span></a>
+      {# Who hears about overdue work, and on which day. Under Setup rather
+         than Operations: the ladder is entered once and then the mornings
+         look after themselves. #}
+      <a class="{{ 'active' if p.startswith('/escalation') }}" href="/escalation" title="Escalation">
+        <span class="ic">▲</span><span class="lb">Escalation</span></a>
     {% endif %}
   </nav>
 

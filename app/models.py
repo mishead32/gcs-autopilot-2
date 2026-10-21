@@ -258,6 +258,40 @@ class Organization(Base):
     slug: Mapped[str] = mapped_column(String(60), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
+    # ------------------------------------------------------- escalation ----
+    # One overdue task, one level a day, up the ladder set per company.
+    # Everything here is a group-wide switch; who receives each level is a
+    # per-company thing and lives in EscalationRule.
+    #
+    # Off until somebody turns it on, deliberately. The ladder has to be
+    # filled in first, and an escalation sent to nobody — or worse, to the
+    # wrong person — is how a system like this loses the room's trust on day
+    # one.
+    esc_on: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Does a day the company is shut count as a day overdue?
+    #
+    # The offices keep Sunday off and the gym and the spa do not, which is
+    # already recorded per company on the Branches page, so "working days"
+    # means each company's own closed days are skipped. On calendar days a
+    # task due Saturday reaches the CMD on Tuesday having been overdue
+    # across a Sunday nobody was in.
+    esc_working_days: Mapped[bool] = mapped_column(Boolean, default=True)
+    # What happens after the top of the ladder: "stop" or "repeat" daily.
+    esc_after_top: Mapped[str] = mapped_column(String(10), default="stop")
+    # Which work escalates. "chased" means exactly the work the follow-up
+    # desk is expected to chase, which is already one rule in one file —
+    # daily checklist jobs escalate only when they are high priority, and a
+    # planned FMS step whose turn has not come is never escalated at all.
+    # "high" narrows it to high priority only; "all" widens it to
+    # everything open and past its date.
+    esc_scope: Mapped[str] = mapped_column(String(10), default="chased")
+    # The hour of the morning the check runs, 0-23, office time.
+    esc_hour: Mapped[int] = mapped_column(Integer, default=9)
+    # The last day the check actually ran. The daily run is keyed off this
+    # rather than a timer, so a restart, a second web process or somebody
+    # pressing "Run the check now" cannot send the same morning twice.
+    esc_last_run: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     branches: Mapped[list["Branch"]] = relationship(back_populates="org")
     users: Mapped[list["User"]] = relationship(back_populates="org")
 
@@ -1535,3 +1569,151 @@ class OutboundMessage(Base):
     status: Mapped[str] = mapped_column(String(20), default="queued")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# --------------------------------------------------------------------------
+# Escalation — who hears about an overdue task, and on which day
+# --------------------------------------------------------------------------
+#
+# A task that passes its date and stays open climbs one rung a day:
+#
+#     Day 1 overdue   the HOD of that company
+#     Day 2 overdue   the EA to the CMD
+#     Day 3 overdue   the CMD
+#
+# The ladder is per company because the HOD is a different person at each
+# one — Santosh Ma'am at head office, GM Sir at Bodyzone, Spa Kora and
+# Jharkhand — while the EA and the CMD are the same two people above all of
+# them. That is the whole reason this is a table rather than a setting: the
+# alternative was a copy of the rule per company, and keeping three copies
+# of anything in step by hand is how it stops being true.
+#
+# Three levels is only the default. The ladder is however many rows somebody
+# enters, so a company that wants a fourth rung adds one.
+
+
+class EscalationRule(Base):
+    """One rung of one company's ladder.
+
+    `branch_id` NULL is the group-wide ladder: the rung used by any company
+    that has not been given its own. BIPS School has no ladder of its own in
+    the approved document, so without this it would have escalated to
+    nobody and the overdue work there would have been the only work in the
+    group no one above the doer ever heard about.
+    """
+    __tablename__ = "escalation_rules"
+    __table_args__ = (UniqueConstraint("org_id", "branch_id", "level",
+                                       name="uq_esc_rule_level"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    branch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("branches.id"), nullable=True, index=True)
+    # 1, 2, 3 … and also the number of days overdue that triggers it.
+    level: Mapped[int] = mapped_column(Integer)
+
+    # Who hears about it. A person on the system is the better answer — the
+    # address follows them when it changes, and the escalation can be shown
+    # on their own screen as well as sent. An address typed in by hand is
+    # the fallback, because the CMD and the EA may well not have logins.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True)
+    to_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    to_email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+    # How the email opens: "Dear Santosh Ma'am", "Respected CMD Sir". Kept
+    # as its own field because the approved templates do not greet the three
+    # levels the same way, and a system that writes to the CMD in the words
+    # used for a department head will be edited by hand every time.
+    salutation: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # The sentence between the greeting and the task's details.
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # [URGENT Escalation L3] rather than [Escalation L3].
+    urgent: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Who else is copied. The doer, so nobody is reported over their head
+    # without seeing it; everybody already escalated to, so the CMD's reply
+    # reaches the HOD and the EA as well.
+    cc_doer: Mapped[bool] = mapped_column(Boolean, default=True)
+    cc_earlier: Mapped[bool] = mapped_column(Boolean, default=True)
+    cc_assigner: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+
+    branch: Mapped["Branch | None"] = relationship()
+    person: Mapped["User | None"] = relationship()
+
+    @property
+    def name(self) -> str:
+        """Who this rung reaches, however it was filled in."""
+        if self.person is not None:
+            return self.person.name
+        return (self.to_name or "").strip() or "—"
+
+    @property
+    def email(self) -> str:
+        if self.person is not None and (self.person.email or "").strip():
+            return self.person.email.strip()
+        return (self.to_email or "").strip()
+
+    @property
+    def greeting(self) -> str:
+        if (self.salutation or "").strip():
+            return self.salutation.strip()
+        return f"Dear {self.name}" if self.name != "—" else "Dear Sir / Ma'am"
+
+    @property
+    def where(self) -> str:
+        return self.branch.name if self.branch else "Every other company"
+
+
+class Escalation(Base):
+    """One escalation that was raised, kept whether or not it was emailed.
+
+    The row is the record. It is written before the email is attempted and
+    it stays if the attempt fails, with the error on it — so a mail server
+    that was down for a morning shows as four escalations that did not
+    leave, rather than as a quiet morning.
+
+    Unique on (task, level, repeat): a task is never escalated twice for
+    the same level, which is the promise the approved document makes. The
+    repeat number is 0 for the ladder itself and counts up only for the
+    daily reminders after the top rung, so "never twice at the same level"
+    and "keep telling the CMD until it is closed" can both be true.
+    """
+    __tablename__ = "escalations"
+    __table_args__ = (UniqueConstraint("task_id", "level", "repeat_n",
+                                       name="uq_escalation_task_level"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    level: Mapped[int] = mapped_column(Integer)
+    repeat_n: Mapped[int] = mapped_column(Integer, default=0)
+
+    day: Mapped[date] = mapped_column(Date, index=True)
+    days_overdue: Mapped[int] = mapped_column(Integer, default=0)
+
+    to_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    to_email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    cc_emails: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+
+    # "sent", "queued" (written, nowhere to send it yet), "failed".
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    task: Mapped["Task"] = relationship()
+
+    @property
+    def label(self) -> str:
+        """'L2', or 'L3 · reminder 2' for a repeat after the top rung."""
+        base = f"L{self.level}"
+        return base if not self.repeat_n else f"{base} · reminder {self.repeat_n}"
+
+    @property
+    def cc_list(self) -> list[str]:
+        return [a for a in (self.cc_emails or "").split(",") if a.strip()]

@@ -1224,3 +1224,24 @@ body.anon main{max-width:none;margin:0;padding:0;animation:none}
 .sfprevbox input,.sfprevbox select,.sfprevbox textarea{
   max-width:260px;background:var(--card);opacity:.9;cursor:not-allowed}
 .sfprevbox textarea{min-height:44px}
+
+/* ------------------------------------------------------------ Escalation */
+/* A rung's status, and the ones already in use elsewhere given names that
+   read the same here: an escalation is sent, queued or failed. */
+.chip.ok,.chip.sent{background:#dcfce7;color:#166534}
+.chip.bad,.chip.failed{background:#fee2e2;color:#991b1b}
+.chip.queued{background:#f1f5f9;color:#475569}
+.chip.lvl{background:#e0f2fe;color:#075985;font-weight:800}
+.card.warnbox{border-left:3px solid var(--warn);background:#fffbeb}
+/* A tick with its sentence beside it rather than under it — these are
+   settings somebody reads once and the explanation is the point. */
+label.check{display:flex;gap:9px;align-items:flex-start;margin:0 0 9px;
+  text-transform:none;letter-spacing:0;font-size:13px;font-weight:400;
+  color:var(--ink);cursor:pointer}
+label.check input{width:auto;flex:0 0 auto;margin-top:3px}
+/* The message exactly as it went out. Fixed width so the lines of the task's
+   details stay in their columns, which is how they were written. */
+.esc-body{white-space:pre-wrap;font-size:12.5px;line-height:1.55;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--chip);border-radius:8px;padding:13px;overflow:auto}
+.esc-subject{font-weight:700;font-size:13.5px;margin-bottom:8px}
