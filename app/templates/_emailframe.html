@@ -1,0 +1,45 @@
+{# The email itself, rendered.
+
+   Not a description of it and not a re-styled copy: the same bytes the
+   recipient's mail client will be handed, shown in a frame of its own. That
+   distinction is the whole value of the preview page — a page that renders
+   the email its own way can show something pretty and still be wrong about
+   what arrives.
+
+   srcdoc with `sandbox="allow-same-origin"` and nothing else: no scripts
+   run inside it, no forms submit, no plugins load, and nothing it contains
+   can navigate this page. allow-same-origin is there only so the height can
+   be measured below — a frame that cannot be measured is either cropped or
+   padded out with white, and an email is exactly as long as its list.
+#}
+{% macro email_frame(html, who) %}
+<iframe class="esc-frame" srcdoc="{{ html }}" loading="lazy"
+        title="The email to {{ who }}" referrerpolicy="no-referrer"
+        sandbox="allow-same-origin" onload="escFit(this)"></iframe>
+{% endmacro %}
+
+{% macro email_frame_script() %}
+<script>
+// Grow the frame to its content, once it has loaded. Wrapped because a
+// browser that refuses the read (a stricter sandbox policy, a frame that
+// has not painted) must leave the CSS height standing rather than collapse
+// the frame to nothing and hide the email altogether.
+function escFit(f){
+  try{
+    var d = f.contentDocument;
+    if(!d || !d.body) return;
+    var h = Math.max(d.body.scrollHeight,
+                     d.documentElement ? d.documentElement.scrollHeight : 0);
+    if(h > 80) f.style.height = (h + 24) + 'px';
+  }catch(e){ /* keep the height from the stylesheet */ }
+}
+// Images and fonts can land after onload and change the height. One late
+// pass covers it without watching the frame forever.
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    var frames = document.querySelectorAll('.esc-frame');
+    for(var i = 0; i < frames.length; i++) escFit(frames[i]);
+  }, 150);
+});
+</script>
+{% endmacro %}

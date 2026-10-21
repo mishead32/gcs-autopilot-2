@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_emailframe.html" import email_frame, email_frame_script %}
 {% block title %}What would be sent · {{ APP_NAME }}{% endblock %}
 {% block content %}
 
@@ -36,7 +37,9 @@
 
 {% if rows %}
 <p class="sub" style="margin:18px 0 10px">
-  <strong>{{ rows|length }}</strong> escalation(s) would go out.
+  <strong>{{ rows|length }}</strong> email(s) would go out, covering
+  <strong>{{ tasks }}</strong> overdue task(s). One email per person, not
+  one per task.
 </p>
 
 {% for r in rows %}
@@ -46,11 +49,10 @@
     <div>
       <span class="chip lvl">L{{ r.level }}{% if r.repeat_n %} · reminder
         {{ r.repeat_n }}{% endif %}</span>
-      <a class="refid" href="/tasks/{{ r.task.id }}">{{ r.task.ref or r.task.id }}</a>
-      <strong style="margin-left:6px">{{ r.task.title }}</strong>
+      <strong style="margin-left:6px">{{ r.to }}</strong>
+      {% if r.to_doer %}<span class="chip">their own work only</span>{% endif %}
     </div>
-    <span class="chip {{ 'high' if r.late >= 3 else 'medium' }}">
-      {{ r.late }} day(s) overdue</span>
+    <span class="chip medium">{{ r.count }} task(s)</span>
   </div>
 
   <table style="margin-bottom:12px">
@@ -63,18 +65,27 @@
   </table>
 
   <div class="esc-subject">{{ r.subject }}</div>
-  <div class="esc-body">{{ r.body }}</div>
+  {# The real HTML, in a frame of its own. Not a description of the email and
+     not a re-styled copy of it: the same bytes the recipient's mail client
+     will be handed, rendered. srcdoc isolates it, so the email's own styles
+     cannot touch this page and this page's cannot flatter the email. #}
+  {{ email_frame(r.html, r.to) }}
+  <details style="margin-top:10px">
+    <summary class="m">The plain-text version, for anything that cannot
+      show the table</summary>
+    <div class="esc-body" style="margin-top:8px">{{ r.body }}</div>
+  </details>
 </div>
 {% endfor %}
 
 <form method="post" action="/escalation/run" class="card">
   <strong>Happy with it?</strong>
   <p class="m" style="margin:8px 0 12px">
-    Sending from here does exactly what is shown above, and writes each one
-    down so it cannot be sent a second time.
+    Sending from here does exactly what is shown above, and writes every
+    task down so none of them can be escalated at this level a second time.
   </p>
   <button class="btn" name="send" value="1"
-          onclick="return confirm('Send these {{ rows|length }} escalation email(s) now?')">
+          onclick="return confirm('Send these {{ rows|length }} email(s) now?')">
     Send these {{ rows|length }} now</button>
   <a class="btn ghost" href="/escalation">Change the ladder first</a>
 </form>
@@ -102,4 +113,5 @@
   {% endfor %}
 </table></div>
 {% endif %}
+{{ email_frame_script() }}
 {% endblock %}

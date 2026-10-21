@@ -64,7 +64,19 @@
       {% endfor %}
     </select>
 
-    <label style="margin-top:14px">The check runs each morning from</label>
+    <label style="margin-top:14px">This site's web address</label>
+    <input name="site_url" value="{{ org.site_url or '' }}" maxlength="200"
+           placeholder="https://gcs-autopilot-2.onrender.com">
+    <div class="m" style="margin:6px 0 14px">
+      Used for the “open the task” links inside the emails. Filled in from
+      the address you opened this page at. It is worth a glance: the nine
+      o'clock check is not a web request and cannot work this out for
+      itself, so if this is wrong, every link in every escalation is wrong —
+      and the only people who would notice are the ones you least want
+      clicking a dead link.
+    </div>
+
+    <label>The check runs each morning from</label>
     <select name="hour">
       {% for h in range(0, 24) %}
       <option value="{{ h }}" {{ 'selected' if org.esc_hour == h }}>
@@ -115,16 +127,16 @@
 
     {% if recent %}
     <div class="card">
-      <strong>Last few escalations</strong>
+      <strong>Last few emails</strong>
       <table style="margin-top:10px">
         {% for e in recent %}
         <tr>
-          <td style="white-space:nowrap"><a href="/escalation/log/{{ e.id }}"
-             class="refid">{{ e.task.ref or e.task_id }}</a></td>
-          <td><span class="chip {{ 'bad' if e.level >= 3 else 'normal' }}">{{ e.label }}</span></td>
-          <td>{{ e.to_name }}</td>
+          <td><span class="chip lvl">{{ e.label }}</span></td>
+          <td><a href="/escalation/mail/{{ e.id }}">{{ e.to_name }}</a>
+            {% if e.to_doer %}<span class="chip">own work</span>{% endif %}</td>
+          <td class="m">{{ e.task_count }} task(s)</td>
           <td class="m">{{ e.day.strftime('%d %b') }}</td>
-          <td><span class="chip {{ {'sent':'ok','failed':'bad'}.get(e.status,'') }}">{{ e.status }}</span></td>
+          <td><span class="chip {{ e.status }}">{{ e.status }}</span></td>
         </tr>
         {% endfor %}
       </table>
@@ -234,15 +246,21 @@
   <label class="check">
     <input type="checkbox" name="cc_doer" value="1"
            {{ 'checked' if (r.cc_doer if r else True) }}>
-    <span>Copy the doer — nobody is reported over their head unseen</span></label>
+    <span>Send each doer their own copy — so nobody is reported over their
+      head unseen. They are <strong>not</strong> copied on the list above:
+      that one names everybody, and a person's standing with the CMD is not
+      something to hand round the office by accident. Each doer gets only
+      their own rows.</span></label>
   <label class="check">
     <input type="checkbox" name="cc_earlier" value="1"
            {{ 'checked' if (r.cc_earlier if r else True) }}>
-    <span>Copy every level already escalated to</span></label>
+    <span>Copy every level already escalated to — they are answerable for
+      this work already, so a reply from above reaches them too</span></label>
   <label class="check">
     <input type="checkbox" name="cc_assigner" value="1"
            {{ 'checked' if r and r.cc_assigner }}>
-    <span>Copy whoever gave out the task</span></label>
+    <span>Copy whoever gave out the task <em>(has no effect on a grouped
+      email — one list covers work handed out by several people)</em></span></label>
 {% endmacro %}
 
 {% if rows %}

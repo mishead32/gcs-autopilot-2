@@ -101,12 +101,19 @@ def _safe(text: str) -> str:
 
 
 def send(to: list[str], subject: str, body: str,
-         cc: list[str] | None = None) -> tuple[bool, str]:
+         cc: list[str] | None = None, html: str = "") -> tuple[bool, str]:
     """Send one message. Returns (sent, reason-when-not).
+
+    With `html` the message goes out as multipart/alternative: the HTML
+    version for the mail clients that can show it, the plain text for the
+    ones that cannot. Both say the same thing, which is the point — a
+    recipient whose client strips HTML still gets the whole list rather
+    than an empty email, and a spam filter scoring a message with an HTML
+    part and no text part treats it worse.
 
     Never raises. The caller is a background job running at nine in the
     morning: a refused connection must leave a record and move on to the
-    next overdue task, not end the run.
+    next person, not end the run.
     """
     to = clean(to)
     cc = clean(cc)
@@ -130,7 +137,12 @@ def send(to: list[str], subject: str, body: str,
     # Marks it as a machine's message, so a mail server does not answer the
     # auto-reply of an out-of-office with another escalation email.
     msg["Auto-Submitted"] = "auto-generated"
+    # Text first, then HTML as the alternative. The order matters: a mail
+    # client shows the LAST part it understands, so text-then-HTML means an
+    # HTML client shows the table and a plain one shows the text.
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
 
     try:
         if PORT == 465:

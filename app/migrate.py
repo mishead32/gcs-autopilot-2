@@ -73,6 +73,20 @@ ADDITIONS = {
         ("esc_scope", "VARCHAR(10) DEFAULT 'chased'"),
         ("esc_hour", "INTEGER DEFAULT 9"),
         ("esc_last_run", "DATE"),
+        # This site's address, for the links inside an escalation email.
+        # Filled in the first time the Escalation page is opened.
+        ("site_url", "VARCHAR(200)"),
+    ],
+    "escalation_mails": [
+        # The HTML version of the message. NULL on a row written before the
+        # email had one, which still reads back as the plain text it was.
+        ("body_html", "TEXT"),
+    ],
+    "escalations": [
+        # Escalations are grouped into one email per person per morning.
+        # NULL on a row written before that, which carried its own message
+        # in its own subject/body columns — and still reads as it was sent.
+        ("mail_id", "INTEGER"),
     ],
     "branches": [
         # Existing companies get Sunday off, which is true of every one of

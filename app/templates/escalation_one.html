@@ -1,18 +1,19 @@
 {% extends "base.html" %}
-{% block title %}{{ esc.label }} · {{ esc.task.ref or esc.task_id }} · {{ APP_NAME }}{% endblock %}
+{% from "_emailframe.html" import email_frame, email_frame_script %}
+{% block title %}{{ esc.label }} · {{ task.ref if task else esc.task_id }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
 
 <div class="page-head">
   <div>
     <h1><span class="chip lvl">{{ esc.label }}</span>
-      {{ esc.task.ref or esc.task_id }}</h1>
+      {{ task.ref or esc.task_id if task else esc.task_id }}</h1>
     <p class="sub">{{ esc.day.strftime('%A %d %b %Y') }} ·
       {{ esc.days_overdue }} day(s) overdue at the time ·
-      <span class="chip {{ esc.status }}">{{ esc.status }}</span></p>
+      <span class="chip {{ esc.delivery }}">{{ esc.delivery }}</span></p>
   </div>
   <div>
     <a class="btn ghost" href="/tasks/{{ esc.task_id }}">The task</a>
-    <a class="btn ghost" href="/escalation/log">← The log</a>
+    <a class="btn ghost" href="/escalation/log?view=tasks">← The log</a>
   </div>
 </div>
 
@@ -26,23 +27,32 @@
     {% endif %}
     <tr><td><strong>Raised</strong></td>
         <td>{{ esc.created_at|dt('%d %b %Y, %I:%M %p') }}</td></tr>
-    <tr><td><strong>Sent</strong></td>
-        <td>{% if esc.sent_at %}{{ esc.sent_at|dt('%d %b %Y, %I:%M %p') }}
-            {% else %}<span class="chip {{ esc.status }}">{{ esc.status }}</span>
-            {% endif %}</td></tr>
-    {% if esc.error %}
-    <tr><td><strong>Reason</strong></td><td class="m">{{ esc.error }}</td></tr>
+    {% if esc.delivery_error %}
+    <tr><td><strong>Reason</strong></td><td class="m">{{ esc.delivery_error }}</td></tr>
     {% endif %}
   </table>
 </div>
 
 <div class="card">
-  <strong>The message, exactly as it was written</strong>
+  <strong>The email this task went out in</strong>
+  {% if mail %}
   <p class="m" style="margin:6px 0 12px">
-    Kept on the row rather than rebuilt from the task, so it still reads
-    as it was sent even after the task's title, doer or date has changed.
+    One email covered {{ mail.task_count }} task(s) escalated to
+    {{ mail.to_name }} that morning — this was one of them.
+    <a href="/escalation/mail/{{ mail.id }}">See all of them →</a>
   </p>
-  <div class="esc-subject">{{ esc.subject }}</div>
-  <div class="esc-body">{{ esc.body }}</div>
+  {% else %}
+  <p class="m" style="margin:6px 0 12px">
+    Raised before escalations were grouped into one email per person, so this
+    one went out on its own. Kept exactly as it was sent.
+  </p>
+  {% endif %}
+  <div class="esc-subject">{{ esc.message_subject }}</div>
+  {% if mail and mail.body_html %}
+  {{ email_frame(mail.body_html, mail.to_name) }}
+  {% else %}
+  <div class="esc-body">{{ esc.message_body }}</div>
+  {% endif %}
 </div>
+{{ email_frame_script() }}
 {% endblock %}

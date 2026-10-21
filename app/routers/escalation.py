@@ -26,7 +26,8 @@ from .. import clock, flash
 from ..db import get_db
 from ..deps import require_right
 from ..models import (
-    Branch, Escalation, EscalationRule, Organization, Right, Task, User,
+    Branch, Escalation, EscalationMail, EscalationRule, Organization, Right,
+    Task, User,
 )
 from ..services import escalation as esc_svc
 from ..services import mail
@@ -85,6 +86,15 @@ def page(request: Request, scope: str = "",
     # arrives with the approved shape already in it rather than blank.
     esc_svc.seed(db, org.id)
 
+    # And learn this site's own address from the request that got here, for
+    # the links inside the nine o'clock emails — which are not a request and
+    # cannot work it out for themselves. Learned once and then left alone,
+    # so a deliberate change on this page is not overwritten by the next
+    # person who opens it at a different address.
+    if not (org.site_url or "").strip():
+        org.site_url = _site(request)
+        db.commit()
+
     branch_id = _scope(db, scope, user)
     branches = db.scalars(
         select(Branch).where(Branch.org_id == org.id).order_by(Branch.name)
@@ -101,8 +111,8 @@ def page(request: Request, scope: str = "",
         .order_by(User.name)
     ).all()
     recent = db.scalars(
-        select(Escalation).where(Escalation.org_id == org.id)
-        .order_by(Escalation.created_at.desc()).limit(8)
+        select(EscalationMail).where(EscalationMail.org_id == org.id)
+        .order_by(EscalationMail.created_at.desc()).limit(8)
     ).all()
 
     return templates.TemplateResponse(request, "escalation.html", {
@@ -122,6 +132,7 @@ def page(request: Request, scope: str = "",
 def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),
                   scope: str = Form("chased"), hour: str = Form("9"),
+                  site_url: str = Form(""),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
@@ -141,6 +152,13 @@ def save_settings(request: Request, esc_on: str = Form(""),
         raise HTTPException(400, "Choose what happens after the top level.")
     if scope not in SCOPES:
         raise HTTPException(400, "Choose which work escalates.")
+
+    address = site_url.strip().rstrip("/")
+    if address and not address.startswith(("http://", "https://")):
+        raise HTTPException(
+            400, "The web address has to start with https:// — otherwise "
+                 "every link in every escalation email is a dead one.")
+    org.site_url = address or None
 
     org.esc_on = want_on
     org.esc_working_days = bool(working_days)
@@ -257,37 +275,34 @@ def preview(request: Request, user: User = Depends(manage),
     """
     org = _org(db, user)
     today = clock.today()
-    rows = esc_svc.overdue_tasks(db, org.id, today, org.esc_working_days,
-                                 org.esc_scope)
-    out, skipped = [], []
-    for task, late in rows:
-        rungs = esc_svc.ladder(db, org.id, task.branch_id)
-        if not rungs:
-            skipped.append((task, late, "No level is set for that company."))
-            continue
-        sent = esc_svc.already(db, task.id)
-        step = esc_svc.next_step(sent, late, rungs, org.esc_after_top, today)
-        if step is None:
-            if any(e.day == today for e in sent):
-                why = "Already escalated today."
-            elif sent:
-                why = (f"Level {max(e.level for e in sent)} is the top of that "
-                       "ladder and has been sent.")
-            else:
-                why = "Not yet at the first level."
-            skipped.append((task, late, why))
-            continue
-        level, repeat_n = step
-        rule = rungs[level]
-        subject, body, cc = esc_svc.compose(db, task, late, level, repeat_n,
-                                            rule, rungs, _site(request), sent)
-        out.append({"task": task, "late": late, "level": level,
-                    "repeat_n": repeat_n, "to": rule.name,
-                    "email": rule.email, "cc": cc,
-                    "subject": subject, "body": body})
+    groups, skipped, _gap = esc_svc.plan(db, org, today)
+
+    out = []
+    for g in groups:
+        rule = g["rule"]
+        subject, body, body_html, cc = esc_svc.compose(
+            g["rows"], g["level"], g["repeat_n"], rule, g["rungs"],
+            _site(request), g["below_sent"])
+        out.append({"to": rule.name, "email": rule.email, "cc": cc,
+                    "level": g["level"], "repeat_n": g["repeat_n"],
+                    "count": len(g["rows"]), "to_doer": False,
+                    "subject": subject, "body": body, "html": body_html})
+        # And each doer's own copy of their own rows — shown here too, so
+        # nobody is surprised by an email they did not know went out.
+        if rule.cc_doer:
+            for person, rows in esc_svc._doer_copies(g):
+                d_sub, d_body, d_html, _c = esc_svc.compose(
+                    rows, g["level"], g["repeat_n"], rule, g["rungs"],
+                    _site(request), g["below_sent"], for_doer=person.name)
+                out.append({"to": person.name, "email": person.email,
+                            "cc": [], "level": g["level"],
+                            "repeat_n": g["repeat_n"], "count": len(rows),
+                            "to_doer": True, "subject": d_sub,
+                            "body": d_body, "html": d_html})
 
     return templates.TemplateResponse(request, "escalation_preview.html", {
         "user": user, "org": org, "rows": out, "skipped": skipped,
+        "tasks": sum(g["count"] for g in out if not g["to_doer"]),
         "today": today, "mail_on": mail.enabled(),
         "mail_status": mail.status(),
     })
@@ -312,7 +327,7 @@ def run_now(request: Request, send: str = Form(""),
     org = _org(db, user)
     result = esc_svc.run(db, org, send=bool(send), site=_site(request),
                          force=True)
-    bits = [f"{result['raised']} raised"]
+    bits = [f"{result['raised']} task(s) in {result['emails']} email(s)"]
     if result["sent"]:
         bits.append(f"{result['sent']} emailed")
     if result["failed"]:
@@ -321,8 +336,7 @@ def run_now(request: Request, send: str = Form(""),
         bits.append(f"{result['queued']} recorded only")
     if result["skipped_no_ladder"]:
         bits.append(f"{result['skipped_no_ladder']} skipped for want of a ladder")
-    flash.set(request, "saved",
-              f"Checked {result['looked']} overdue task(s): " + ", ".join(bits))
+    flash.set(request, "saved", "Escalated " + ", ".join(bits))
     return RedirectResponse("/escalation/log", status_code=303)
 
 
@@ -330,41 +344,91 @@ def run_now(request: Request, send: str = Form(""),
 
 @router.get("/log", response_class=HTMLResponse)
 def log(request: Request, level: str = "", status: str = "", day: str = "",
-        task: str = "", user: User = Depends(manage),
+        task: str = "", view: str = "mails", user: User = Depends(manage),
         db: Session = Depends(get_db)):
-    org = _org(db, user)
-    q = select(Escalation).where(Escalation.org_id == org.id)
-    if level.isdigit():
-        q = q.where(Escalation.level == int(level))
-    if status in ("sent", "queued", "failed"):
-        q = q.where(Escalation.status == status)
-    if day:
-        try:
-            q = q.where(Escalation.day == date.fromisoformat(day))
-        except ValueError:
-            raise HTTPException(400, "That is not a valid date.")
-    if task.strip():
-        ref = task.strip().upper()
-        hit = db.scalar(select(Task).where(Task.org_id == org.id,
-                                           Task.ref == ref))
-        q = q.where(Escalation.task_id == (hit.id if hit else -1))
+    """The trail, read either way round.
 
-    rows = db.scalars(q.order_by(Escalation.created_at.desc()).limit(400)).all()
+    Two views of the same thing, because there are two questions. "What went
+    out on Tuesday" is about emails; "has DEL-341 ever been escalated, and
+    to whom" is about one task. One list cannot answer both well, so the log
+    answers the first by default and switches to the second the moment
+    somebody types a Task ID.
+    """
+    org = _org(db, user)
+    if task.strip():
+        view = "tasks"
+
+    mails: list[EscalationMail] = []
+    rows: list[Escalation] = []
+
+    if view == "tasks":
+        q = select(Escalation).where(Escalation.org_id == org.id)
+        if level.isdigit():
+            q = q.where(Escalation.level == int(level))
+        if day:
+            q = q.where(Escalation.day == _day(day))
+        if task.strip():
+            ref = task.strip().upper()
+            hit = db.scalar(select(Task).where(Task.org_id == org.id,
+                                               Task.ref == ref))
+            q = q.where(Escalation.task_id == (hit.id if hit else -1))
+        rows = db.scalars(
+            q.order_by(Escalation.created_at.desc()).limit(400)).all()
+        if status in ("sent", "queued", "failed"):
+            rows = [e for e in rows if e.delivery == status]
+    else:
+        q = select(EscalationMail).where(EscalationMail.org_id == org.id)
+        if level.isdigit():
+            q = q.where(EscalationMail.level == int(level))
+        if status in ("sent", "queued", "failed"):
+            q = q.where(EscalationMail.status == status)
+        if day:
+            q = q.where(EscalationMail.day == _day(day))
+        mails = db.scalars(
+            q.order_by(EscalationMail.created_at.desc()).limit(300)).all()
+
     return templates.TemplateResponse(request, "escalation_log.html", {
-        "user": user, "org": org, "rows": rows, "level": level,
-        "status": status, "day": day, "task": task,
-        "levels": sorted({e.level for e in db.scalars(
-            select(Escalation).where(Escalation.org_id == org.id)).all()}),
+        "user": user, "org": org, "mails": mails, "rows": rows,
+        "view": view, "level": level, "status": status, "day": day,
+        "task": task,
+        "levels": sorted({m.level for m in db.scalars(
+            select(EscalationMail).where(
+                EscalationMail.org_id == org.id)).all()}
+            | {e.level for e in db.scalars(
+                select(Escalation).where(
+                    Escalation.org_id == org.id)).all()}),
     })
+
+
+def _day(raw: str) -> date:
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(400, "That is not a valid date.")
 
 
 @router.get("/log/{esc_id}", response_class=HTMLResponse)
 def one(esc_id: int, request: Request, user: User = Depends(manage),
         db: Session = Depends(get_db)):
-    """The message exactly as it went out, kept for the record."""
+    """The email that carried one task, exactly as it went out."""
     esc = db.get(Escalation, esc_id)
     if esc is None or esc.org_id != user.org_id:
         raise HTTPException(404, "That escalation is not on this system.")
     return templates.TemplateResponse(request, "escalation_one.html", {
-        "user": user, "esc": esc,
+        "user": user, "esc": esc, "mail": esc.mail, "task": esc.task,
+    })
+
+
+@router.get("/mail/{mail_id}", response_class=HTMLResponse)
+def one_mail(mail_id: int, request: Request, user: User = Depends(manage),
+             db: Session = Depends(get_db)):
+    """One morning's email, with every task it carried."""
+    m = db.get(EscalationMail, mail_id)
+    if m is None or m.org_id != user.org_id:
+        raise HTTPException(404, "That email is not on this system.")
+    return templates.TemplateResponse(request, "escalation_mail.html", {
+        "user": user, "mail": m,
+        "items": sorted(m.items, key=lambda e: (
+            (e.task.doer.name or "").strip().lower()
+            if e.task and e.task.doer else "", e.id)),
     })

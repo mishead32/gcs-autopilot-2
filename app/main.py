@@ -190,7 +190,7 @@ def _escalate() -> str:
         result = escalation_svc.run_daily(db, site=os.getenv("SITE_URL", ""))
     if not result or not result["raised"]:
         return ""
-    bits = [f"{result['raised']} raised"]
+    bits = [f"{result['raised']} task(s) in {result['emails']} email(s)"]
     for key, word in (("sent", "emailed"), ("failed", "could not be sent"),
                       ("queued", "recorded only")):
         if result[key]:

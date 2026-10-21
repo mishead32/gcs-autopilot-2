@@ -13,7 +13,19 @@
   <a class="btn ghost" href="/escalation">← Escalation</a>
 </div>
 
+{# Two views of one thing, because there are two questions: "what went out on
+   Tuesday" and "has DEL-341 ever been escalated". One list answers either
+   badly, so the log answers the first and switches to the second the moment
+   a Task ID is typed. #}
+<div class="tabs">
+  <a class="{{ 'active' if view != 'tasks' }}"
+     href="/escalation/log?view=mails">Emails sent</a>
+  <a class="{{ 'active' if view == 'tasks' }}"
+     href="/escalation/log?view=tasks">Task by task</a>
+</div>
+
 <form class="card" method="get" action="/escalation/log">
+  <input type="hidden" name="view" value="{{ view }}">
   <div class="row">
     <div><label>Task ID</label>
       <input name="task" value="{{ task }}" placeholder="DEL-341"></div>
@@ -37,8 +49,15 @@
       <button class="btn">Filter</button>
       <a class="btn ghost" href="/escalation/log">Clear</a></div>
   </div>
+  <p class="m" style="margin:10px 0 0">
+    Typing a Task ID switches to <strong>Task by task</strong> — one email
+    covers many tasks, so a Task ID is not a thing an email list can filter
+    on.
+  </p>
 </form>
 
+{% if view == 'tasks' %}
+{# ------------------------------------------------------------ task by task #}
 {% if rows %}
 <div class="table-wrap">
 <table>
@@ -49,32 +68,72 @@
     <td style="white-space:nowrap">{{ e.day.strftime('%d %b %Y') }}</td>
     <td><span class="chip lvl">{{ e.label }}</span></td>
     <td class="refcell"><a class="refid" href="/tasks/{{ e.task_id }}">
-      {{ e.task.ref or e.task_id }}</a></td>
-    <td><a href="/tasks/{{ e.task_id }}">{{ e.task.title }}</a>
-      <div class="m rowsub">{{ e.task.branch.name if e.task.branch else 'Head office' }}</div></td>
-    <td class="m">{{ e.task.doer.name if e.task.doer else '—' }}</td>
+      {{ e.task.ref or e.task_id if e.task else e.task_id }}</a></td>
+    <td>{% if e.task %}<a href="/tasks/{{ e.task_id }}">{{ e.task.title }}</a>
+      <div class="m rowsub">{{ e.task.branch.name if e.task.branch else 'Head office' }}</div>
+      {% else %}<span class="m">task since deleted</span>{% endif %}</td>
+    <td class="m">{{ e.task.doer.name if e.task and e.task.doer else '—' }}</td>
     <td>{{ e.days_overdue }} day(s)</td>
     <td>{{ e.to_name or '—' }}<div class="m rowsub">{{ e.to_email or '' }}</div></td>
-    <td><span class="chip {{ e.status }}">{{ e.status }}</span>
-      {% if e.error %}<div class="m rowsub">{{ e.error }}</div>{% endif %}</td>
-    <td><a class="btn sm ghost" href="/escalation/log/{{ e.id }}">The message</a></td>
+    <td><span class="chip {{ e.delivery }}">{{ e.delivery }}</span>
+      {% if e.delivery_error %}<div class="m rowsub">{{ e.delivery_error }}</div>{% endif %}</td>
+    <td><a class="btn sm ghost" href="/escalation/log/{{ e.id }}">The email</a></td>
   </tr>
   {% endfor %}
 </table></div>
 <p class="m" style="margin-top:10px">
   {{ rows|length }} escalation(s){% if rows|length == 400 %} — the most recent
-  400. Narrow it with the filters above{% endif %}.
+  400. Narrow it with the filters above{% endif %}. Several rows can share one
+  email: that is the point of grouping them.
+</p>
+{% else %}
+<div class="empty">
+  {% if task %}Nothing has been escalated for “{{ task }}”.
+  {% elif level or status or day %}Nothing matches those filters.
+  {% else %}Nothing has been escalated yet.{% endif %}
+</div>
+{% endif %}
+
+{% else %}
+{# -------------------------------------------------------------- the emails #}
+{% if mails %}
+<div class="table-wrap">
+<table>
+  <tr><th>Day</th><th>Level</th><th>Went to</th><th>Covering</th>
+    <th>Delivery</th><th></th></tr>
+  {% for m in mails %}
+  <tr>
+    <td style="white-space:nowrap">{{ m.day.strftime('%d %b %Y') }}
+      <div class="m rowsub">{{ m.created_at|dt('%I:%M %p') }}</div></td>
+    <td><span class="chip lvl">{{ m.label }}</span></td>
+    <td><a href="/escalation/mail/{{ m.id }}"><strong>{{ m.to_name or '—' }}</strong></a>
+      <div class="m rowsub">{{ m.to_email or '' }}</div></td>
+    <td><strong>{{ m.task_count }}</strong> task(s)
+      {% if m.to_doer %}<div class="m rowsub">their own work only</div>{% endif %}</td>
+    <td><span class="chip {{ m.status }}">{{ m.status }}</span>
+      {% if m.error %}<div class="m rowsub">{{ m.error }}</div>{% endif %}</td>
+    <td><a class="btn sm ghost" href="/escalation/mail/{{ m.id }}">The email</a></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{# Counted off the ladder emails alone. A doer's copy covers the same tasks
+   a second time, so adding every row's count says a morning escalated twice
+   as much work as it did. #}
+{% set up = mails|rejectattr('to_doer')|list %}
+{% set copies = mails|selectattr('to_doer')|list %}
+<p class="m" style="margin-top:10px">
+  {{ up|length }} email(s) up the ladder, covering
+  {{ up|sum(attribute='task_count') }} escalated task(s){% if copies %},
+  plus {{ copies|length }} copy(ies) to the doers of their own work{% endif %}.
   <strong>Queued</strong> means it was recorded but there was nowhere to send
   it; <strong>failed</strong> means the mail server refused it, and the reason
   is beside it.
 </p>
 {% else %}
 <div class="empty">
-  {% if task or level or status or day %}
-  Nothing matches those filters.
-  {% else %}
-  Nothing has been escalated yet.
-  {% endif %}
+  {% if level or status or day %}Nothing matches those filters.
+  {% else %}Nothing has been escalated yet.{% endif %}
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}

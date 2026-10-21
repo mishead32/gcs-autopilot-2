@@ -8905,8 +8905,13 @@ with _slK() as _d:
     check("step 4 after step 3", _d4 >= _d3, (str(_d3), str(_d4)))
     check("and each step is planned later than the one before it",
           _d1 <= _d2 <= _d3 <= _d4)
-    check("so the last step's date is several days past the first's",
-          3 <= (_d4 - _d1).days <= 5, str(_d4 - _d1))
+    # The span is a ceiling, not an exact figure. The gaps add up to four
+    # days, and a planned date landing on a closed day is pulled BACK to the
+    # working day before — never forward — so the chain can only ever be
+    # shorter than its gaps, by however many closed days it crosses. That it
+    # never runs backwards is the assertion above; this is the other half.
+    check("the chain spans no more than the gaps it is built from",
+          (_d4 - _d1).days <= 4, str(_d4 - _d1))
 
     # Visible, but not work anybody is behind on.
     check("a planned step is not chased", not _chW.needs_chasing(_rows[2]))
@@ -9771,6 +9776,7 @@ print("\n-- Escalation --")
 from datetime import date as _dQ, timedelta as _tdQ
 from app.db import SessionLocal as _slQ
 from app.models import (Branch as _BrQ, Escalation as _EsQ,
+                        EscalationMail as _EmQ,
                         EscalationRule as _ErQ, Organization as _OgQ,
                         Priority as _PrQ, Task as _TkQ, TaskSource as _TsQ,
                         TaskStatus as _StQ, User as _UsQ)
@@ -9931,33 +9937,321 @@ with _slQ() as _d:
     _tkQ = _d.get(_TkQ, _tidQ)
     _sentQ = _escQ.already(_d, _tidQ)
     _l1, _l2, _l3 = _sentQ[0], _sentQ[1], _sentQ[2]
-    check("level 1 copies the doer, so nobody is reported unseen",
-          _tkQ.doer.email in _l1.cc_list, _l1.cc_list)
-    check("level 2 copies the doer and the HOD already told",
-          any("santosh" in a for a in _l2.cc_list) and
-          _tkQ.doer.email in _l2.cc_list, _l2.cc_list)
-    check("level 3 copies the doer, the HOD and the EA",
+    check("the escalation going up the ladder does NOT copy the doer",
+          _tkQ.doer.email not in _l1.cc_list, _l1.cc_list)
+    check("level 2 copies the HOD already told",
+          any("santosh" in a for a in _l2.cc_list), _l2.cc_list)
+    check("level 3 copies the HOD and the EA",
           any("santosh" in a for a in _l3.cc_list) and
           any("ea-" in a for a in _l3.cc_list), _l3.cc_list)
     check("and never copies the person it is addressed to",
           _l3.to_email not in _l3.cc_list)
 
-    check("the subject names the task ID and the days overdue",
-          _refQ in _l1.subject and "overdue by 1 day" in _l1.subject,
-          _l1.subject)
+    check("the subject says how many tasks and how overdue",
+          "1 overdue task" in _l1.message_subject and
+          "up to 1 day" in _l1.message_subject, _l1.message_subject)
     check("the CMD's subject is marked urgent",
-          _l3.subject.startswith("[URGENT Escalation L3]"), _l3.subject)
+          _l3.message_subject.startswith("[URGENT Escalation L3]"),
+          _l3.message_subject)
     check("the CMD is addressed as the approved template addresses him",
-          _l3.body.startswith("Respected CMD Sir,"), _l3.body[:40])
-    for _field in ("Task ID:", "Task:", "Doer:", "Assigned by:",
-                   "Due date:", "Days overdue:"):
-        check(f"every escalation states the {_field.strip(':')}",
-              _field in _l1.body, _field)
-    check("the message is kept on the row, as it was written",
-          _l1.body and _l1.subject)
+          _l3.message_body.startswith("Respected CMD Sir,"),
+          _l3.message_body[:40])
     check("the CMD's letter says the levels below were escalated, "
           "because for this task they were",
-          "after escalation at every level below" in _l3.body, _l3.body[:160])
+          "after escalation at every level below" in _l3.message_body,
+          _l3.message_body[:160])
+
+    # The five things the user asked the list to carry, plus the days
+    # overdue, as column headings of a fixed-width table.
+    for _head in ("Task ID", "Doer", "Planned", "Priority", "Overdue", "Task"):
+        check(f"the list has a {_head} column", _head in _l1.message_body,
+              _l1.message_body[:300])
+    check("and the task's own row is in it",
+          _refQ in _l1.message_body, _l1.message_body[:400])
+    check("with its planned date and priority",
+          "HIGH" in _l1.message_body and
+          _tkQ.due_at.strftime("%d %b") in _l1.message_body)
+    check("the message is kept on the email, not copied onto every task row",
+          _l1.mail is not None and _l1.body == "" and _l1.mail.body != "")
+    check("and the task reads it back through the email it rode in",
+          _l1.message_body == _l1.mail.body)
+
+# ------------------------------------------------- one email, many tasks --
+# A HOD with twenty-five overdue tasks must not get twenty-five emails.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _jhQ = _d.scalar(_SEL(_BrQ).where(_BrQ.name == "GCS Jharkhand"))
+    _bossQ = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    _crewQ = _d.scalars(_SEL(_UsQ).where(_UsQ.active.is_(True))
+                        .order_by(_UsQ.name)).all()[:3]
+    # Three doers, six tasks, all at the same company and the same rung.
+    _manyQ = []
+    for _i in range(6):
+        _t = _TkQ(org_id=_orgQ.id, branch_id=_jhQ.id,
+                  title=f"SMOKE grouped {_i} {RUN}", assigner_id=_bossQ.id,
+                  doer_id=_crewQ[_i % 3].id,
+                  priority=[_PrQ.HIGH, _PrQ.MEDIUM, _PrQ.LOW][_i % 3],
+                  source=_TsQ.DELEGATION, status=_StQ.PENDING,
+                  due_at=_dtC(2026, 11, 2, 18), requires_attachment=False)
+        _d.add(_t); _manyQ.append(_t)
+    _d.commit()
+    _manyIdsQ = [t.id for t in _manyQ]
+
+    _resQ = _escQ.run(_d, _orgQ, on=_dQ(2026, 11, 3), send=False, force=True)
+    _mineQ = _d.scalars(_SEL(_EsQ).where(
+        _EsQ.task_id.in_(_manyIdsQ))).all()
+    check("all six tasks are escalated", len(_mineQ) == 6, len(_mineQ))
+    _mailsQ = {e.mail_id for e in _mineQ}
+    check("but they share ONE email, not six",
+          len(_mailsQ) == 1, _mailsQ)
+    _mQ = _d.get(_EmQ, _mineQ[0].mail_id)
+    check("and that email says it covers six tasks",
+          _mQ.task_count == 6, _mQ.task_count)
+    check("the subject says six, so it can be triaged before opening",
+          "6 overdue tasks" in _mQ.subject, _mQ.subject)
+    check("every one of the six is listed in it",
+          all((_d.get(_TkQ, i).ref in _mQ.body) for i in _manyIdsQ),
+          _mQ.body)
+
+    # Sorted by doer name A to Z — the thing that makes it readable.
+    _bodyQ = _mQ.body.splitlines()
+    _dataQ = [l for l in _bodyQ if l.startswith("DEL-")]
+    _namesQ = [l[12:34].strip() for l in _dataQ]
+    check("the rows are sorted by doer name, A to Z",
+          _namesQ == sorted(_namesQ, key=str.lower), _namesQ)
+    check("so one person's tasks sit together",
+          len(_dataQ) == 6, _dataQ)
+
+# ----------------------------------------- each doer their own copy only --
+# Copying every doer on a list of everybody's overdue work would show each
+# of them all the others'. A person's standing with the CMD is not something
+# to hand round the office by accident. So the invariant checked here is the
+# one that matters: no doer's copy ever names another doer's work.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _ladderQ = _d.scalars(_SEL(_EmQ).where(
+        _EmQ.org_id == _orgQ.id, _EmQ.to_doer.is_(False),
+        _EmQ.day == _dQ(2026, 11, 3))).all()
+    _copiesQ = _d.scalars(_SEL(_EmQ).where(
+        _EmQ.org_id == _orgQ.id, _EmQ.to_doer.is_(True),
+        _EmQ.day == _dQ(2026, 11, 3))).all()
+    check("a morning produces ladder emails and doer copies",
+          _ladderQ and _copiesQ, (len(_ladderQ), len(_copiesQ)))
+
+    # No ladder email copies a doer in.
+    _doerMailsQ = {(u.email or "").lower() for u in _d.scalars(
+        _SEL(_UsQ).where(_UsQ.org_id == _orgQ.id)).all() if u.email}
+    _leakedQ = [m.id for m in _ladderQ
+                if any(a.lower() in _doerMailsQ for a in m.cc_list)]
+    check("no email going up the ladder copies a doer in",
+          not _leakedQ, _leakedQ)
+
+    # And every row of a doer's copy is that doer's own work.
+    _refOwnerQ = {}
+    for _tRow in _d.scalars(_SEL(_TkQ).where(_TkQ.org_id == _orgQ.id,
+                                             _TkQ.ref.is_not(None))).all():
+        _refOwnerQ[_tRow.ref] = _tRow.doer.name if _tRow.doer else None
+    _badQ = []
+    for _cQ in _copiesQ:
+        for _line in _cQ.body.splitlines():
+            _ref = _line.split()[0] if _line[:3] in ("DEL", "CL-", "FMS") else ""
+            if _ref and _refOwnerQ.get(_ref) not in (None, _cQ.to_name):
+                _badQ.append((_cQ.to_name, _ref, _refOwnerQ.get(_ref)))
+    check("every row of a doer's own copy is that doer's own work",
+          not _badQ, _badQ[:4])
+    check("a doer's copy covers at least one task each",
+          all(c.task_count >= 1 for c in _copiesQ),
+          [c.task_count for c in _copiesQ])
+    check("a doer's copy is addressed to them by their whole name, "
+          "not the first word of a role title",
+          all(c.body.startswith(f"Dear {c.to_name},") for c in _copiesQ),
+          [c.body[:30] for c in _copiesQ])
+    check("and it says who the work was reported to",
+          all("reported to" in c.subject for c in _copiesQ),
+          [c.subject for c in _copiesQ])
+    check("a doer's copy is never addressed to a ladder recipient",
+          all(c.to_email not in {m.to_email for m in _ladderQ}
+              for c in _copiesQ))
+
+    # The six grouped tasks' own doers each got a copy.
+    _sixDoersQ = {_d.get(_TkQ, i).doer.name for i in _manyIdsQ}
+    check("each doer of the six grouped tasks got a copy",
+          _sixDoersQ <= {c.to_name for c in _copiesQ},
+          (_sixDoersQ, {c.to_name for c in _copiesQ}))
+
+# ----------------------------------------------------- the HTML email ----
+# What the recipient actually reads. Table layout, inline styles, striped
+# rows — and every value out of the database escaped, because task titles
+# and people's names are typed by hand by twenty staff.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _mQ = _d.scalar(_SEL(_EmQ).where(_EmQ.org_id == _orgQ.id,
+                                     _EmQ.to_doer.is_(False))
+                    .order_by(_EmQ.id.desc()))
+    check("the email has an HTML version", (_mQ.body_html or "").strip(),
+          _mQ.id)
+    check("and a plain-text version alongside it", _mQ.body.strip())
+    check("the HTML is a whole document, not a fragment",
+          _mQ.body_html.startswith("<!doctype html>")
+          and _mQ.body_html.rstrip().endswith("</html>"))
+    check("it lays out with tables, which is what Outlook understands",
+          "<table" in _mQ.body_html and "display:flex" not in _mQ.body_html)
+    check("every style is inline — a stripped <style> block is a table "
+          "that arrives unformatted",
+          "<style" not in _mQ.body_html.lower())
+    check("nothing is loaded from the network",
+          "<img" not in _mQ.body_html.lower()
+          and "http://" not in _mQ.body_html.replace("http://www.w3.org", ""))
+    check("the rows are striped, set per row rather than with :nth-child",
+          _mQ.body_html.count("background:#f4f7fa") >= 1
+          and "nth-child" not in _mQ.body_html)
+    for _h in ("Task&nbsp;ID", "Doer", "Planned date", "Priority",
+               "Overdue", "Task"):
+        check(f"the HTML table has a {_h.replace('&nbsp;', ' ')} column",
+              f">{_h}<" in _mQ.body_html, _h)
+    check("a priority shows as a coloured pill",
+          "border-radius:11px" in _mQ.body_html)
+    check("and the level is on the bar, so it is triaged before it is read",
+          f"Level {_mQ.level}" in _mQ.body_html)
+
+# Escaping. A task called `<b>URGENT` must not reformat the email, and a
+# name with an apostrophe must not break an attribute.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _hoQ = _d.scalar(_SEL(_BrQ).where(_BrQ.name == "GCS HO"))
+    _bossQ = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    _nastyQ = _TkQ(org_id=_orgQ.id, branch_id=_hoQ.id,
+                   title='<script>alert("x")</script> & <b>URGENT</b>',
+                   assigner_id=_bossQ.id, doer_id=_bossQ.id,
+                   priority=_PrQ.HIGH, source=_TsQ.DELEGATION,
+                   status=_StQ.PENDING, requires_attachment=False,
+                   due_at=_dtC(2026, 10, 1, 18))
+    _d.add(_nastyQ); _d.commit()
+    _rungQ = _escQ.ladder(_d, _orgQ.id, _hoQ.id)[1]
+    _sub, _txt, _htmlQ, _ccQ = _escQ.compose(
+        [(_nastyQ, 4)], 1, 0, _rungQ, _escQ.ladder(_d, _orgQ.id, _hoQ.id),
+        "https://example.test")
+    check("a task title cannot inject a script tag into the email",
+          "<script>" not in _htmlQ, _htmlQ[_htmlQ.find("alert") - 60:][:120]
+          if "alert" in _htmlQ else "")
+    check("it is escaped, and still readable",
+          "&lt;script&gt;" in _htmlQ and "&amp;" in _htmlQ)
+    check("a title cannot smuggle in bold either",
+          "<b>URGENT</b>" not in _htmlQ)
+    check("and the plain-text version carries it verbatim, as text",
+          "<b>URGENT</b>" in _txt)
+
+    # An apostrophe in a name goes into an attribute (the frame's title) and
+    # into the body. Neither may break out.
+    _rungQ.to_name = "Santosh Ma'am <x>"
+    _d.commit()
+    _s2, _t2, _h2, _c2 = _escQ.compose(
+        [(_nastyQ, 4)], 1, 0, _rungQ,
+        _escQ.ladder(_d, _orgQ.id, _hoQ.id), "https://example.test")
+    check("a name with an apostrophe and a bracket is escaped in the HTML",
+          "Ma&#x27;am &lt;x&gt;" in _h2 or "Ma&#39;am &lt;x&gt;" in _h2,
+          [l for l in _h2.splitlines() if "Ma" in l][:1])
+    _rungQ.to_name = "Santosh Ma'am"
+    _d.commit()
+
+# ------------------------------------------- the links inside the email --
+# The nine o'clock check is not a web request and cannot work out this
+# site's address. Without it recorded, the automatic emails were the only
+# ones with no "open the task" link — and every email tested by hand had
+# them, which is what makes that a hard fault to notice.
+_rPage2Q = adminQ.get("/escalation")
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    check("opening the page learns this site's address",
+          (_orgQ.site_url or "").startswith("http"), _orgQ.site_url)
+    _learnedQ = _orgQ.site_url
+check("and shows it, because a wrong one means every link is dead",
+      "This site&#39;s web address" in _rPage2Q.text
+      or "This site's web address" in _rPage2Q.text)
+_rBadUrlQ = adminQ.post("/escalation/settings",
+                        data={"esc_on": "", "working_days": "1",
+                              "after_top": "stop", "scope": "chased",
+                              "hour": "9", "site_url": "gcs.example.test"})
+check("an address with no https:// is refused rather than quietly saved",
+      _rBadUrlQ.status_code == 400, _rBadUrlQ.status_code)
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    check("so the one that was learned is still there",
+          _orgQ.site_url == _learnedQ, _orgQ.site_url)
+    _orgQ.site_url = "https://gcs.example.test"
+    _orgQ.esc_on = True
+    _orgQ.esc_last_run = None
+    _orgQ.esc_hour = 0
+    _d.commit()
+    _beforeQ = {m.id for m in _d.scalars(_SEL(_EmQ)).all()}
+    _escQ.run_daily(_d)
+    _freshQ = [m for m in _d.scalars(_SEL(_EmQ)).all()
+               if m.id not in _beforeQ]
+    check("the daily run uses the recorded address for its links",
+          _freshQ and all("https://gcs.example.test/tasks" in (m.body_html or "")
+                          for m in _freshQ),
+          [m.id for m in _freshQ][:3])
+    # Put it back as this section found it. Switching escalation off here
+    # makes every later run() without force=True return early, which looks
+    # like the ladder is broken rather than like the switch is off.
+    _orgQ.esc_on = True
+    _orgQ.site_url = _learnedQ
+    _d.commit()
+
+# ------------------------------------- escalations raised before grouping --
+# A live database may already hold rows written one-per-task, carrying their
+# own subject and body. Those must keep reading exactly as they were sent —
+# an escalation is a record, and a record that stops rendering after an
+# upgrade was never a record.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _legacyTaskQ = _d.scalar(_SEL(_TkQ).where(_TkQ.org_id == _orgQ.id,
+                                              _TkQ.ref.is_not(None)))
+    _oldQ = _EsQ(org_id=_orgQ.id, task_id=_legacyTaskQ.id, level=1,
+                 repeat_n=77, day=_dQ(2026, 9, 1), days_overdue=1,
+                 to_name="Santosh Ma'am", to_email="santosh@example.test",
+                 cc_emails="someone@example.test",
+                 subject="[Escalation L1] Task X overdue by 1 day(s) — GCS HO",
+                 body="Dear Santosh Ma'am,\n\nThe following task is overdue.",
+                 status="sent")
+    _d.add(_oldQ); _d.commit()
+    _oldIdQ = _oldQ.id
+    check("a row from before grouping has no email attached",
+          _oldQ.mail is None)
+    check("and still reads back its own subject",
+          _oldQ.message_subject.startswith("[Escalation L1] Task X"),
+          _oldQ.message_subject)
+    check("and its own body",
+          _oldQ.message_body.startswith("Dear Santosh"), _oldQ.message_body)
+    check("and its own delivery status and CC list",
+          _oldQ.delivery == "sent"
+          and _oldQ.cc_list == ["someone@example.test"],
+          (_oldQ.delivery, _oldQ.cc_list))
+_rOldQ = adminQ.get(f"/escalation/log/{_oldIdQ}")
+check("its page still opens and says it went out on its own",
+      _rOldQ.status_code == 200 and "on its own" in _rOldQ.text,
+      _rOldQ.status_code)
+check("and the task-by-task log still lists it",
+      "Santosh" in adminQ.get("/escalation/log?view=tasks").text)
+
+# ------------------------------------------------------------- grammar ----
+# "Please see that them are closed" is the sort of thing that makes a whole
+# system look like it was not worth the trouble.
+check("the one-task wording is singular throughout",
+      _escQ._digest_message(1, 3, False, 1) ==
+      "The following task is overdue and has not been closed. Please review "
+      "it with the doer and ensure it is completed today.",
+      _escQ._digest_message(1, 3, False, 1))
+check("the many-task wording is plural throughout",
+      "them with the doers and ensure they are completed" in
+      _escQ._digest_message(1, 3, False, 7),
+      _escQ._digest_message(1, 3, False, 7))
+check("and uses a subject pronoun where the sentence needs one",
+      "see that they are closed" in _escQ._digest_message(3, 3, False, 4),
+      _escQ._digest_message(3, 3, False, 4))
+check("never 'see that them are closed'",
+      all("that them" not in _escQ._digest_message(_lv, 3, _bs, _n)
+          for _lv in (1, 2, 3) for _bs in (True, False) for _n in (1, 2, 9)))
 
 # The one case where the approved wording would be a false statement: work
 # already well overdue the first morning this is switched on reaches the top
@@ -9982,10 +10276,11 @@ with _slQ() as _d:
           len(_jumpQ) == 1 and _jumpQ[0].level == 3,
           [(e.level, e.repeat_n) for e in _jumpQ])
     check("and its letter does NOT claim an escalation that never happened",
-          "after escalation" not in _jumpQ[0].body, _jumpQ[0].body[:200])
+          "after escalation" not in _jumpQ[0].message_body,
+          _jumpQ[0].message_body[:200])
     check("it says how it got there instead",
-          "by the number of days it is overdue" in _jumpQ[0].body,
-          _jumpQ[0].body[:220])
+          "by the number of days overdue" in _jumpQ[0].message_body,
+          _jumpQ[0].message_body[:220])
     check("the levels below are still copied in, so they are in the loop",
           any("santosh" in a for a in _jumpQ[0].cc_list), _jumpQ[0].cc_list)
     # And a level whose wording was typed in by hand still wins.
@@ -10077,20 +10372,34 @@ check("the mail status line never contains the password",
 
 # ------------------------------------------------- the pages, with data ---
 _rLogQ = adminQ.get("/escalation/log")
-check("the log lists what was raised",
-      _refQ in _rLogQ.text, _rLogQ.status_code)
-check("the log can be filtered down to one task",
-      _refQ in adminQ.get(f"/escalation/log?task={_refQ}").text)
-check("and filtered to one level",
+check("the log lists the emails that went out",
+      "Emails sent" in _rLogQ.text and "task(s)" in _rLogQ.text,
+      _rLogQ.status_code)
+# A doer's copy covers the same tasks a second time, so counting every row
+# would say a morning escalated twice as much work as it did.
+check("the log counts the tasks escalated, not the tasks counted twice",
+      "up the ladder, covering" in _rLogQ.text
+      and "copy(ies) to the doers" in _rLogQ.text, _rLogQ.status_code)
+_rTaskViewQ = adminQ.get(f"/escalation/log?task={_refQ}")
+check("typing a Task ID switches to the task-by-task view and finds it",
+      _refQ in _rTaskViewQ.text, _rTaskViewQ.status_code)
+check("and the log can be filtered to one level",
       adminQ.get("/escalation/log?level=3&status=queued").status_code == 200)
 with _slQ() as _d:
     _oneQ = _escQ.already(_d, _tidQ)[0].id
+    _mailIdQ = _escQ.already(_d, _tidQ)[0].mail_id
+check("one email's page lists every task it carried",
+      "it carried" in adminQ.get(
+          f"/escalation/mail/{_mailIdQ}").text, _mailIdQ)
 _rOneQ = adminQ.get(f"/escalation/log/{_oneQ}")
 # Jinja escapes the apostrophe, so the page carries "Ma&#39;am" — look for
 # the part of the name that survives escaping rather than weakening the check.
-check("one escalation shows the message exactly as it was written",
-      "Santosh" in _rOneQ.text and "Task ID" in _rOneQ.text,
+check("one escalation shows the email it rode in, as it was written",
+      "Santosh" in _rOneQ.text
+      and "The email this task went out in" in _rOneQ.text,
       _rOneQ.status_code)
+check("and renders the real HTML rather than describing it",
+      "esc-frame" in _rOneQ.text and "srcdoc" in _rOneQ.text)
 check("the task page shows the doer who has been told",
       "Escalated to" in adminQ.get(f"/tasks/{_tidQ}").text)
 

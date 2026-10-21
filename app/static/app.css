@@ -1245,3 +1245,10 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   background:var(--chip);border-radius:8px;padding:13px;overflow:auto}
 .esc-subject{font-weight:700;font-size:13.5px;margin-bottom:8px}
+
+/* The email itself, rendered in a frame of its own on the preview and the
+   log. Its height is set by script once it has loaded — an email is as long
+   as its list, and a fixed height either crops the last rows or leaves a
+   field of white under a short one. */
+.esc-frame{width:100%;height:520px;border:1px solid var(--line);
+  border-radius:8px;background:#eef2f6;display:block}

@@ -374,9 +374,9 @@
             <div class="m rowsub">{{ e.day.strftime('%d %b %Y') }} ·
               {{ e.days_overdue }} day(s) overdue then</div></td>
           <td style="text-align:right">
-            <span class="chip {{ e.status }}">{{ e.status }}</span>
+            <span class="chip {{ e.delivery }}">{{ e.delivery }}</span>
             {% if user.has_manage_user %}
-            <a class="m" href="/escalation/log/{{ e.id }}">the message</a>
+            <a class="m" href="/escalation/log/{{ e.id }}">the email</a>
             {% endif %}</td>
         </tr>
         {% endfor %}

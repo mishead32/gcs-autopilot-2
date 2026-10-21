@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "_emailframe.html" import email_frame, email_frame_script %}
+{% block title %}{{ mail.label }} to {{ mail.to_name }} · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1><span class="chip lvl">{{ mail.label }}</span> {{ mail.to_name or '—' }}</h1>
+    <p class="sub">{{ mail.day.strftime('%A %d %b %Y') }} ·
+      {{ mail.task_count }} task(s) ·
+      <span class="chip {{ mail.status }}">{{ mail.status }}</span>
+      {% if mail.to_doer %} · their own work only{% endif %}</p>
+  </div>
+  <a class="btn ghost" href="/escalation/log">← The log</a>
+</div>
+
+<div class="card">
+  <table>
+    <tr><td style="width:90px"><strong>To</strong></td>
+        <td>{{ mail.to_name or '—' }}
+          {% if mail.to_email %}&lt;{{ mail.to_email }}&gt;{% endif %}</td></tr>
+    {% if mail.cc_list %}
+    <tr><td><strong>Cc</strong></td><td class="m">{{ mail.cc_list|join(', ') }}</td></tr>
+    {% endif %}
+    <tr><td><strong>Raised</strong></td>
+        <td>{{ mail.created_at|dt('%d %b %Y, %I:%M %p') }}</td></tr>
+    <tr><td><strong>Sent</strong></td>
+        <td>{% if mail.sent_at %}{{ mail.sent_at|dt('%d %b %Y, %I:%M %p') }}
+            {% else %}<span class="chip {{ mail.status }}">{{ mail.status }}</span>
+            {% endif %}</td></tr>
+    {% if mail.error %}
+    <tr><td><strong>Reason</strong></td><td class="m">{{ mail.error }}</td></tr>
+    {% endif %}
+  </table>
+</div>
+
+<div class="card">
+  <strong>The email, exactly as it was written</strong>
+  <p class="m" style="margin:6px 0 12px">
+    Kept here rather than rebuilt from the tasks, so it still reads as it was
+    sent even after a title, doer or date has since changed.
+  </p>
+  <div class="esc-subject">{{ mail.subject }}</div>
+  {% if mail.body_html %}
+  {{ email_frame(mail.body_html, mail.to_name) }}
+  <details style="margin-top:10px">
+    <summary class="m">The plain-text version that went with it</summary>
+    <div class="esc-body" style="margin-top:8px">{{ mail.body }}</div>
+  </details>
+  {% else %}
+  <div class="esc-body">{{ mail.body }}</div>
+  {% endif %}
+</div>
+
+{% if items %}
+<div class="card">
+  <strong>The {{ items|length }} task(s) it carried</strong>
+  <p class="m" style="margin:6px 0 0">
+    Each one has its own row in the log, which is what stops it being
+    escalated at this level again. Sorted by doer, as the email is.
+  </p>
+  <div class="table-wrap" style="margin-top:12px">
+  <table>
+    <tr><th>Task ID</th><th>Doer</th><th>Task</th><th>Planned</th>
+      <th>Priority</th><th>Overdue then</th><th>Now</th></tr>
+    {% for e in items %}
+    <tr>
+      <td class="refcell"><a class="refid" href="/tasks/{{ e.task_id }}">
+        {{ e.task.ref or e.task_id if e.task else e.task_id }}</a></td>
+      <td>{{ e.task.doer.name if e.task and e.task.doer else '—' }}</td>
+      <td>{% if e.task %}<a href="/tasks/{{ e.task_id }}">{{ e.task.title }}</a>
+        {% else %}<span class="m">since deleted</span>{% endif %}</td>
+      <td style="white-space:nowrap">{{ e.task.due_at|dt('%d %b, %I:%M %p')
+        if e.task else '—' }}</td>
+      <td>{% if e.task %}<span class="chip {{ e.task.priority.value }}">
+        {{ e.task.priority.value }}</span>{% endif %}</td>
+      <td>{{ e.days_overdue }} day(s)</td>
+      <td>{% if e.task %}<span class="chip {{ e.task.status.value }}">
+        {{ e.task.status.value }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+{{ email_frame_script() }}
+{% endblock %}

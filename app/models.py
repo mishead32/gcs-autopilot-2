@@ -291,6 +291,17 @@ class Organization(Base):
     # rather than a timer, so a restart, a second web process or somebody
     # pressing "Run the check now" cannot send the same morning twice.
     esc_last_run: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # This site's own web address, for the links inside an escalation email.
+    #
+    # A web request knows it — it is in the request — but the nine o'clock
+    # check is not a web request, and it is the one that sends the emails
+    # that matter. Without this the automatic morning emails were the only
+    # ones with no "open the task" link in them, which is a hard fault to
+    # notice: every email anybody tested by hand had the links.
+    #
+    # Filled in automatically the first time somebody opens the Escalation
+    # page, from the address they opened it at, and editable there after.
+    site_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="org")
     users: Mapped[list["User"]] = relationship(back_populates="org")
@@ -1667,6 +1678,66 @@ class EscalationRule(Base):
         return self.branch.name if self.branch else "Every other company"
 
 
+class EscalationMail(Base):
+    """One email, carrying every task escalated to one person that morning.
+
+    The record and the delivery are two different things, and this is the
+    line between them. Every task still gets its own Escalation row — that
+    is the log the approved document asks for, and the unique index on it is
+    what keeps the promise that a task is never escalated twice at the same
+    level. But a HOD with twenty-five overdue tasks must not receive
+    twenty-five emails. Nobody reads twenty-five emails about twenty-five
+    tasks; they filter them, and within a fortnight the escalation system is
+    something people delete unread. So the rows are grouped by who they are
+    going to and sent as one message with the tasks listed inside it.
+
+    Keeping the message here rather than on each task's row also stops the
+    same few kilobytes of email body being stored once per task — which, at
+    one morning's worth a day, is most of what this table would otherwise
+    have cost.
+    """
+    __tablename__ = "escalation_mails"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    day: Mapped[date] = mapped_column(Date, index=True)
+    level: Mapped[int] = mapped_column(Integer)
+    repeat_n: Mapped[int] = mapped_column(Integer, default=0)
+
+    to_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    to_email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    cc_emails: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject: Mapped[str] = mapped_column(Text, default="")
+    # Both versions of the message that went out. The email is sent as
+    # multipart/alternative, so a client that shows HTML gets the table and
+    # one that does not gets the text — and the record keeps whichever the
+    # recipient actually saw, because it keeps both.
+    body: Mapped[str] = mapped_column(Text, default="")
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # How many tasks this one email covered. Stored rather than counted so
+    # the log reads correctly even after a task has since been deleted.
+    task_count: Mapped[int] = mapped_column(Integer, default=0)
+    # A copy sent to one doer, listing only their own work, rather than the
+    # whole list sent up the ladder. See `cc_doer` on EscalationRule.
+    to_doer: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["Escalation"]] = relationship(back_populates="mail")
+
+    @property
+    def label(self) -> str:
+        base = f"L{self.level}"
+        return base if not self.repeat_n else f"{base} · reminder {self.repeat_n}"
+
+    @property
+    def cc_list(self) -> list[str]:
+        return [a for a in (self.cc_emails or "").split(",") if a.strip()]
+
+
 class Escalation(Base):
     """One escalation that was raised, kept whether or not it was emailed.
 
@@ -1696,6 +1767,10 @@ class Escalation(Base):
 
     to_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     to_email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # The email this task rode in. NULL on rows written before escalations
+    # were grouped, which carried their own message in the two columns below.
+    mail_id: Mapped[int | None] = mapped_column(
+        ForeignKey("escalation_mails.id"), nullable=True, index=True)
     cc_emails: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject: Mapped[str] = mapped_column(Text, default="")
     body: Mapped[str] = mapped_column(Text, default="")
@@ -1707,6 +1782,7 @@ class Escalation(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     task: Mapped["Task"] = relationship()
+    mail: Mapped["EscalationMail | None"] = relationship(back_populates="items")
 
     @property
     def label(self) -> str:
@@ -1714,6 +1790,27 @@ class Escalation(Base):
         base = f"L{self.level}"
         return base if not self.repeat_n else f"{base} · reminder {self.repeat_n}"
 
+    # The message that carried this task. Read through the email it was
+    # grouped into, falling back to the row's own copy so an escalation
+    # raised before grouping still reads exactly as it was sent.
+    @property
+    def message_subject(self) -> str:
+        return self.mail.subject if self.mail else (self.subject or "")
+
+    @property
+    def message_body(self) -> str:
+        return self.mail.body if self.mail else (self.body or "")
+
+    @property
+    def delivery(self) -> str:
+        return self.mail.status if self.mail else self.status
+
+    @property
+    def delivery_error(self) -> str | None:
+        return self.mail.error if self.mail else self.error
+
     @property
     def cc_list(self) -> list[str]:
+        if self.mail:
+            return self.mail.cc_list
         return [a for a in (self.cc_emails or "").split(",") if a.strip()]
