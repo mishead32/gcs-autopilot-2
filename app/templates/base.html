@@ -42,6 +42,11 @@
     <a href="/tasks?scope={{ 'all' if user.can_manage else 'mine' }}&status=pending&source=helpdesk"
        title="Tasks that started as a Help Desk request">
       <span class="ic">⌁</span><span class="lb">Help Desk tasks</span></a>
+    {# Everybody. A flow is the office's agreed order of work, so anyone who
+       can sign in may start one and read what has been submitted; only
+       MANAGE_FLOW changes what the steps are. #}
+    <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
+      <span class="ic">⇉</span><span class="lb">FMS</span></a>
 
     {# 2 · Operations — running the work #}
     {% if user.can_manage or user.can_follow_up %}
@@ -54,8 +59,6 @@
       <a href="/tasks?scope=assigned&status=pending&source=delegation"
          title="Work you delegated to other people">
         <span class="ic">➜</span><span class="lb">Delegation</span></a>
-      <a class="{{ 'active' if p.startswith('/flows') }}" href="/flows" title="FMS">
-        <span class="ic">⇉</span><span class="lb">FMS</span></a>
       <a class="{{ 'active' if p.startswith('/recurring') }}" href="/recurring" title="Checklist">
         <span class="ic">☑</span><span class="lb">Checklist</span></a>
       {# Only somebody who can actually decide an audit is shown the queue. #}

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import clock, flash, search
@@ -94,9 +94,16 @@ def flow_list(request: Request, export: str = "", q: str = "",
             ], running, "Runs that have not finished yet."),
         ])
 
+    # How many runs each flow has ever had, counted in one query rather than
+    # one per flow — the list is the page everybody lands on.
+    counts = dict(db.execute(
+        select(FlowInstance.flow_id, func.count())
+        .where(FlowInstance.org_id == user.org_id)
+        .group_by(FlowInstance.flow_id)).all())
     return templates.TemplateResponse(request, "flows.html", {
         "q": text_q, "can_manage": user.has(Right.MANAGE_FLOW),
         "user": user, "flows": flows, "running": running,
+        "runs": {f.id: counts.get(f.id, 0) for f in flows},
         "progress": {i.id: flow_svc.flow_progress(i) for i in running},
     })
 
@@ -410,8 +417,12 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
         select(Branch).where(Branch.org_id == user.org_id).order_by(Branch.name)
     ).all()
     return templates.TemplateResponse(request, "flow_detail.html", {
-        "user": user, "flow": flow, "instances": instances, "doers": doers,
+        "user": user, "flow": flow, "instances": instances[:8], "doers": doers,
         "branches": branches,
+        # How many runs in total, so the card can say so without listing
+        # fifty of them on a page whose job is the start form.
+        "submissions": db.scalar(select(func.count()).select_from(FlowInstance)
+                                 .where(FlowInstance.flow_id == flow.id)) or 0,
         # Which positions this flow names, so the start form can say what
         # the company it is about to run for will have to have somebody in.
         "positions": [s.doer_dept for s in flow.steps if s.doer_dept],
@@ -421,6 +432,105 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
         "upload_accept": storage.ACCEPT_ATTR,
         "upload_max": storage.MAX_UPLOAD_MB,
         "progress": {i.id: flow_svc.flow_progress(i) for i in instances},
+    })
+
+
+@router.get("/flows/{flow_id}/submissions", response_class=HTMLResponse)
+def flow_submissions(flow_id: int, request: Request, state: str = "",
+                     q: str = "", who: str = "", export: str = "",
+                     user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
+    """Every run of one flow, with the answers it was started with.
+
+    The question this page exists for is "what has been submitted to this
+    form" — which the run pages could only answer one run at a time, by
+    opening fifty of them. Here each run is a row and each start-form
+    question is a column, which is the shape people already have in their
+    heads: a register.
+
+    Open to anybody who can sign in, like starting a flow. Be aware of what
+    that means before building a form here: whatever a start question
+    captures, everybody who can sign in can read in this table.
+    """
+    flow = _flow_or_404(db, user, flow_id)
+
+    rows = db.scalars(
+        select(FlowInstance).where(FlowInstance.flow_id == flow.id)
+        .order_by(FlowInstance.started_at.desc())
+    ).all()
+
+    # The answers, per run. A flow's questions change over its life, so the
+    # columns are the questions it asks NOW followed by any other label the
+    # runs actually carry — an answer to a question since removed is still
+    # data somebody submitted, and dropping it off the table would quietly
+    # lose it.
+    answers: dict[int, dict] = {}
+    for inst in rows:
+        try:
+            data = json.loads(inst.context or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        answers[inst.id] = data if isinstance(data, dict) else {}
+
+    columns = [f["label"] for f in flow.start_form_fields]
+    for data in answers.values():
+        for label in data:
+            if label not in columns:
+                columns.append(label)
+
+    # Filters. Applied in Python rather than SQL because "state" is a
+    # property of three columns read together and "the answers" are JSON —
+    # and because a flow with thousands of runs is not a thing this system
+    # has, or should have without somebody noticing first.
+    text_q = search.clean(q)
+    if state == "running":
+        rows = [i for i in rows if i.completed_at is None
+                and i.cancelled_at is None and not i.on_hold]
+    elif state == "done":
+        rows = [i for i in rows if i.completed_at is not None]
+    elif state == "held":
+        rows = [i for i in rows if i.on_hold]
+    elif state == "stopped":
+        rows = [i for i in rows if i.cancelled_at is not None]
+    if who == "mine":
+        rows = [i for i in rows if i.started_by_id == user.id]
+    if text_q:
+        needle = text_q.lower()
+        rows = [i for i in rows
+                if needle in (i.reference or "").lower()
+                or any(needle in str(v).lower()
+                       for v in answers[i.id].values())]
+
+    if xlsx.wants(export):
+        cols = [
+            ("Reference", lambda i: i.reference),
+            ("Started by", lambda i: i.started_by.name if i.started_by else ""),
+            ("Started on", lambda i: i.started_at),
+            ("Company", lambda i: i.branch.name if i.branch else ""),
+            ("State", lambda i: i.state),
+            ("Step reached", lambda i: i.current_position),
+            ("Steps done", lambda i: flow_svc.flow_progress(i)[0]),
+            ("Steps total", lambda i: flow_svc.flow_progress(i)[1]),
+            ("Finished on", lambda i: i.completed_at),
+        ] + [
+            # Bound as a default argument, not closed over: a loop variable
+            # read inside a lambda is whatever it ended up as, so without
+            # this every column would print the last question's answer.
+            (label, (lambda i, _l=label: answers[i.id].get(_l, "")))
+            for label in columns
+        ]
+        return xlsx.book(f"fms-{flow.name[:20]}-submissions", [
+            ("Submissions", cols, rows,
+             "One row per run of this flow, newest first, with the answers "
+             "it was started with."),
+        ])
+
+    return templates.TemplateResponse(request, "flow_submissions.html", {
+        "user": user, "flow": flow, "rows": rows, "answers": answers,
+        "columns": columns, "state": state, "q": text_q, "who": who,
+        "progress": {i.id: flow_svc.flow_progress(i) for i in rows},
+        "total": db.scalar(select(func.count()).select_from(FlowInstance)
+                           .where(FlowInstance.flow_id == flow.id)) or 0,
     })
 
 
@@ -605,8 +715,23 @@ def delete_flow(flow_id: int, request: Request, confirm: str = Form(""),
 
 @router.post("/flows/{flow_id}/start")
 async def start_flow(flow_id: int, request: Request,
-                     user: User = Depends(require_right(Right.CREATE_TASK)),
+                     user: User = Depends(current_user),
                      db: Session = Depends(get_db)):
+    """Start a run. Open to anybody who can sign in.
+
+    It used to need the "Delegate tasks" right, because starting a flow does
+    hand work to other people. But that is what a flow IS: the whole point
+    of writing one down is that the office already agreed who does each step
+    and in what order. The person starting it is not choosing to give
+    anybody work — they are saying a bill arrived, or somebody applied for
+    leave, and the flow decides the rest.
+
+    Gating it on the delegate right meant only managers could report that a
+    bill had arrived, which put a manager in front of every form and is the
+    opposite of what a flow is for. Editing a flow, holding a run and
+    stopping one still need MANAGE_FLOW: deciding what the steps ARE is a
+    different act from reporting that the thing happened.
+    """
     flow = _flow_or_404(db, user, flow_id)
     if not flow.active:
         raise HTTPException(

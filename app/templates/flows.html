@@ -2,7 +2,12 @@
 {% from "_export.html" import excel_btn %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
-  <div><h1>FMS</h1><p class="sub">Flow Management System — define a workflow once, run it for every member, lead or invoice.</p></div>
+  <div><h1>FMS</h1><p class="sub">
+    {% if can_manage %}Flow Management System — define a workflow once, run it
+    for every member, lead or invoice.
+    {% else %}Flow Management System. Pick the flow for what has happened,
+    fill in its start form, and the steps go to the right people in the
+    right order.{% endif %}</p></div>
   <div>
     {{ excel_btn('/flows?export=xlsx',
                  title='Download every flow step by step, plus the runs in progress') }}
@@ -26,20 +31,33 @@
 <p class="sub">Showing everything matching <strong>“{{ q }}”</strong>.</p>
 {% endif %}
 
-<h2>Templates</h2>
+<h2>{{ 'Templates' if can_manage else 'Flows you can start' }}</h2>
 {% if flows %}
 <div class="table-wrap"><table>
-  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Status</th><th></th></tr>
+  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Submitted</th>
+      <th>Status</th><th></th></tr>
   {% for f in flows %}
   <tr>
     <td><a href="/flows/{{ f.id }}"><strong>{{ f.name }}</strong></a>
       {% if f.description %}<div style="color:var(--muted);font-size:12px">{{ f.description }}</div>{% endif %}</td>
     <td>{{ f.branch.name if f.branch else 'All' }}</td>
     <td>{{ f.steps|length }}</td>
+    <td>{% if runs[f.id] %}<a href="/flows/{{ f.id }}/submissions"
+          title="Every run of this flow, with the answers it was started with"
+          >{{ runs[f.id] }}</a>{% else %}<span class="m">—</span>{% endif %}</td>
     <td><span class="chip {{ 'completed' if f.active else 'rejected' }}">{{ 'active' if f.active else 'off' }}</span></td>
-    {# Edit covers all of it — the questions, the steps, switching off and
-       deleting — so there is one door rather than four buttons here. #}
-    <td class="stickycol">{% if can_manage %}
+    {# Start is for everybody — a flow is the office's agreed order of work,
+       and saying a bill arrived is not a manager's job. Edit covers all the
+       rest of it — the questions, the steps, switching off and deleting —
+       so there is one more door rather than four more buttons. #}
+    <td class="stickycol">
+      {% if f.active and f.steps %}
+      <a class="btn sm" href="/flows/{{ f.id }}"
+         title="Fill in this flow's start form">Start</a>
+      {% endif %}
+      <a class="btn sm ghost" href="/flows/{{ f.id }}/submissions"
+         title="Everything submitted to this flow">Submissions</a>
+      {% if can_manage %}
       <a class="btn sm ghost" href="/flows/{{ f.id }}/edit"
          title="Change the steps, the start questions, or retire this flow">Edit</a>
       {% endif %}</td>

@@ -10465,5 +10465,221 @@ _rOnQ = adminQ.post("/escalation/settings",
 check("switching escalation on with no ladder at all is refused",
       _rOnQ.status_code == 400, _rOnQ.status_code)
 
+
+# ==========================================================================
+# FMS is everybody's — starting a run, and reading what was submitted
+# ==========================================================================
+print("\n-- FMS for a doer --")
+
+import json as _jsonF
+from app.db import SessionLocal as _slF
+from app.models import (Flow as _FlF, FlowInstance as _FiF, Right as _RiF,
+                        Role as _RoF, Task as _TkF, User as _UsF)
+
+_SELF = __import__("sqlalchemy").select
+_FUNF = __import__("sqlalchemy").func
+
+# A plain doer, made plain on purpose. Earlier blocks in this suite hand
+# amit the delegate right while testing other things, so it is taken back
+# here — the whole point is that starting a flow no longer needs it. It used
+# to, which put a manager in front of every start form.
+with _slF() as _d:
+    _amitF = _d.scalar(_SELF(_UsF).where(_UsF.email == "amit@gcs.local"))
+    _amitF.set_rights([r for r in _amitF.right_set
+                       if r not in (_RiF.CREATE_TASK.value,
+                                    _RiF.MANAGE_FLOW.value)])
+    _d.commit()
+    check("the doer this is tested as cannot delegate",
+          not _amitF.has(_RiF.CREATE_TASK), _amitF.rights)
+    check("and cannot manage flows",
+          not _amitF.has(_RiF.MANAGE_FLOW), _amitF.rights)
+    check("and is a doer, not a manager", _amitF.role == _RoF.DOER,
+          _amitF.role)
+    _flowF = _d.scalar(_SELF(_FlF).where(_FlF.active.is_(True)))
+    _fidF = _flowF.id
+    _fnameF = _flowF.name
+
+_rNavF = doer.get("/")
+check("a doer has FMS in the menu", 'title="FMS"' in _rNavF.text)
+
+for _urlF, _whatF in ((f"/flows", "the flow list"),
+                      (f"/flows/{_fidF}", "a flow"),
+                      (f"/flows/{_fidF}/submissions", "its submissions")):
+    check(f"a doer can open {_whatF}", doer.get(_urlF).status_code == 200,
+          _urlF)
+
+_rFlowF = doer.get(f"/flows/{_fidF}")
+check("the start form is shown to a doer",
+      f'action="/flows/{_fidF}/start"' in _rFlowF.text)
+check("and the Edit door is not",
+      f'/flows/{_fidF}/edit' not in _rFlowF.text)
+check("the list offers a doer Start and Submissions, not Edit",
+      ">Start<" in doer.get("/flows").text
+      and "Submissions" in doer.get("/flows").text
+      and "/edit" not in doer.get("/flows").text)
+check("and does not offer a doer a new flow",
+      "+ New flow" not in doer.get("/flows").text)
+
+# What a doer still must not be able to do. Deciding what the steps ARE is a
+# different act from reporting that the thing happened.
+for _urlF in (f"/flows/{_fidF}/edit", "/flows/new"):
+    check(f"a doer is refused {_urlF}",
+          doer.get(_urlF).status_code == 403, doer.get(_urlF).status_code)
+check("a doer cannot create a flow",
+      doer.post("/flows/new", data={"name": f"SNEAKY {RUN}"}).status_code == 403)
+check("a doer cannot switch a flow off",
+      doer.post(f"/flows/{_fidF}/toggle").status_code == 403)
+check("a doer cannot delete a flow",
+      doer.post(f"/flows/{_fidF}/delete",
+                data={"confirm": _fnameF}).status_code == 403)
+
+# ------------------------------------------------- a doer starts a run ---
+# A flow with a real start form, so the answers have somewhere to land.
+with _slF() as _d:
+    _flow2F = _d.get(_FlF, _fidF)
+    _flow2F.start_form = _jsonF.dumps([
+        {"label": f"Student name {RUN}", "type": "text", "options": [],
+         "required": True},
+        {"label": "Class applied for", "type": "select",
+         "options": ["Nursery", "Class I", "Class V"], "required": True},
+        {"label": "Fee quoted", "type": "number", "options": [],
+         "required": False},
+        {"label": "Transport needed", "type": "yesno", "options": [],
+         "required": True},
+    ])
+    _d.commit()
+    _keysF = {f["label"]: f["key"] for f in _flow2F.start_form_fields}
+    _beforeF = _d.scalar(_SELF(_FUNF.count()).select_from(_FiF)
+                         .where(_FiF.flow_id == _fidF)) or 0
+
+_subsF = [("Aarav Sharma", "Class I", "48000", "Yes"),
+          ("Diya Mehta", "Nursery", "36000", "No")]
+for _nameF, _clsF, _feeF, _busF in _subsF:
+    _dataF = {"reference": f"{_nameF} {RUN}", "run_branch": "",
+              _keysF[f"Student name {RUN}"]: _nameF,
+              _keysF["Class applied for"]: _clsF,
+              _keysF["Fee quoted"]: _feeF,
+              _keysF["Transport needed"]: _busF}
+    _rStartF = doer.post(f"/flows/{_fidF}/start", data=_dataF)
+    check(f"a doer can start a run for {_nameF}",
+          _rStartF.status_code == 200, _rStartF.text[:200])
+
+with _slF() as _d:
+    _afterF = _d.scalar(_SELF(_FUNF.count()).select_from(_FiF)
+                        .where(_FiF.flow_id == _fidF)) or 0
+    check("both runs were created", _afterF == _beforeF + 2,
+          (_beforeF, _afterF))
+    _mineF = _d.scalars(_SELF(_FiF).where(_FiF.flow_id == _fidF)
+                        .order_by(_FiF.id.desc())).all()[:2]
+    check("the run is filed against the doer who started it",
+          all(i.started_by.email == "amit@gcs.local" for i in _mineF),
+          [i.started_by.email for i in _mineF])
+    check("and its steps were handed out to the flow's own people",
+          all(_d.scalar(_SELF(_FUNF.count()).select_from(_TkF)
+                        .where(_TkF.flow_instance_id == i.id)) > 0
+              for i in _mineF))
+    _answersF = _jsonF.loads(_mineF[0].context or "{}")
+    check("the answers are stored against the run",
+          _answersF.get("Class applied for") in ("Nursery", "Class I"),
+          _answersF)
+    _runIdF = _mineF[0].id
+    _lateRefF = _mineF[0].reference
+
+# A doer still cannot pause or stop what they started. Holding a run takes
+# its steps off other people's lists and out of their scores.
+check("a doer cannot hold a run",
+      doer.post(f"/flows/instance/{_runIdF}/hold",
+                data={"reason": "x"}).status_code == 403)
+check("a doer cannot stop a run",
+      doer.post(f"/flows/instance/{_runIdF}/stop",
+                data={"reason": "x"}).status_code == 403)
+
+# ---------------------------------------------- the submissions register --
+_rSubF = doer.get(f"/flows/{_fidF}/submissions")
+check("the submissions page opens for a doer",
+      _rSubF.status_code == 200)
+for _colF in (f"Student name {RUN}", "Class applied for", "Fee quoted",
+              "Transport needed"):
+    check(f"it has a column for '{_colF}'", _colF in _rSubF.text, _colF)
+for _valF in ("Aarav Sharma", "Diya Mehta", "48000", "Class I", "Nursery"):
+    check(f"and shows the submitted answer '{_valF}'",
+          _valF in _rSubF.text, _valF)
+check("it names who submitted each one",
+      "PT Trainer Amit" in _rSubF.text)
+
+# Everybody's, not just their own — which is what was asked for, and what
+# anybody building a start form here needs to know.
+_secondF = login("front.bz@gcs.local")
+_rSubOtherF = _secondF.get(f"/flows/{_fidF}/submissions")
+check("another doer sees the same submissions",
+      _rSubOtherF.status_code == 200 and "Aarav Sharma" in _rSubOtherF.text,
+      _rSubOtherF.status_code)
+check("and the admin sees them too",
+      "Aarav Sharma" in admin.get(f"/flows/{_fidF}/submissions").text)
+
+# Filters.
+check("'only mine' narrows it to the person asking",
+      "Aarav Sharma" in doer.get(
+          f"/flows/{_fidF}/submissions?who=mine").text
+      and "Aarav Sharma" not in _secondF.get(
+          f"/flows/{_fidF}/submissions?who=mine").text)
+check("a search matches an answer, not just the reference",
+      "Diya Mehta" in doer.get(
+          f"/flows/{_fidF}/submissions?q=36000").text)
+check("and a search that matches nothing says so",
+      "Nothing matches that" in doer.get(
+          f"/flows/{_fidF}/submissions?q=zzz{RUN}").text)
+for _stF in ("running", "done", "held", "stopped"):
+    check(f"the {_stF} tab opens",
+          doer.get(f"/flows/{_fidF}/submissions?state={_stF}"
+                   ).status_code == 200)
+
+# The Excel version carries the answers too — this is the register people
+# will actually want to hand to somebody.
+_rXlF = doer.get(f"/flows/{_fidF}/submissions?export=xlsx")
+check("the submissions download is a workbook",
+      _rXlF.status_code == 200
+      and "spreadsheet" in _rXlF.headers.get("content-type", ""),
+      _rXlF.headers.get("content-type"))
+check("and it is not empty", len(_rXlF.content) > 4000, len(_rXlF.content))
+
+# A question removed from the form later: the answers people already gave it
+# are still data they submitted, so the column stays.
+with _slF() as _d:
+    _flow3F = _d.get(_FlF, _fidF)
+    _flow3F.start_form = _jsonF.dumps([
+        {"label": f"Student name {RUN}", "type": "text", "options": [],
+         "required": True},
+    ])
+    _d.commit()
+    check("the flow now asks only one question",
+          len(_flow3F.start_form_fields) == 1)
+_rSub2F = doer.get(f"/flows/{_fidF}/submissions")
+check("a question since removed keeps its column",
+      "Class applied for" in _rSub2F.text and "Fee quoted" in _rSub2F.text,
+      _rSub2F.status_code)
+check("and the answers given to it are still shown",
+      "48000" in _rSub2F.text and "Class I" in _rSub2F.text)
+
+# A switched-off flow says so rather than showing a form that would be
+# refused on submit.
+with _slF() as _d:
+    _flow4F = _d.get(_FlF, _fidF)
+    _flow4F.active = False
+    _d.commit()
+_rOffF = doer.get(f"/flows/{_fidF}")
+check("a switched-off flow shows no start form",
+      f'action="/flows/{_fidF}/start"' not in _rOffF.text)
+check("and says why", "switched off" in _rOffF.text)
+check("its past submissions are still readable",
+      doer.get(f"/flows/{_fidF}/submissions").status_code == 200)
+check("and starting one is refused by the server as well",
+      doer.post(f"/flows/{_fidF}/start",
+                data={"reference": f"OFF {RUN}"}).status_code == 400)
+with _slF() as _d:
+    _flow5F = _d.get(_FlF, _fidF)
+    _flow5F.active = True
+    _d.commit()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

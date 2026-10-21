@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
+{% block title %}{{ flow.name }} — submissions · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Submissions</h1>
+    <p class="sub">Every run of <strong>{{ flow.name }}</strong>, newest
+      first, with the answers it was started with. One row per submission,
+      one column per question on the start form.</p>
+  </div>
+  <div>
+    {{ excel_btn('/flows/' ~ flow.id ~ '/submissions?export=xlsx&state=' ~ state ~
+                 '&who=' ~ who ~ '&q=' ~ q,
+                 title='Download these submissions, answers and all') }}
+    {% if flow.active and flow.steps %}
+    <a class="btn" href="/flows/{{ flow.id }}">+ New submission</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="tabs">
+  <a class="{{ 'active' if not state }}"
+     href="/flows/{{ flow.id }}/submissions?who={{ who }}">All ({{ total }})</a>
+  <a class="{{ 'active' if state == 'running' }}"
+     href="/flows/{{ flow.id }}/submissions?state=running&who={{ who }}">Running</a>
+  <a class="{{ 'active' if state == 'done' }}"
+     href="/flows/{{ flow.id }}/submissions?state=done&who={{ who }}">Finished</a>
+  <a class="{{ 'active' if state == 'held' }}"
+     href="/flows/{{ flow.id }}/submissions?state=held&who={{ who }}">On hold</a>
+  <a class="{{ 'active' if state == 'stopped' }}"
+     href="/flows/{{ flow.id }}/submissions?state=stopped&who={{ who }}">Stopped</a>
+</div>
+
+<form method="get" action="/flows/{{ flow.id }}/submissions" class="card searchbar">
+  <input type="hidden" name="state" value="{{ state }}">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="Words from the reference, or from any answer">
+  </div>
+  <div class="fb-f">
+    <label>Submitted by</label>
+    <select name="who">
+      <option value="" {{ 'selected' if not who }}>Everybody</option>
+      <option value="mine" {{ 'selected' if who == 'mine' }}>Only mine</option>
+    </select>
+  </div>
+  <div class="acts">
+    <button class="btn">Search</button>
+    {% if q or who %}
+    <a class="btn ghost" href="/flows/{{ flow.id }}/submissions?state={{ state }}">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Reference</th>
+    <th>Submitted by</th>
+    <th>Submitted on</th>
+    <th>Company</th>
+    <th>State</th>
+    <th>Progress</th>
+    {# The questions, in the order the form asks them. A question since
+       removed from the form still has a column, because the answers people
+       gave it are still data they submitted. #}
+    {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+  </tr>
+  {% for i in rows %}
+  {% set p = progress[i.id] %}
+  <tr class="{{ 'held' if i.on_hold }}">
+    <td class="refcell"><a href="/flows/instance/{{ i.id }}">
+      <strong>{{ i.reference }}</strong></a></td>
+    <td>{{ i.started_by.name if i.started_by else '—' }}</td>
+    <td style="white-space:nowrap">{{ i.started_at|dt('%d %b %Y') }}
+      <div class="m rowsub">{{ i.started_at|dt('%I:%M %p') }}</div></td>
+    <td class="m">{{ i.branch.name if i.branch else '—' }}</td>
+    <td><span class="chip run_{{ i.state|replace(' ','_') }}">{{ i.state }}</span></td>
+    <td style="min-width:110px">
+      <div class="inline">
+        <div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div>
+        <span style="font-size:12px">{{ p[0] }}/{{ p[1] }}</span>
+      </div>
+      {% if not i.completed_at %}
+      <div class="m rowsub">on step {{ i.current_position }}</div>{% endif %}
+    </td>
+    {% for c in columns %}
+    <td>{{ answers[i.id].get(c, '') or '—' }}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table></div>
+
+<p class="m" style="margin-top:10px">
+  {{ rows|length }} submission(s){% if rows|length != total %} of
+  {{ total }}{% endif %}.
+  {% if flow.start_form_fields %}
+  Answers are shown as they were typed when the run was started — opening a
+  submission shows what each step captured after that.
+  {% else %}
+  This flow's start form asks only for a reference, so there are no answer
+  columns. Add questions to it under
+  {% if user.has_manage_flow %}<a href="/flows/{{ flow.id }}/edit">Edit steps
+    &amp; questions</a>{% else %}Edit steps &amp; questions{% endif %}
+  and every run from then on will carry them.
+  {% endif %}
+</p>
+{% else %}
+<div class="empty">
+  {% if q or who or state %}
+  Nothing matches that. <a href="/flows/{{ flow.id }}/submissions">Show all
+    {{ total }}</a>.
+  {% else %}
+  Nothing has been submitted to this flow yet.
+  {% if flow.active and flow.steps %}
+  <a href="/flows/{{ flow.id }}">Start the first one →</a>{% endif %}
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
