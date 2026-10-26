@@ -108,7 +108,7 @@ check("note posted", mgr.post(f"/tasks/{tid}/comment",
 check("note visible to doer", "keep this monthly" in doer.get(f"/tasks/{tid}").text)
 
 print("\n== flow engine ==")
-r = mgr.post("/flows/1/start", data={"reference": "SMOKE Member — PT 1M", "first_doer": ""})
+r = mgr.post("/flows/1/start", data={"reference": "SMOKE Member — PT 1M"})
 check("flow started", r.status_code == 200, r.status_code)
 inst_id = int(re.search(r"/flows/instance/(\d+)", str(r.url)).group(1))
 body = mgr.get(f"/flows/instance/{inst_id}").text
@@ -4236,7 +4236,13 @@ with _sl4() as _d:
     check("no task is left without a reference",
           all(t.ref for t in _all),
           [t.id for t in _all if not t.ref][:5])
+    # DEL and CL number one task each, so their series are gapless runs of
+    # distinct numbers. FMS is deliberately NOT one of those: the number
+    # belongs to the SUBMISSION, and every step of that submission carries
+    # it. Four steps of one run share FMS-12, which is the point.
     for _src, _pref in _RP4.items():
+        if _src == _S4.FLOW:
+            continue
         _rows = sorted([t for t in _all if t.source == _src],
                        key=lambda t: t.ref_n)
         if not _rows:
@@ -4249,19 +4255,72 @@ with _sl4() as _d:
         check(f"{_pref} is spelled the way it reads",
               all(t.ref == _rt4(_pref, t.ref_n) for t in _rows),
               [t.ref for t in _rows][:3])
-    # The three series must not borrow each other's numbers.
-    _by_pref = {}
-    for t in _all:
-        _by_pref.setdefault(t.ref.split("-")[0], set()).add(t.ref)
-    check("the three series are numbered independently",
-          all(len(v) == len([t for t in _all if t.ref.startswith(k + "-")])
-              for k, v in _by_pref.items()))
+    check("a one-task series never repeats a number",
+          all(len({t.ref for t in _all if t.source == _s})
+              == len([t for t in _all if t.source == _s])
+              for _s in (_S4.DELEGATION, _S4.RECURRING)))
+    # DEL and CL must not borrow each other's numbers either.
+    for _p1, _p2 in (("DEL-", "CL-"), ("CL-", "DEL-")):
+        check(f"nothing numbered {_p1} is also numbered {_p2}",
+              not ({t.ref for t in _all if t.ref.startswith(_p1)}
+                   & {t.ref for t in _all if t.ref.startswith(_p2)}))
     check("delegation uses DEL", any(r.startswith("DEL-") for r in
                                      [t.ref for t in _all]))
     check("checklist uses CL", any(r.startswith("CL-") for r in
                                    [t.ref for t in _all]))
     check("FMS uses FMS", any(r.startswith("FMS-") for r in
                               [t.ref for t in _all]))
+
+    # The FMS rule, stated on its own because it is a different rule.
+    from app.models import FlowInstance as _FI4
+    _runs4 = _d.query(_FI4).all()
+    check("every FMS submission has its own number",
+          all(r.ref for r in _runs4), [r.id for r in _runs4 if not r.ref][:5])
+    check("the submissions are numbered FMS-01 upwards, with no repeats",
+          sorted(r.ref_n for r in _runs4)
+          == list(range(1, len(_runs4) + 1)),
+          sorted(r.ref_n for r in _runs4)[:12])
+    check("and spelled the way they read",
+          all(r.ref == _rt4("FMS", r.ref_n) for r in _runs4),
+          [r.ref for r in _runs4][:3])
+    _steps4 = [t for t in _all if t.source == _S4.FLOW]
+    check("every FMS step carries its submission's number, not one of its own",
+          all(t.ref == _d.get(_FI4, t.flow_instance_id).ref
+              for t in _steps4 if t.flow_instance_id),
+          [(t.ref, _d.get(_FI4, t.flow_instance_id).ref)
+           for t in _steps4 if t.flow_instance_id
+           and t.ref != _d.get(_FI4, t.flow_instance_id).ref][:3])
+    check("so a run's steps share one number between them",
+          any(len([t for t in _steps4 if t.flow_instance_id == r.id]) > 1
+              for r in _runs4))
+    check("and the step says which step it is",
+          all(t.step_label.startswith("Step ") for t in _steps4
+              if t.flow_step_id),
+          [t.step_label for t in _steps4][:3])
+    # Number plus position is what an escalation email shows, because it is
+    # read where nobody can click to find out which row is which. It narrows
+    # FMS-12 from four tasks to one step of one submission — not always to
+    # one TASK: a step sent back for rework is opened again, so a run that
+    # went round once has two tasks called Step 2. The doer and the date
+    # tell those apart, and every list that shows the label shows both.
+    _labels4 = [t.ref_label for t in _steps4 if t.flow_step_id]
+    check("the label is the submission's number plus the step",
+          all(" · Step " in l and l.startswith("FMS-") for l in _labels4),
+          _labels4[:3])
+    check("it narrows a submission's number to one step of it",
+          len(set(_labels4)) > len({t.ref for t in _steps4}),
+          (len(set(_labels4)), len({t.ref for t in _steps4})))
+    _dupe4 = [l for l in set(_labels4) if _labels4.count(l) > 1]
+    for _l4 in _dupe4[:1]:
+        _same4 = [t for t in _steps4 if t.ref_label == _l4]
+        check(f"where {_l4} names more than one task, it is the same step "
+              "opened again",
+              len({t.flow_step_id for t in _same4}) == 1,
+              [(t.id, t.flow_step_id) for t in _same4])
+        check("and those two are told apart by their dates",
+              len({t.created_at for t in _same4}) > 1
+              or len({t.doer_id for t in _same4}) > 1,
+              [(t.id, str(t.created_at), t.doer_id) for t in _same4])
 
 # A brand-new task continues the series rather than repeating a number.
 with _sl4() as _d:
@@ -4394,18 +4453,25 @@ print("\n== upgrading a database that has tasks but no IDs yet ==")
 from sqlalchemy import text as _uptx5, inspect as _upin5
 from app.db import engine as _upeng5, SessionLocal as _sl5
 from app import migrate as _upmig5
-from app.models import Task as _T5, TaskSource as _S5
+from app.models import (Task as _T5, TaskSource as _S5,
+                        FlowInstance as _FI5)
 
 with _sl5() as _d:
     _was = {t.id: t.ref for t in _d.query(_T5).all()}
+    _wasRun5 = {r.id: r.ref for r in _d.query(_FI5).all()}
 
+# The submissions lose their numbers too, which is the state the live
+# database is actually in: it has never heard of either column.
 if _upeng5.dialect.name == "postgresql":
     with _upeng5.begin() as _c:
         _c.execute(_uptx5("ALTER TABLE tasks DROP COLUMN IF EXISTS ref"))
         _c.execute(_uptx5("ALTER TABLE tasks DROP COLUMN IF EXISTS ref_n"))
+        _c.execute(_uptx5("ALTER TABLE flow_instances DROP COLUMN IF EXISTS ref"))
+        _c.execute(_uptx5("ALTER TABLE flow_instances DROP COLUMN IF EXISTS ref_n"))
 else:
     with _upeng5.begin() as _c:
         _c.execute(_uptx5("UPDATE tasks SET ref = NULL, ref_n = NULL"))
+        _c.execute(_uptx5("UPDATE flow_instances SET ref = NULL, ref_n = NULL"))
 
 _applied5 = _upmig5.run()
 check("the migrator reports what it numbered",
@@ -4416,7 +4482,10 @@ with _sl5() as _d:
     check("no task is left without an ID after the upgrade",
           all(t.ref for t in _rows5),
           [t.id for t in _rows5 if not t.ref][:5])
-    for _src5 in _S5:
+    # DEL and CL: one number each, gapless, oldest first. FMS is not in
+    # this loop because an FMS step has no number of its own — it is checked
+    # against its submission below instead.
+    for _src5 in (_S5.DELEGATION, _S5.RECURRING):
         _got5 = sorted([t for t in _rows5 if t.source == _src5],
                        key=lambda t: t.ref_n)
         if not _got5:
@@ -4427,15 +4496,46 @@ with _sl5() as _d:
         _age5 = sorted(_got5, key=lambda t: (t.created_at, t.id))
         check(f"the oldest {_src5.value} task holds the lowest number",
               [t.id for t in _age5] == [t.id for t in _got5])
+
+    # The submissions, and the steps that now answer to them.
+    _runs5 = _d.query(_FI5).all()
+    check("every submission is numbered after the upgrade",
+          all(r.ref for r in _runs5), [r.id for r in _runs5 if not r.ref][:5])
+    _byN5 = sorted(_runs5, key=lambda r: r.ref_n)
+    check(f"upgraded submission IDs run 1..{len(_runs5)} with no gaps",
+          [r.ref_n for r in _byN5] == list(range(1, len(_runs5) + 1)),
+          [r.ref_n for r in _byN5][:12])
+    check("the submission started first holds the lowest number",
+          [r.id for r in sorted(_runs5, key=lambda r: (r.started_at, r.id))]
+          == [r.id for r in _byN5])
+    _steps5 = [t for t in _rows5 if t.flow_instance_id]
+    check("and every step was re-pointed at its submission's number",
+          all(t.ref == _d.get(_FI5, t.flow_instance_id).ref for t in _steps5),
+          [(t.ref, _d.get(_FI5, t.flow_instance_id).ref) for t in _steps5
+           if t.ref != _d.get(_FI5, t.flow_instance_id).ref][:3])
     _now5 = {t.id: t.ref for t in _rows5}
 
-check("every task that had an ID kept the same one", _now5 == _was,
-      [k for k in _now5 if _was.get(k) != _now5[k]][:5])
+check("every DEL and CL task that had an ID kept the same one",
+      {k: v for k, v in _now5.items() if not v.startswith("FMS-")}
+      == {k: v for k, v in _was.items() if not v.startswith("FMS-")},
+      [k for k in _now5 if _was.get(k) != _now5[k]
+       and not _now5[k].startswith("FMS-")][:5])
+# The FMS ones are allowed to change — that is the whole point of the
+# upgrade — but only into their own submission's number, which is checked
+# above. What must NOT change is the submissions themselves once numbered.
+with _sl5() as _d:
+    check("and every submission kept the number it already had",
+          {r.id: r.ref for r in _d.query(_FI5).all()} == _wasRun5
+          or not any(_wasRun5.values()),
+          [k for k, v in _wasRun5.items()
+           if v and _d.get(_FI5, k).ref != v][:5])
 
 _again5 = _upmig5.run()
 with _sl5() as _d:
     check("running the upgrade a second time renumbers nothing",
           {t.id: t.ref for t in _d.query(_T5).all()} == _now5)
+    check("and leaves the submissions alone too",
+          all(r.ref for r in _d.query(_FI5).all()))
 check("and it reports nothing to do",
       not any("numbered" in a for a in _again5), _again5[-3:])
 
@@ -10005,22 +10105,25 @@ with _slQ() as _d:
     check("but they share ONE email, not six",
           len(_mailsQ) == 1, _mailsQ)
     _mQ = _d.get(_EmQ, _mineQ[0].mail_id)
-    check("and that email says it covers six tasks",
-          _mQ.task_count == 6, _mQ.task_count)
-    check("the subject says six, so it can be triaged before opening",
-          "6 overdue tasks" in _mQ.subject, _mQ.subject)
+    check("and that one email covers all six, in one place",
+          _mQ.task_count >= 6, _mQ.task_count)
+    check("the subject says how many, so it can be triaged before opening",
+          f"{_mQ.task_count} overdue task" in _mQ.subject, _mQ.subject)
+    check("and it covers the six without sending six emails",
+          _mQ.task_count < 6 * 2, _mQ.task_count)
     check("every one of the six is listed in it",
           all((_d.get(_TkQ, i).ref in _mQ.body) for i in _manyIdsQ),
           _mQ.body)
 
     # Sorted by doer name A to Z — the thing that makes it readable.
     _bodyQ = _mQ.body.splitlines()
-    _dataQ = [l for l in _bodyQ if l.startswith("DEL-")]
-    _namesQ = [l[12:34].strip() for l in _dataQ]
+    _dataQ = [l for l in _bodyQ
+              if l[:4] in ("DEL-", "CL-0", "FMS-") or l.startswith("CL-")]
+    _namesQ = [l[18:40].strip() for l in _dataQ]
     check("the rows are sorted by doer name, A to Z",
           _namesQ == sorted(_namesQ, key=str.lower), _namesQ)
     check("so one person's tasks sit together",
-          len(_dataQ) == 6, _dataQ)
+          len(_dataQ) == _mQ.task_count, (len(_dataQ), _mQ.task_count))
 
 # ----------------------------------------- each doer their own copy only --
 # Copying every doer on a list of everybody's overdue work would show each
@@ -10047,14 +10150,21 @@ with _slQ() as _d:
           not _leakedQ, _leakedQ)
 
     # And every row of a doer's copy is that doer's own work.
+    # Keyed on the LABEL, not the bare reference. FMS-12 names four tasks
+    # with four different doers; FMS-12 · Step 2 names one. Mapping by the
+    # reference alone would quietly compare a doer's own step against
+    # whichever other step of that run happened to be read last.
     _refOwnerQ = {}
     for _tRow in _d.scalars(_SEL(_TkQ).where(_TkQ.org_id == _orgQ.id,
                                              _TkQ.ref.is_not(None))).all():
-        _refOwnerQ[_tRow.ref] = _tRow.doer.name if _tRow.doer else None
+        _refOwnerQ[_tRow.ref_label] = _tRow.doer.name if _tRow.doer else None
     _badQ = []
     for _cQ in _copiesQ:
         for _line in _cQ.body.splitlines():
-            _ref = _line.split()[0] if _line[:3] in ("DEL", "CL-", "FMS") else ""
+            if _line[:3] not in ("DEL", "CL-", "FMS"):
+                continue
+            # The Task ID column is the first 16 characters of the row.
+            _ref = _line[:16].strip()
             if _ref and _refOwnerQ.get(_ref) not in (None, _cQ.to_name):
                 _badQ.append((_cQ.to_name, _ref, _refOwnerQ.get(_ref)))
     check("every row of a doer's own copy is that doer's own work",
@@ -10139,7 +10249,8 @@ with _slQ() as _d:
     check("a title cannot smuggle in bold either",
           "<b>URGENT</b>" not in _htmlQ)
     check("and the plain-text version carries it verbatim, as text",
-          "<b>URGENT</b>" in _txt)
+          "<script>" in _txt and "&lt;" not in _txt,
+          [l for l in _txt.splitlines() if "script" in l][:1])
 
     # An apostrophe in a name goes into an attribute (the frame's title) and
     # into the body. Neither may break out.

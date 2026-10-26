@@ -6,6 +6,13 @@
 <p class="sub"><a href="{{ back_url(request, '/tasks') }}">&larr;
   Back to {{ back_label(request, 'all tasks') }}</a></p>
 <h1>{% if task.ref %}<span class="refid">{{ task.ref }}</span>{% endif %}{{ task.title }}</h1>
+{% if task.step_label %}
+{# The number on this page belongs to the whole submission. Without this
+   line, four steps of one run look like the same task four times. #}
+<p class="sub" style="margin-bottom:6px"><strong>{{ task.step_label }}</strong>
+  of {{ task.ref }}{% if task.flow_instance %} —
+  <a href="/flows/instance/{{ task.flow_instance_id }}">{{ task.flow_instance.reference }}</a>{% endif %}</p>
+{% endif %}
 <p class="sub">
   <span class="chip {{ task.priority.value }}"
         title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>

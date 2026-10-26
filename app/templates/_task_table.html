@@ -12,7 +12,11 @@
   {% for t in tasks %}
   <tr>
     <td class="refcell"><a href="/tasks/{{ t.id }}" class="refid"
-        title="This task's reference — quote it when you ask about it">{{ t.ref or '—' }}</a></td>
+        title="This task's reference — quote it when you ask about it">{{ t.ref or '—' }}</a>
+      {# An FMS step carries its SUBMISSION's number, which it shares with
+         the other steps of that run, so the number alone does not say
+         which step this is. The position does. #}
+      {% if t.step_label %}<div class="m rowsub">{{ t.step_label }}</div>{% endif %}</td>
     <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
       {# Two rows with the same title, doer and deadline are not a duplicate:
          one is today's job and one is the closed day's, handed out early.

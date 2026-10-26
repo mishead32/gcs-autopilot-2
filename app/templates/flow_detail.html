@@ -140,10 +140,6 @@
           itself — worth doing unless the run is genuinely group-wide.</div>
         {% endif %}
         {% endif %}
-        <label>First step doer (override)</label>
-        <select name="first_doer"><option value="">Use default</option>
-          {% for d in doers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
-        </select>
         <div style="margin-top:14px"><button class="btn">Start flow</button></div>
       </form>
     </div>
@@ -174,7 +170,8 @@
       <table style="margin-top:10px">
         {% for i in instances %}{% set p = progress[i.id] %}
         <tr>
-          <td><a href="/flows/instance/{{ i.id }}">{{ i.reference }}</a>
+          <td><a class="refid" href="/flows/instance/{{ i.id }}">{{ i.label }}</a>
+            <div class="rowsub">{{ i.reference }}</div>
             <div class="m rowsub">{{ i.started_by.name if i.started_by else '—' }}
               · {{ i.started_at|dt('%d %b') }}</div></td>
           <td style="width:120px"><div class="bar"><i style="width:{{ (100*p[0]/p[1])|round }}%"></i></div></td>

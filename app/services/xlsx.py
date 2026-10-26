@@ -169,6 +169,9 @@ def wants(value: str) -> bool:
 def task_columns(show_doer: bool = True):
     cols = [
         ("Task ID", lambda t: t.ref or ""),
+        # An FMS step shares its submission's number with the other steps of
+        # that run, so the number alone does not say which step a row is.
+        ("Step", lambda t: t.step_label),
         ("Task", lambda t: t.title),
         ("Branch", lambda t: t.branch.name if t.branch else ""),
     ]

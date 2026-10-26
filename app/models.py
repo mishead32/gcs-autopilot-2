@@ -192,8 +192,17 @@ class TaskSource(str, enum.Enum):
 REF_PREFIX = {
     TaskSource.DELEGATION: "DEL",
     TaskSource.RECURRING: "CL",
+    # An FMS step does NOT get a number of its own. It belongs to a
+    # submission, and carries that submission's number with its step
+    # position beside it: "FMS-12 · Step 2 of 4". This entry is what such a
+    # task's reference is PREFIXED with, because it is the submission's
+    # prefix — it is not a separate series, and nothing numbers from it.
     TaskSource.FLOW: "FMS",
 }
+
+# The submission's own series. The same string as above on purpose: one run
+# of an FMS flow and its steps are one piece of work with one name.
+RUN_PREFIX = "FMS"
 
 
 def ref_text(prefix: str, n: int) -> str:
@@ -817,6 +826,24 @@ class FlowInstance(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     flow_id: Mapped[int] = mapped_column(ForeignKey("flows.id"))
     reference: Mapped[str] = mapped_column(String(200))   # member name / lead id / invoice no
+
+    # The submission's own number — FMS-01, FMS-02 — numbered per company,
+    # exactly as DEL- and CL- are.
+    #
+    # The SUBMISSION is the thing people name. "Pay the vendor" is one
+    # submission with four steps; nobody says "where is step 3 of the
+    # thing", they say "where is FMS-12". So the number belongs here, and
+    # the steps inside it are Step 1, Step 2, Step 3 — a position, not a
+    # reference of their own.
+    #
+    # The FMS prefix used to number the step tasks instead, which gave four
+    # unrelated-looking numbers to one piece of work and no number at all to
+    # the piece of work itself.
+    #
+    # Nullable only so an existing database can be upgraded in place; the
+    # migration gives every run a number, and every new one gets one here.
+    ref: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    ref_n: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Which company this particular run is for.
     #
     # One flow, every company. A step that says "Accounts" rather than a
@@ -857,6 +884,16 @@ class FlowInstance(Base):
     started_by: Mapped[User] = relationship(foreign_keys=[started_by_id])
     held_by: Mapped[User | None] = relationship(foreign_keys=[held_by_id])
     cancelled_by: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_id])
+
+    @property
+    def label(self) -> str:
+        """What to call this submission out loud: 'FMS-12'.
+
+        Falls back to the database id for a run created before numbering
+        existed and somehow missed by the backfill — a row with no name at
+        all is worse than one named awkwardly.
+        """
+        return self.ref or f"FMS#{self.id}"
 
     @property
     def on_hold(self) -> bool:
@@ -1027,6 +1064,46 @@ class Task(Base):
         return [a for a in self.attachments if not a.start_field]
 
     @property
+    def ref_label(self) -> str:
+        """The shortest string that says which piece of work this is.
+
+        A delegated or checklist task is named by its reference alone: DEL-14
+        is one task. An FMS step is not — it shares its submission's number
+        with every other step of that run, so FMS-12 on its own names four
+        different tasks. Adding the position says which of them: FMS-12 ·
+        Step 2.
+
+        That still is not a unique key, and it is worth being honest about
+        why rather than discovering it later. A step can have more than one
+        task against it: when two people share the step, and when a rejected
+        step is sent back and opened again, so a four-step run that went
+        round once has two tasks called Step 2. What tells those apart is
+        the doer and the date, which is why every list that shows this also
+        shows both.
+
+        Used wherever a task is listed OUTSIDE the app and cannot be clicked
+        to find out which it is — an escalation email, above all.
+        """
+        base = self.ref or f"#{self.id}"
+        if self.flow_step is None:
+            return base
+        return f"{base} · Step {self.flow_step.position}"
+
+    @property
+    def step_label(self) -> str:
+        """'Step 2 of 4' for an FMS step, empty for anything else.
+
+        A step has no reference of its own — it carries its submission's.
+        What tells one step from another is its position, so that is what is
+        shown beside the number: FMS-12 · Step 2 of 4.
+        """
+        if self.flow_step is None:
+            return ""
+        pos = self.flow_step.position
+        total = len(self.flow_instance.flow.steps) if self.flow_instance else 0
+        return f"Step {pos} of {total}" if total else f"Step {pos}"
+
+    @property
     def waiting_label(self) -> str:
         """'waiting for step 2', or empty when this is live work.
 
@@ -1137,19 +1214,45 @@ def _on_task_created(mapper, connection, target: "Task") -> None:
 
 
 @event.listens_for(SASession, "before_flush")
-def _number_new_tasks(session: SASession, flush_context, instances) -> None:
-    """Give every new task its DEL-/CL-/FMS- number.
+def _number_new_work(session: SASession, flush_context, instances) -> None:
+    """Give every new submission and task its number.
 
     Done on the session rather than at each creation site because there are
     five of them — the delegate form, the bulk importer, the checklist
-    spawner, the FMS spawner and the seed — and a task without a reference
-    is a task nobody can quote in a WhatsApp message.
+    spawner, the FMS spawner and the seed — and work nobody can quote in a
+    WhatsApp message is work nobody can ask about.
 
-    The next number is MAX(ref_n) + 1 for that company and that kind of work.
-    A batch created together (a 300-row bulk import) is numbered in one pass
+    Two series, numbered per company:
+
+        DEL-01, CL-01   a delegated task, a checklist task
+        FMS-01          an FMS SUBMISSION — the whole run
+
+    A step inside a submission gets no number of its own. It carries its
+    submission's, and says which step it is: "FMS-12 · Step 2 of 4". The FMS
+    prefix used to number the steps instead, which gave four unrelated-
+    looking numbers to one piece of work and none at all to the work itself.
+
+    The next number is MAX(ref_n) + 1 for that company and that series. A
+    batch created together (a 300-row bulk import) is numbered in one pass
     here, in the order the rows were read, so the spreadsheet's order is the
     order of the references.
     """
+    # --- submissions first: their steps are about to take their number ----
+    runs = [o for o in session.new
+            if isinstance(o, FlowInstance) and not o.ref and o.org_id]
+    by_org: dict[int, list[FlowInstance]] = {}
+    for r in runs:
+        by_org.setdefault(r.org_id, []).append(r)
+    for org_id, items in by_org.items():
+        nxt = (session.execute(
+            select(func.max(FlowInstance.ref_n))
+            .where(FlowInstance.org_id == org_id)).scalar() or 0) + 1
+        for r in items:
+            r.ref_n = nxt
+            r.ref = ref_text(RUN_PREFIX, nxt)
+            nxt += 1
+
+    # --- then the tasks ---------------------------------------------------
     fresh = [o for o in session.new
              if isinstance(o, Task) and not o.ref and o.org_id]
     if not fresh:
@@ -1160,6 +1263,20 @@ def _number_new_tasks(session: SASession, flush_context, instances) -> None:
         groups.setdefault((t.org_id, t.source or TaskSource.DELEGATION), []).append(t)
 
     for (org_id, src), items in groups.items():
+        if src == TaskSource.FLOW:
+            # A step is part of a submission, so it answers to the
+            # submission's number. Reached through the relationship when it
+            # is set (the run is usually being created in this same flush
+            # and has no id yet) and through the id when it is not.
+            for t in items:
+                run = t.flow_instance
+                if run is None and t.flow_instance_id:
+                    run = session.get(FlowInstance, t.flow_instance_id)
+                if run is not None:
+                    t.ref_n = run.ref_n
+                    t.ref = run.ref
+            continue
+
         nxt = (session.execute(
             select(func.max(Task.ref_n))
             .where(Task.org_id == org_id, Task.source == src)).scalar() or 0) + 1

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import clock, flash, search
@@ -11,11 +11,27 @@ from ..deps import current_user, manager_up, require_right
 from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Department,
                       Attachment,
                       Priority,
-                      Right, FIELD_TYPES, BUILDER_FIELD_TYPES)
+                      Right, FIELD_TYPES, BUILDER_FIELD_TYPES,
+                      RUN_PREFIX, ref_text)
 from ..services import flows as flow_svc, xlsx, storage, shrink
 from ..templating import templates
 
 router = APIRouter()
+
+
+def _ref_typed(raw: str) -> str:
+    """What somebody meant when they typed it in a search box.
+
+    "FMS-12", "fms 12", "FMS12" and a bare "12" are all the same submission
+    to the person typing, and a search that only matches the first of those
+    is a search people stop using.
+    """
+    text = (raw or "").upper().replace(" ", "").replace("-", "")
+    if text.startswith(RUN_PREFIX):
+        text = text[len(RUN_PREFIX):]
+    if text.isdigit():
+        return ref_text(RUN_PREFIX, int(text))
+    return (raw or "").upper().replace(" ", "")
 
 
 def _read_start_form(form) -> str | None:
@@ -56,11 +72,19 @@ def flow_list(request: Request, export: str = "", q: str = "",
                      [Flow.name, Flow.description], text_q)
         .order_by(Flow.name)
     ).all()
+    # The running list answers the search too, by FMS number or by what the
+    # run is about. A box that searches the templates but not the runs tells
+    # somebody looking for FMS-12 that there is no such thing.
+    run_q = select(FlowInstance).where(
+        FlowInstance.org_id == user.org_id,
+        FlowInstance.completed_at.is_(None))
+    if text_q:
+        run_q = run_q.where(or_(
+            func.upper(FlowInstance.ref) == _ref_typed(text_q),
+            search.clause([FlowInstance.reference], text_q),
+        ))
     running = db.scalars(
-        select(FlowInstance)
-        .where(FlowInstance.org_id == user.org_id, FlowInstance.completed_at.is_(None))
-        .order_by(FlowInstance.started_at.desc()).limit(50)
-    ).all()
+        run_q.order_by(FlowInstance.started_at.desc()).limit(50)).all()
     if xlsx.wants(export):
         # Two tabs: how the flows are built, and what is running right now.
         steps = [(fl, st) for fl in flows for st in fl.steps]
@@ -85,7 +109,8 @@ def flow_list(request: Request, export: str = "", q: str = "",
             ], steps, "One row per step, in the order the flow runs them."),
             ("Running now", [
                 ("Flow", lambda i: i.flow.name),
-                ("Reference", lambda i: i.reference),
+                ("FMS no.", lambda i: i.label),
+                ("What it is about", lambda i: i.reference),
                 ("Started", lambda i: i.started_at),
                 ("Started by", lambda i: i.started_by.name if i.started_by else ""),
                 ("Steps done", lambda i: flow_svc.flow_progress(i)[0]),
@@ -496,14 +521,17 @@ def flow_submissions(flow_id: int, request: Request, state: str = "",
         rows = [i for i in rows if i.started_by_id == user.id]
     if text_q:
         needle = text_q.lower()
+        typed = _ref_typed(text_q)
         rows = [i for i in rows
-                if needle in (i.reference or "").lower()
+                if (i.ref or "").upper() == typed
+                or needle in (i.reference or "").lower()
                 or any(needle in str(v).lower()
                        for v in answers[i.id].values())]
 
     if xlsx.wants(export):
         cols = [
-            ("Reference", lambda i: i.reference),
+            ("FMS no.", lambda i: i.label),
+            ("What it is about", lambda i: i.reference),
             ("Started by", lambda i: i.started_by.name if i.started_by else ""),
             ("Started on", lambda i: i.started_at),
             ("Company", lambda i: i.branch.name if i.branch else ""),
@@ -743,10 +771,13 @@ async def start_flow(flow_id: int, request: Request,
     if not reference:
         raise HTTPException(400, "A reference is required (member name, lead id, invoice no.)")
 
-    overrides = {}
-    first = flow.steps[0] if flow.steps else None
-    if first and form.get("first_doer"):
-        overrides[first.id] = int(form["first_doer"])
+    # No "first step doer (override)" any more. The flow already says who
+    # does step 1 — that is the whole point of writing the flow down — and
+    # a box on the start form inviting the starter to send it somewhere
+    # else undid that decision at the worst possible moment: quietly, run by
+    # run, by whoever happened to be filling the form in. To change who does
+    # step 1, change the step.
+    overrides: dict[int, int] = {}
 
     # Which company this run is for. A flow tied to one company answers for
     # itself; otherwise it is asked, and any step assigned to a position

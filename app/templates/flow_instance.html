@@ -2,13 +2,13 @@
 {% from "_task_table.html" import task_table with context %}
 {% from "_uploader.html" import file_grid %}
 {% from "_export.html" import excel_btn %}
-{% block title %}{{ inst.reference }} · {{ APP_NAME }}{% endblock %}
+{% block title %}{{ inst.label }} · {{ inst.reference }} · {{ APP_NAME }}{% endblock %}
 {% block content %}
 <p class="sub"><a href="/flows/{{ inst.flow_id }}">&larr; {{ inst.flow.name }}</a></p>
 
 <div class="page-head">
   <div>
-    <h1>{{ inst.reference }}</h1>
+    <h1><span class="refid">{{ inst.label }}</span> {{ inst.reference }}</h1>
     <p class="sub">
       {% if inst.branch %}For {{ inst.branch.name }} ·{% endif %}
       Started {{ inst.started_at|dt }} by {{ inst.started_by.name }}
@@ -88,7 +88,7 @@
   <div class="body">
     <h3>Stop this run for good?</h3>
     <p>
-      Every open step of <strong>{{ inst.reference }}</strong> will be
+      Every open step of <strong>{{ inst.label }} — {{ inst.reference }}</strong> will be
       cancelled, and the run will never move again. The record and its
       completed steps stay. This cannot be undone — if you only need to pause
       it while you wait for something, hold it instead.

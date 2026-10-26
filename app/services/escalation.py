@@ -269,8 +269,8 @@ def next_step(sent: list[Escalation], late: int, rungs: dict[int, EscalationRule
 # `<b>URGENT` would otherwise reformat the rest of the email, and worse is
 # possible.
 
-COLS = [("Task ID", 10), ("Doer", 20), ("Planned", 18),
-        ("Priority", 8), ("Overdue", 7), ("Task", 44)]
+COLS = [("Task ID", 16), ("Doer", 20), ("Planned", 18),
+        ("Priority", 8), ("Overdue", 7), ("Task", 38)]
 
 
 def _cell(text: str, width: int) -> str:
@@ -305,7 +305,11 @@ def table(rows: list[tuple[Task, int]], with_doer: bool = True) -> str:
            "  ".join("-" * w for _h, w in cols)]
     for task, late in sorted(rows, key=sort_key):
         values = {
-            "Task ID": task.ref or str(task.id),
+            # ref_label, not ref: an FMS step shares its submission's
+            # number with the other steps of that run, so the reference on
+            # its own does not say which row of this table is which — and
+            # an email is read where nobody can click to find out.
+            "Task ID": task.ref_label,
             "Doer": task.doer.name if task.doer else "—",
             "Planned": task.due_at.strftime("%d %b, %I:%M %p"),
             "Priority": task.priority.value.upper(),
@@ -383,6 +387,7 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
         mono = ('style="' + cell + ";font-family:ui-monospace,SFMono-Regular,"
                 'Menlo,Consolas,monospace;white-space:nowrap"')
         ref = _esc(task.ref or task.id)
+        step = task.step_label
         # The reference links to the task when the site's address is known.
         # It is the one link in the table, and it is the thing somebody
         # clicks: "open DEL-341" is the whole action the email is asking for.
@@ -397,7 +402,10 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
         days = f"{late} day" + ("s" if late != 1 else "")
         out += [
             "<tr>",
-            f"<td {mono}>{ref}</td>",
+            f"<td {mono}>{ref}"
+            + (f'<div style="color:{MUTED};font-size:11px;margin-top:2px;'
+               f'font-family:{_FONT}">{_esc(step)}</div>' if step else "")
+            + "</td>",
             (f'<td {td}>{_esc(task.doer.name if task.doer else "—")}</td>'
              if with_doer else ""),
             f'<td {td} nowrap>'

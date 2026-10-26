@@ -95,6 +95,10 @@ ADDITIONS = {
         ("weekly_off", "INTEGER DEFAULT 6"),
     ],
     "flow_instances": [
+        # The submission's own number — FMS-01, FMS-02. Backfilled below for
+        # every run that predates it.
+        ("ref", "VARCHAR(20)"),
+        ("ref_n", "INTEGER"),
         # Which company a run is for. NULL on every run started before this
         # existed, which is the truth: nobody was asked.
         ("branch_id", "INTEGER"),
@@ -358,6 +362,9 @@ def run() -> list[str]:
         # taken before them, so it still believes ref does not
         # exist and the backfill would quietly do nothing.
         applied += _backfill_refs(conn, inspect(conn), existing_tables)
+        # After the task backfill, because it re-points FMS steps at the
+        # number their submission has just been given.
+        applied += _number_runs(conn, inspect(conn), existing_tables)
         applied += _dedupe_checklist_tasks(conn, existing_tables)
 
     applied += _lock_checklist_days(existing_tables)
@@ -490,6 +497,12 @@ def _backfill_refs(conn, insp, existing_tables: set) -> list[str]:
         # SQLite stores the member name, PostgreSQL the same; be forgiving
         # about case either way rather than silently skipping a whole series.
         key = (src_raw or "DELEGATION").upper()
+        if key == "FLOW":
+            # An FMS step has no series of its own: it carries its
+            # submission's number, handed out by _number_runs. Numbering it
+            # here as well would give the same step two different answers
+            # depending on which ran last.
+            continue
         prefix = prefixes.get(key) or prefixes.get(key.replace("-", "_")) or "TSK"
         used = conn.execute(text(
             "SELECT COALESCE(MAX(ref_n), 0) FROM tasks "
@@ -506,4 +519,80 @@ def _backfill_refs(conn, insp, existing_tables: set) -> list[str]:
                 {"r": _models.ref_text(prefix, used), "n": used, "i": task_id})
         if blank:
             done.append(f"{len(blank)} task(s) numbered {prefix}-…")
+    return done
+
+
+def _number_runs(conn, insp, existing_tables: set) -> list[str]:
+    """Give every FMS submission its FMS-nn, and point its steps at it.
+
+    Two jobs, in this order, because the second depends on the first.
+
+    1. Every run with no number gets one, per company, OLDEST FIRST — so
+       FMS-01 is the first submission that company ever made and the order
+       of the numbers is the order the work actually happened. Numbering by
+       row id would come out nearly the same and be wrong the moment two
+       companies' runs interleave, which they do.
+
+    2. Every FMS task is re-pointed at its run's number. Those tasks used to
+       carry a series of their own, so a four-step run showed four unrelated
+       numbers and the submission itself had none. After this a step reads
+       "FMS-12 · Step 2 of 4", which is how people already talk about it.
+
+    Step 2 does change references that already exist, which is not something
+    to do lightly: an old FMS-15 was a STEP and is now whatever its run is
+    called. It is done anyway because the alternative is worse — two
+    different things both called FMS-15, one a submission and one a step,
+    with no way to tell which from the number. Nothing else in the system
+    keys off these strings; they are what people read and say.
+
+    Runs on every boot and does nothing once every row is right, so a run
+    created by some path that bypassed the session listener still gets a
+    number on the next restart rather than staying blank for ever.
+    """
+    if "flow_instances" not in existing_tables:
+        return []
+    cols = {c["name"] for c in insp.get_columns("flow_instances")}
+    if "ref" not in cols or "ref_n" not in cols:
+        return []
+
+    done = []
+    prefix = _models.RUN_PREFIX
+
+    for (org_id,) in conn.execute(text(
+            "SELECT DISTINCT org_id FROM flow_instances")).all():
+        used = conn.execute(text(
+            "SELECT COALESCE(MAX(ref_n), 0) FROM flow_instances "
+            "WHERE org_id = :o"), {"o": org_id}).scalar() or 0
+        blank = conn.execute(text(
+            "SELECT id FROM flow_instances WHERE org_id = :o AND ref IS NULL "
+            "ORDER BY started_at, id"), {"o": org_id}).all()
+        for (run_id,) in blank:
+            used += 1
+            conn.execute(text(
+                "UPDATE flow_instances SET ref = :r, ref_n = :n WHERE id = :i"),
+                {"r": _models.ref_text(prefix, used), "n": used, "i": run_id})
+        if blank:
+            done.append(f"{len(blank)} FMS submission(s) numbered {prefix}-…")
+
+    # And the steps. Only where it is actually wrong, so a restart with
+    # nothing to do reports nothing to do.
+    if "tasks" not in existing_tables:
+        return done
+    tcols = {c["name"] for c in insp.get_columns("tasks")}
+    if "ref" not in tcols or "flow_instance_id" not in tcols:
+        return done
+
+    moved = conn.execute(text(
+        "UPDATE tasks SET ref = (SELECT ref FROM flow_instances "
+        "                        WHERE flow_instances.id = tasks.flow_instance_id), "
+        "                 ref_n = (SELECT ref_n FROM flow_instances "
+        "                          WHERE flow_instances.id = tasks.flow_instance_id) "
+        "WHERE flow_instance_id IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM flow_instances "
+        "            WHERE flow_instances.id = tasks.flow_instance_id "
+        "            AND flow_instances.ref IS NOT NULL "
+        "            AND (tasks.ref IS NULL OR tasks.ref <> flow_instances.ref))"))
+    if moved.rowcount and moved.rowcount > 0:
+        done.append(f"{moved.rowcount} FMS step(s) now carry their "
+                    "submission's number")
     return done

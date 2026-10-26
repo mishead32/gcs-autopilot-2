@@ -39,7 +39,7 @@
   <div class="fb-f fb-wide">
     <label>Search</label>
     <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
-           placeholder="Words from the reference, or from any answer">
+           placeholder="FMS-12, words from what it is about, or any answer">
   </div>
   <div class="fb-f">
     <label>Submitted by</label>
@@ -60,7 +60,8 @@
 <div class="table-wrap">
 <table>
   <tr>
-    <th>Reference</th>
+    <th>FMS no.</th>
+    <th>What it is about</th>
     <th>Submitted by</th>
     <th>Submitted on</th>
     <th>Company</th>
@@ -74,8 +75,9 @@
   {% for i in rows %}
   {% set p = progress[i.id] %}
   <tr class="{{ 'held' if i.on_hold }}">
-    <td class="refcell"><a href="/flows/instance/{{ i.id }}">
-      <strong>{{ i.reference }}</strong></a></td>
+    <td class="refcell"><a class="refid" href="/flows/instance/{{ i.id }}">
+      {{ i.label }}</a></td>
+    <td><a href="/flows/instance/{{ i.id }}">{{ i.reference }}</a></td>
     <td>{{ i.started_by.name if i.started_by else '—' }}</td>
     <td style="white-space:nowrap">{{ i.started_at|dt('%d %b %Y') }}
       <div class="m rowsub">{{ i.started_at|dt('%I:%M %p') }}</div></td>
