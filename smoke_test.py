@@ -6098,21 +6098,35 @@ with _slK() as _d:
                                        _HolJ.day == _shutJ)):
         _d.add(_HolJ(org_id=1, branch_id=None, day=_shutJ, name="SMOKE shutdown"))
         _d.commit()
-    _movedJ, _whyJ = _holJ.shift_due(_d, 1, _dtJ.combine(_shutJ, _dtJ.min.time())
-                                     .replace(hour=17))
-    check("an FMS deadline on a closed day moves to the day before",
+    _atJ = _dtJ.combine(_shutJ, _dtJ.min.time()).replace(hour=17)
+
+    # Delegation and Checklist: BACKWARD. The day a checklist job covers
+    # will not come again, so it is done before the office shuts.
+    _movedJ, _whyJ = _holJ.shift_due(_d, 1, _atJ)
+    check("a delegated deadline on a closed day moves to the day before",
           _movedJ.date() == _shutJ - _tdJ(days=1), str(_movedJ))
     check("never to the day after", _movedJ.date() > _shutJ - _tdJ(days=3),
           str(_movedJ))
     check("and the time of day is kept", _movedJ.hour == 17, str(_movedJ))
 
+    # FMS: FORWARD. A chain cannot be dragged backwards — a Sunday step
+    # pulled back to Saturday lands on the day of the step it is waiting
+    # for, and the step after it lands there too.
+    _pushJ, _pwhyJ = _holJ.push_due(_d, 1, _atJ)
+    check("an FMS deadline on a closed day moves to the NEXT working day",
+          _pushJ.date() == _shutJ + _tdJ(days=1), str(_pushJ))
+    check("it says which closed day it moved off",
+          _pwhyJ == "SMOKE shutdown", _pwhyJ)
+    check("and keeps the time of day too", _pushJ.hour == 17, str(_pushJ))
+    check("a deadline on a working day is not moved at all",
+          _holJ.push_due(_d, 1, _atJ + _tdJ(days=2)) == (_atJ + _tdJ(days=2), None))
+
 # And through the real engine: start a flow whose first step would land on
 # the closed day, and read the task's planned date.
 # The step is given a twenty-day TAT and the day it lands on is made a
-# holiday, so the move is to a working day comfortably in the future. A
-# shorter TAT would land the shifted deadline in the past — which the rule
-# deliberately refuses, since nobody should be handed a deadline they were
-# already late for — and the check would be measuring that refusal instead.
+# holiday. The deadline moves FORWARD to the next day somebody is in, which
+# is also why a short TAT is no longer a problem here: moving forward can
+# never produce a deadline that has already passed.
 _landJ = (_clock.now() + _tdJ(days=20)).date()
 with _slK() as _d:
     if not _d.scalar(_spK(_HolJ).where(_HolJ.org_id == 1, _HolJ.day == _landJ)):
@@ -6137,8 +6151,8 @@ with _slK() as _d:
     check("and that date is not a day the company is closed",
           not _holJ.is_closed(_d, 1, _tJ.due_at.date(), _tJ.branch_id),
           str(_tJ.due_at))
-    check("it moved earlier than the closed day, never later",
-          _tJ.due_at.date() < _landJ, str(_tJ.due_at))
+    check("it moved later than the closed day, never earlier",
+          _tJ.due_at.date() > _landJ, str(_tJ.due_at))
 
 print("\n== the Checklist page can be filtered ==")
 _recPage = admin.get("/recurring").text
@@ -8355,12 +8369,14 @@ admin.post(f"/flows/{_jFid}/start",
 with _slK() as _d:
     _jI = _d.scalars(_spK(_FIC).where(_FIC.flow_id == _jFid)).all()[-1]
     _jT = _d.scalar(_spK(_TC).where(_TC.flow_instance_id == _jI.id))
-# 15 Nov 2026 is a Sunday, and a deadline never falls on a closed day — so
-# the answer is the working day before it, which is the existing rule doing
-# its job rather than the new one getting it wrong.
-check("joining 10 Nov with a TAT of 'the 15th' lands on the 15th or just before",
-      _dtC(2026, 11, 13) <= _jT.due_at <= _dtC(2026, 11, 15, 23, 59),
+# 15 Nov 2026 is a Sunday, and an FMS deadline never falls on a closed day —
+# so the answer is the next working day AFTER it, Monday the 16th. Forward,
+# because a chain cannot be dragged backwards: see holidays.push_due.
+check("joining 10 Nov with a TAT of 'the 15th' lands on the 15th or just after",
+      _dtC(2026, 11, 15) <= _jT.due_at <= _dtC(2026, 11, 17, 23, 59),
       str(_jT.due_at))
+check("and not on the Sunday itself",
+      _jT.due_at.weekday() != 6, str(_jT.due_at))
 
 print("\n== the desk is only asked to chase what is worth chasing ==")
 # A desk handed 150 daily low-priority rows stops ticking any of them, and a
@@ -10791,6 +10807,246 @@ with _slF() as _d:
     _flow5F = _d.get(_FlF, _fidF)
     _flow5F.active = True
     _d.commit()
+
+
+# ==========================================================================
+# Every step of a run is planned — even one the flow does not staff
+# ==========================================================================
+print("\n-- the whole run is planned, whoever is on it --")
+# The bug: replan silently dropped any step it could not name a person for,
+# so a flow whose later steps have no doer set — or whose position nobody at
+# that company holds — planned exactly ONE step. The people on steps 2 to 8
+# saw nothing coming and the run read "1 of 8" for ever.
+
+from app.db import SessionLocal as _slP
+from app.models import (Branch as _BrP, Department as _DpP, Flow as _FlP,
+                        FlowInstance as _FiP, FlowStep as _FsP,
+                        Priority as _PrP, Task as _TkP, TaskStatus as _StP,
+                        User as _UsP)
+from app.services import flows as _fsvP
+from app.services import holidays as _holP
+
+_SELP = __import__("sqlalchemy").select
+
+
+def _build8(db, name, staffing, kiran, extra=None):
+    """An eight-step flow, staffed three different ways."""
+    flow = _FlP(org_id=kiran.org_id, name=name, active=True, branch_id=None)
+    db.add(flow); db.flush()
+    for pos in range(1, 9):
+        st = _FsP(flow_id=flow.id, position=pos, title=f"Step {pos}",
+                  priority=_PrP.MEDIUM, tat_unit="days", tat_value=1,
+                  requires_attachment=False)
+        if pos == 1:
+            st.default_doer_id = kiran.id
+            if extra:
+                st.extra_doer_ids = str(extra.id)
+        elif staffing == "named":
+            st.default_doer_id = kiran.id
+        elif staffing == "position":
+            st.doer_dept = f"SMOKE HR {RUN}"
+        # staffing == "nobody": left unset on purpose
+        db.add(st)
+    db.commit()
+    return flow
+
+
+with _slP() as _d:
+    _hoP = _d.scalar(_SELP(_BrP).where(_BrP.name == "GCS HO"))
+    _bipsP = _d.scalar(_SELP(_BrP).where(_BrP.name == "BIPS School"))
+    _bossP = _d.scalar(_SELP(_UsP).where(_UsP.email == "mis@gcs.local"))
+    _k1P = _d.scalar(_SELP(_UsP).where(_UsP.branch_id == _hoP.id,
+                                       _UsP.active.is_(True)))
+    _k2P = [u for u in _d.scalars(_SELP(_UsP).where(
+        _UsP.branch_id == _hoP.id, _UsP.active.is_(True))).all()
+        if u.id != _k1P.id][0]
+    # A department that exists only at head office — the shape a shared
+    # function has when the run is for a school.
+    _hrP = _DpP(org_id=_bossP.org_id, branch_id=_hoP.id,
+                name=f"SMOKE HR {RUN}")
+    _d.add(_hrP); _d.flush()
+    _k1P.department_id = _hrP.id
+    _d.commit()
+    _bipsIdP, _hoIdP = _bipsP.id, _hoP.id
+
+    _casesP = [
+        ("every step names a person", "named", _bipsIdP, False),
+        ("steps 2-8 name a position nobody holds there", "position",
+         _bipsIdP, True),
+        ("steps 2-8 name nobody at all", "nobody", _bipsIdP, True),
+    ]
+    for _labelP, _howP, _branchP, _provP in _casesP:
+        _flowP = _build8(_d, f"SMOKE 8-step {_howP} {RUN}", _howP, _k1P,
+                         extra=_k2P)
+        _instP = _fsvP.start_flow(_d, _flowP, f"SMOKE {_howP} {RUN}", _bossP,
+                                  branch_id=_branchP)
+        _rowsP = _d.scalars(_SELP(_TkP).where(
+            _TkP.flow_instance_id == _instP.id)).all()
+        _posP = sorted({t.flow_step.position for t in _rowsP})
+        check(f"all eight steps are planned when {_labelP}",
+              _posP == list(range(1, 9)), _posP)
+        check(f"  and step 1 is the live one when {_labelP}",
+              all(not t.flow_waiting for t in _rowsP
+                  if t.flow_step.position == 1)
+              and all(t.flow_waiting for t in _rowsP
+                      if t.flow_step.position > 1),
+              [(t.flow_step.position, t.flow_waiting) for t in _rowsP])
+        check(f"  two people on step 1 get a task each when {_labelP}",
+              len([t for t in _rowsP if t.flow_step.position == 1]) == 2,
+              len([t for t in _rowsP if t.flow_step.position == 1]))
+        # Dates climb, one per step, and never sit on a closed day.
+        _duesP = [min(t.due_at for t in _rowsP
+                      if t.flow_step.position == p) for p in range(1, 9)]
+        check(f"  the dates climb step by step when {_labelP}",
+              all(_duesP[i] < _duesP[i + 1] for i in range(7)),
+              [str(x.date()) for x in _duesP])
+        check(f"  and not one of them is a day the company is closed "
+              f"when {_labelP}",
+              not any(_holP.is_closed(_d, _bossP.org_id, x.date(),
+                                      _hoIdP) for x in _duesP),
+              [f"{x:%a %d %b}" for x in _duesP])
+        # The honest part: a step nobody is named for says so.
+        _laterP = [t for t in _rowsP if t.flow_step.position > 1]
+        if _provP:
+            check(f"  a step nobody is named for says so on the task "
+                  f"when {_labelP}",
+                  all("Planned provisionally" in (t.details or "")
+                      for t in _laterP),
+                  [(t.details or "")[:60] for t in _laterP[:1]])
+            check(f"  and is held against whoever started the run "
+                  f"when {_labelP}",
+                  all(t.doer_id == _bossP.id for t in _laterP))
+        else:
+            check(f"  a properly staffed step says nothing about guesswork "
+                  f"when {_labelP}",
+                  not any("Planned provisionally" in (t.details or "")
+                          for t in _laterP))
+        if _howP == "nobody":
+            _instNobodyP = _instP.id
+
+# A provisional task is the software's own guesswork, not somebody's work,
+# so the plan must still be free to re-date it and to drop it when a
+# decision sends the run elsewhere. Writing the note as a COMMENT would have
+# frozen it: _touched counts a comment as evidence of real work.
+with _slP() as _d:
+    _instP = _d.get(_FiP, _instNobodyP)
+    _provRowsP = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _instP.id)).all() if t.flow_waiting]
+    check("a provisionally planned step is not mistaken for worked-on",
+          not any(_fsvP._touched(t) for t in _provRowsP),
+          [(t.id, bool(t.comments)) for t in _provRowsP[:2]])
+    _wasP = {t.id: t.due_at for t in _provRowsP}
+    # Push step 1's deadline out; everything after it must move too.
+    _liveP = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _instP.id)).all() if not t.flow_waiting]
+    for t in _liveP:
+        t.due_at = t.due_at + _tdJ(days=5)
+    _d.commit()
+    _fsvP.replan(_d, _instP, _d.get(_UsP, _instP.started_by_id))
+    _d.commit()
+    _nowP = {t.id: t.due_at for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _instP.id)).all() if t.flow_waiting}
+    check("and a late step still pushes the provisional ones along",
+          all(_nowP[k] > _wasP[k] for k in _wasP if k in _nowP),
+          [(k, str(_wasP[k]), str(_nowP.get(k))) for k in list(_wasP)[:2]])
+
+# ------------------------------------------- progress counts STEPS done --
+# Five tasks on step 1 — two people and a rework loop — read as "4 of 8
+# steps done" with a half-filled bar. It had done one step.
+with _slP() as _d:
+    _instP = _d.get(_FiP, _instNobodyP)
+    check("a run with nothing finished is 0 of 8",
+          _fsvP.flow_progress(_instP) == (0, 8),
+          _fsvP.flow_progress(_instP))
+    _s1P = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _instP.id)).all()
+        if t.flow_step.position == 1]
+    for t in _s1P:
+        t.status = _StP.COMPLETED
+    _d.commit()
+    _d.refresh(_instP)
+    check("one step finished is 1 of 8, however many people were on it",
+          _fsvP.flow_progress(_instP) == (1, 8),
+          (_fsvP.flow_progress(_instP), len(_s1P)))
+    # A rework copy of the same step, also closed: still one step done.
+    _reworkP = _fsvP._spawn_step_task(
+        _d, _instP, _d.get(_FsP, _s1P[0].flow_step_id),
+        _d.get(_UsP, _s1P[0].doer_id), _d.get(_UsP, _instP.started_by_id))
+    _reworkP.status = _StP.COMPLETED
+    _d.commit()
+    _d.refresh(_instP)
+    check("and a step sent back and done again is still one step",
+          _fsvP.flow_progress(_instP) == (1, 8),
+          _fsvP.flow_progress(_instP))
+    # One still with its doer means that step is not done.
+    _reworkP.status = _StP.IN_PROGRESS
+    _d.commit()
+    _d.refresh(_instP)
+    check("a step with anybody still holding it does not count as done",
+          _fsvP.flow_progress(_instP) == (0, 8),
+          _fsvP.flow_progress(_instP))
+
+# --------------------------------------------- early is said out loud ----
+# "On time" covered everything from a fortnight early to four minutes to
+# spare. Somebody finishing an FMS step days before its turn is the reason
+# the next step can start early, and that never showed anywhere.
+from app.models import Task as _TkR
+with _slP() as _d:
+    _bossR = _d.scalar(_SELP(_UsP).where(_UsP.email == "mis@gcs.local"))
+    _whoR = _d.scalar(_SELP(_UsP).where(_UsP.email == "amit@gcs.local"))
+
+    def _timed(due, done):
+        t = _TkR(org_id=_bossR.org_id, title=f"SMOKE timing {RUN}",
+                 assigner_id=_bossR.id, doer_id=_whoR.id,
+                 priority=_PrP.LOW, source=_TsQ.DELEGATION,
+                 status=_StP.SUBMITTED, due_at=due, submitted_at=done,
+                 requires_attachment=False)
+        _d.add(t); _d.flush()
+        return t
+
+    check("work handed in three days early says so",
+          _timed(_dtC(2026, 12, 10, 18), _dtC(2026, 12, 7, 9)
+                 ).timing_label == "3 days early")
+    check("one day early is singular",
+          _timed(_dtC(2026, 12, 10, 18), _dtC(2026, 12, 9, 9)
+                 ).timing_label == "1 day early")
+    check("the same day, inside the deadline, is still 'on time'",
+          _timed(_dtC(2026, 12, 10, 18), _dtC(2026, 12, 10, 9)
+                 ).timing_label == "on time")
+    check("the same day but past the hour is late, not on time",
+          _timed(_dtC(2026, 12, 10, 9), _dtC(2026, 12, 10, 18)
+                 ).timing_label == "late")
+    check("and two days over says how many",
+          _timed(_dtC(2026, 12, 10, 18), _dtC(2026, 12, 12, 9)
+                 ).timing_label == "2 days late")
+    check("nothing is claimed about work not handed in",
+          _TkR(org_id=_bossR.org_id, title="x", assigner_id=_bossR.id,
+               doer_id=_whoR.id, priority=_PrP.LOW, source=_TsQ.DELEGATION,
+               status=_StP.PENDING,
+               due_at=_dtC(2026, 12, 10)).timing_label == "")
+    _d.rollback()
+check("and the task list shows it",
+      "early" in admin.get("/tasks?scope=all&status=completed").text.lower())
+
+# ------------------------------------------- a doer sees what is coming --
+# The whole point: the person on step 4 can see step 4's planned date on the
+# day the form was submitted, and can get on with it early.
+with _slP() as _d:
+    _flowQ = _build8(_d, f"SMOKE visible-ahead {RUN}", "named",
+                     _d.scalar(_SELP(_UsP).where(
+                         _UsP.email == "amit@gcs.local")))
+    _bossQ = _d.scalar(_SELP(_UsP).where(_UsP.email == "mis@gcs.local"))
+    _instQ = _fsvP.start_flow(_d, _flowQ, f"SMOKE AHEAD {RUN}", _bossQ,
+                              branch_id=None)
+    _instQid = _instQ.id
+_rMineQ = doer.get("/tasks?scope=mine&status=pending&source=fms").text
+check("a doer sees every step of the run, not just the first",
+      _rMineQ.count(f"SMOKE AHEAD {RUN}") >= 8,
+      _rMineQ.count(f"SMOKE AHEAD {RUN}"))
+check("and each one says which step it is",
+      "Step 4 of 8" in _rMineQ)
+check("the later ones are marked planned rather than chased",
+      "planned" in _rMineQ.lower())
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

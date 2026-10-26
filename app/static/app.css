@@ -1252,3 +1252,7 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
    field of white under a short one. */
 .esc-frame{width:100%;height:520px;border:1px solid var(--line);
   border-radius:8px;background:#eef2f6;display:block}
+
+/* Work handed in before its planned date. Green rather than plain, because
+   early is a result and "on time" read the same as scraping in. */
+.early{color:var(--ok);font-weight:600}

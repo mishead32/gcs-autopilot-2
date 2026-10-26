@@ -87,8 +87,13 @@
     {# Closed, or finished and waiting on an auditor — both are "the doer has
        done it", and a dash here made the second look like nothing happened. #}
     <td>{% if t.closed_at or t.submitted_at %}{{ (t.closed_at or t.submitted_at)|dt('%d %b, %I:%M %p') }}
-        {% if t.was_on_time is not none %}<br><span style="font-size:11px"
-          class="{{ '' if t.was_on_time else 'overdue' }}">{{ 'on time' if t.was_on_time else 'late' }}</span>{% endif %}
+        {# "On time" covered everything from a fortnight early to four
+           minutes to spare. Somebody finishing an FMS step days before its
+           turn is why the next step can start early, and that never showed. #}
+        {% if t.timing_label %}<br><span style="font-size:11px"
+          class="{{ 'early' if t.was_on_time and 'early' in t.timing_label
+                    else ('' if t.was_on_time else 'overdue') }}"
+          >{{ t.timing_label }}</span>{% endif %}
         {% if not t.closed_at %}<br><span class="m" style="font-size:11px">sent for audit</span>{% endif %}
         {% else %}<span class="m">—</span>{% endif %}</td>
 

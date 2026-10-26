@@ -189,6 +189,9 @@ def task_columns(show_doer: bool = True):
         ("Completed on", lambda t: t.closed_at or t.submitted_at),
         ("On time", lambda t: "" if t.was_on_time is None
                               else ("Yes" if t.was_on_time else "No")),
+        # How early or late, in words, because "Yes" hides the difference
+        # between a fortnight early and four minutes to spare.
+        ("Early or late", lambda t: t.timing_label),
         ("Days late", _days_late),
         ("Audit", lambda t: t.audit_label),
         ("Auditor", lambda t: t.auditor.name if t.auditor else ""),

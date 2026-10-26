@@ -1162,6 +1162,30 @@ class Task(Base):
         return self.submitted_at <= self.due_at
 
     @property
+    def timing_label(self) -> str:
+        """'3 days early', 'on time', '2 days late'. Empty until handed in.
+
+        "On time" covered everything from finishing a fortnight early to
+        finishing with four minutes to spare, which hides the thing worth
+        seeing: somebody who gets an FMS step done days before its turn is
+        the reason the next step can start early, and that never showed
+        anywhere. Early is now said out loud.
+
+        Measured in whole days between the two dates, so "early" means a
+        different day rather than a few hours, which is what people mean.
+        """
+        if not self.submitted_at:
+            return ""
+        days = (self.due_at.date() - self.submitted_at.date()).days
+        if days > 0:
+            return f"{days} day{'s' if days > 1 else ''} early"
+        if days < 0:
+            n = -days
+            return f"{n} day{'s' if n > 1 else ''} late"
+        # Same day: on time if it beat the clock, late if it did not.
+        return "on time" if self.submitted_at <= self.due_at else "late"
+
+    @property
     def weight(self) -> int:
         """What this task is worth in the score — 5, 2 or 1."""
         return weight_of(self.priority)

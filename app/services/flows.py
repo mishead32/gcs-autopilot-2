@@ -173,7 +173,8 @@ def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep,
 
 def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
                      doer: User, assigner: User, waiting: bool = False,
-                     opens_at: datetime | None = None) -> Task:
+                     opens_at: datetime | None = None,
+                     provisional: bool = False) -> Task:
     """One task for one person on one step.
 
     opens_at is the moment this step is EXPECTED to open, used while the
@@ -181,6 +182,12 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     counted from "now", so it is counted from when step 2 is due to finish.
     Left out — the step is opening for real — and "now" is the answer,
     which is what it has always been.
+
+    provisional says the flow does not name anybody for this step, so the
+    plan is holding it against the person who started the run. It is said
+    on the task rather than left to be discovered, because somebody seeing
+    a step they do not recognise on their list should be able to find out
+    why in one click instead of asking.
     """
     base = _deadline_base(db, inst, step, opens_at)
     unit = step.tat_unit or "hours"
@@ -209,14 +216,32 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     else:
         want = clock.add_span(base, unit, value)
     # The work still has to happen, so the step is never skipped — only its
-    # deadline moves off a holiday. Skipping it would break the chain.
-    due_at, _moved = holidays.shift_due(db, inst.org_id, want, doer.branch_id)
+    # deadline moves off a closed day, FORWARD to the next working day.
+    #
+    # Forward, not back, because a chain cannot be dragged backwards: a
+    # Sunday step pulled back to Saturday lands on the day of the step it
+    # is waiting for, and then the step after it is Sunday again and lands
+    # on that same Saturday too. The tail of a run ends up stacked on one
+    # afternoon, each step due before the work it depends on could possibly
+    # be done. See holidays.push_due.
+    due_at, _moved = holidays.push_due(db, inst.org_id, want, doer.branch_id)
+
+    details = step.instructions
+    if provisional:
+        who = (f"nobody is in {step.doer_dept} at this run's company"
+               if step.doer_dept
+               else "the flow does not say who does this step")
+        details = ((details + "\n\n") if details else "") + (
+            f"— Planned provisionally: {who}, so it is held against "
+            "whoever started the run until somebody is set. Fix it under "
+            "Edit steps & questions and the plan follows next time this "
+            "run moves.")
 
     task = Task(
         org_id=inst.org_id,
         branch_id=doer.branch_id,
         title=f"{step.title} — {inst.reference}",
-        details=step.instructions,
+        details=details,
         how_to=step.how_to,
         assigner_id=assigner.id,
         doer_id=doer.id,
@@ -231,6 +256,7 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     )
     db.add(task)
     db.flush()
+
     # A step still waiting its turn is not news. The person can see it on
     # their list with the date it is planned for; a WhatsApp saying "this is
     # ready" when it is not would teach them to ignore the next one, which
@@ -378,19 +404,30 @@ def replan(db: Session, inst: FlowInstance, assigner: User) -> int:
             prev_due = max(t.due_at for t in mine)
             continue
         people = step_people(db, inst, step)
+        provisional = False
         if not people:
-            # Nobody to plan it for — a position nobody holds, or a step
-            # whose doer is picked at run time. It is still a real step and
-            # still opens when its turn comes; it just cannot be shown to
-            # anybody in advance, and inventing a name for it would be
-            # worse than leaving it off the plan.
-            prev_due = clock.add_span(prev_due, "hours", 24)
-            continue
+            # Nobody is named for this step. It used to be dropped from the
+            # plan here, with a comment saying it could not be shown to
+            # anybody in advance — and that was the bug behind "only step 1
+            # is showing". A flow whose later steps have no doer set, or
+            # whose position nobody at that company holds, planned exactly
+            # one step. The people on steps 2 to 8 saw nothing coming, and
+            # the run read "1 of 8" for ever.
+            #
+            # The step is not skipped when its turn actually comes:
+            # _open_step falls back to the person in front of it rather
+            # than losing the work. So the plan was disagreeing with what
+            # the software was going to do anyway — the honest fix is to
+            # plan the same thing, and SAY it is provisional, rather than
+            # hide a step that is definitely coming.
+            people = [assigner]
+            provisional = True
         # One decision, one person — the same rule the live step follows.
         if step.is_decision:
             people = people[:1]
         made = [_spawn_step_task(db, inst, step, p, assigner,
-                                 waiting=True, opens_at=prev_due)
+                                 waiting=True, opens_at=prev_due,
+                                 provisional=provisional)
                 for p in people]
         changed += len(made)
         prev_due = max(t.due_at for t in made)
@@ -412,8 +449,11 @@ def _planned_due(db: Session, inst: FlowInstance, step: FlowStep,
         want = clock.next_occurrence(base, unit, value)
     else:
         want = clock.add_span(base, unit, value)
-    due_at, _moved = holidays.shift_due(db, inst.org_id, want,
-                                        doer.branch_id if doer else None)
+    # Forward to the next working day, for the same reason as above: this
+    # is the function that dates the whole chain, so pulling a Sunday back
+    # here is what stacks four steps on one Saturday.
+    due_at, _moved = holidays.push_due(db, inst.org_id, want,
+                                       doer.branch_id if doer else None)
     return due_at
 
 
@@ -794,8 +834,23 @@ def flow_progress(inst: FlowInstance) -> tuple[int, int]:
     total = len(inst.flow.steps)
     if inst.completed_at:
         return total, total
-    done = sum(1 for t in inst.tasks
-               if t.status in (TaskStatus.COMPLETED, TaskStatus.SUBMITTED))
+
+    # Count STEPS finished, not tasks finished. The two are different as
+    # soon as a step has more than one person on it, or has been sent back
+    # and opened again — and both are normal. A step with three people and
+    # a rework loop had five tasks against it, four of them closed, and a
+    # run sitting on step 1 of 8 reported "4 of 8 steps done" with a
+    # half-filled progress bar. It had done one step.
+    #
+    # A step counts when it has tasks and none of them is still with its
+    # doer: that is the same test the engine uses to decide the run may
+    # move on, so the bar and the run always agree.
+    by_step: dict[int, list[Task]] = {}
+    for t in inst.tasks:
+        if t.flow_step_id is not None:
+            by_step.setdefault(t.flow_step_id, []).append(t)
+    done = sum(1 for rows in by_step.values()
+               if rows and not any(t.status in _WITH_DOER for t in rows))
     return min(done, total), total
 
 

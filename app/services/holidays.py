@@ -132,6 +132,38 @@ def next_working_day(db: Session, org_id: int, day: date,
     return d
 
 
+def push_due(db: Session, org_id: int, due_at: datetime,
+             branch_id: int | None = None) -> tuple[datetime, str | None]:
+    """Move a deadline off a closed day, FORWARD to the next working day.
+
+    The opposite direction from `shift_due`, and used by FMS for two
+    reasons.
+
+    A chain cannot be pulled backwards. An FMS step is due a day after the
+    one before it, so dragging a Sunday step back to Saturday puts it on
+    the same day as the step it is waiting for — and then the step after
+    that is a day later, which is Sunday again, so it lands on Saturday
+    too. A four-step tail ends up stacked on one afternoon, every step
+    "due" before the work it depends on can possibly be finished. That is
+    not a tighter deadline, it is an impossible one.
+
+    And the work genuinely has to happen. A checklist job on a closed day
+    is brought forward because the day it covers will not come again; an
+    FMS step is a link in a chain that has to run whatever the calendar
+    does, so the honest answer is the next day somebody is in.
+
+    Never moves a deadline that is already fine, and never further than
+    MAX_LOOKBACK days — a run of closed days longer than three weeks means
+    the calendar is wrong, and a deadline three weeks out is not a fix.
+    """
+    why = closed_reason(db, org_id, due_at.date(), branch_id)
+    if not why:
+        return due_at, None
+    moved = next_working_day(db, org_id,
+                             due_at.date() + timedelta(days=1), branch_id)
+    return datetime.combine(moved, due_at.time()), why
+
+
 def shift_due(db: Session, org_id: int, due_at: datetime,
               branch_id: int | None = None) -> tuple[datetime, str | None]:
     """Move a deadline off a closed day, back to the working day before it.
