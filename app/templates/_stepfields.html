@@ -50,7 +50,12 @@
            every run at one company. A renewal flow run for four hundred
            members has four hundred different trainers, and only an answer
            on the start form can say that. #}
-        <optgroup label="From an answer on the start form">
+        {# Marked for the script, which rebuilds this group from the
+           questions being typed on this same page. Unmarked, the script
+           could not find the server's group to replace it and simply added
+           a second one — the same heading twice, the same question listed
+           under each. #}
+        <optgroup class="fieldgroup" label="From an answer on the start form">
         {% for pf in person_fields %}<option value="field:{{ pf }}"
           {{ 'selected' if step and step.doer_field == pf }}
           >Whoever is named in “{{ pf }}”</option>{% endfor %}
@@ -347,8 +352,18 @@ function refreshDoerFields(){
 
   document.querySelectorAll('#steps select[name="step_doer"]').forEach(function(sel){
     var chosen = sel.value;
-    var group = sel.querySelector('.fieldgroup');
-    if (group) group.remove();
+    // Every group, not the first: one stale group left behind is how the
+    // heading came to appear twice with the same question under each.
+    sel.querySelectorAll('.fieldgroup').forEach(function(g){ g.remove(); });
+    // The server also leaves a loose option for a question that was
+    // renamed away. If that name is back on the form it is about to be
+    // listed properly, so the loose copy would be the same line twice.
+    var names = qs.map(function(q){ return 'field:' + q.name; });
+    sel.querySelectorAll('option').forEach(function(o){
+      if (!o.parentNode.classList.contains('fieldgroup')
+          && names.indexOf(o.value) !== -1) o.remove();
+    });
+    var group = null;
     if (!qs.length) {
       // Nothing to offer. A step already set to a question keeps its own
       // option below, so editing a flow never silently drops the setting.

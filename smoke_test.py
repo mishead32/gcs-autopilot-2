@@ -11464,6 +11464,21 @@ check("the builder offers a step the start form's person questions",
 check("and explains what that is for",
       "different person on every run" in _rEditB
       or "four hundred members" in _rEditB)
+# Seen on screen: the heading twice, the same question under each. The
+# server renders this group AND the script rebuilds it, so the two have to
+# agree on which group that is — the script finds the server's by class and
+# replaces it. Unmarked, it found nothing and added its own beside it.
+check("the server marks that group for the script to replace",
+      '<optgroup class="fieldgroup"' in _rEditB)
+check("so every one of those groups on the page is one the script owns",
+      _rEditB.count('<optgroup class="fieldgroup"')
+      == _rEditB.count('label="From an answer on the start form"'),
+      "{} marked, {} headings".format(
+          _rEditB.count('<optgroup class="fieldgroup"'),
+          _rEditB.count('label="From an answer on the start form"')))
+_sfDup = open("app/templates/_stepfields.html", encoding="utf-8").read()
+check("and the script clears every old group before adding its own",
+      "querySelectorAll('.fieldgroup').forEach" in _sfDup)
 
 print("\n== the list of person questions is built as you type ==")
 # The bug this closes: the "Who does it" dropdown was rendered once by the
