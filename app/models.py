@@ -810,6 +810,14 @@ class FlowStep(Base):
             when = (f'"{self.due_from_field}"' if self.due_from_field
                     else "a date on the start form")
             return (f"{days} day{'' if days == 1 else 's'} before {when}")
+        # And forwards from one. Read as a bare span it would say "3 days"
+        # and be taken for three days from when the step opened, which is
+        # the thing anchoring to the form exists to avoid.
+        if (self.tat_unit or "") == clock.AFTER_UNIT:
+            days = self.tat_value or 0
+            when = (f'"{self.due_from_field}"' if self.due_from_field
+                    else "a date on the start form")
+            return (f"{days} day{'' if days == 1 else 's'} after {when}")
         return clock.span_label(self.tat_unit or "hours",
                                 self.tat_value or self.tat_hours or 0)
 
@@ -856,10 +864,10 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
         # every such step an hour late.
         target.tat_value = 0
         target.tat_hours = 0
-    elif target.tat_unit == clock.BEFORE_UNIT:
-        # Days before a date on the form. 0 is a real answer — "on the day
-        # it expires" — so the floor below must not push it to 1 and make
-        # every such step a day early.
+    elif target.tat_unit in (clock.BEFORE_UNIT, clock.AFTER_UNIT):
+        # Days either side of a date on the form. 0 is a real answer — "on
+        # the day it expires", "on the joining day itself" — so the floor
+        # below must not push it to 1 and move every such step by a day.
         target.tat_value = max(0, target.tat_value or 0)
         target.tat_hours = target.tat_value
     elif target.tat_unit in clock.CALENDAR_UNITS:

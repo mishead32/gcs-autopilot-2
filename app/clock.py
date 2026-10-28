@@ -147,12 +147,27 @@ BEFORE_UNIT = "daysbefore"
 SPAN_UNITS[BEFORE_UNIT] = "Days before a date on the form"
 SPAN_CHOICES[BEFORE_UNIT] = [1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
 
+# And the same thing the other way round. "Take the timestamp from the
+# form" makes the answered date the deadline exactly — which is right for
+# "due at the joining date and time" and wrong for everything that has to
+# happen a few days AFTER it: the first follow-up three days after the
+# membership starts, the audit a week after the bill date.
+#
+# Counting from when the step opens cannot say it. A step opens when the
+# one before it is finished, and the whole point of anchoring to the form
+# is that the date is fixed by the member, not by how fast the office
+# worked. Same two boxes as counting back, read the same way.
+AFTER_UNIT = "daysafter"
+SPAN_UNITS[AFTER_UNIT] = "Days after a date on the form"
+SPAN_CHOICES[AFTER_UNIT] = [1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
+
 # Units written as a sentence rather than from their key. "Monthday",
 # "Fortnight" and "Formtime" are not words anybody picking a deadline would
 # recognise.
 UNIT_SENTENCES = dict(CALENDAR_UNITS)
 UNIT_SENTENCES[FORM_UNIT] = SPAN_UNITS[FORM_UNIT]
 UNIT_SENTENCES[BEFORE_UNIT] = SPAN_UNITS[BEFORE_UNIT]
+UNIT_SENTENCES[AFTER_UNIT] = SPAN_UNITS[AFTER_UNIT]
 
 # 1-28 only. The 29th, 30th and 31st do not exist in every month, and a
 # deadline that silently moves to the 28th in February is a deadline nobody

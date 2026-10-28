@@ -22,9 +22,23 @@
     <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
            placeholder="Words from the flow&#39;s name or description">
   </div>
+  {# Bodyzone, Spa Kora and the school in one list means everybody reads
+     past two thirds of it. Narrow to one, or leave it and the lists come
+     grouped company by company. #}
+  <div class="fb-f">
+    <label>Company</label>
+    <select name="company" onchange="this.form.submit()">
+      <option value="">Every company</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if company == b.id|string }}>{{ b.name }}</option>
+      {% endfor %}
+      <option value="group" {{ 'selected' if company == 'group' }}
+        >Group-wide flows only</option>
+    </select>
+  </div>
   <div class="acts">
     <button class="btn">Search</button>
-    {% if q %}<a class="btn ghost" href="/flows">Clear</a>{% endif %}
+    {% if q or company %}<a class="btn ghost" href="/flows">Clear</a>{% endif %}
   </div>
 </form>
 {% if q %}
@@ -33,14 +47,19 @@
 
 <h2>{{ 'Templates' if can_manage else 'Flows you can start' }}</h2>
 {% if flows %}
+{# Grouped rather than mixed: the company's name above its own flows, so
+   somebody at the spa reads one short table instead of skipping past the
+   gym's and the school's. Narrowed to one company there is one group, and
+   the heading still says which. #}
+{% for cname, cflows in flow_groups %}
+<h3 class="cogroup">{{ cname }} <span class="m">({{ cflows|length }})</span></h3>
 <div class="table-wrap"><table>
-  <tr><th>Flow</th><th>Branch</th><th>Steps</th><th>Submitted</th>
+  <tr><th>Flow</th><th>Steps</th><th>Submitted</th>
       <th>Status</th><th></th></tr>
-  {% for f in flows %}
+  {% for f in cflows %}
   <tr>
     <td><a href="/flows/{{ f.id }}"><strong>{{ f.name }}</strong></a>
       {% if f.description %}<div style="color:var(--muted);font-size:12px">{{ f.description }}</div>{% endif %}</td>
-    <td>{{ f.branch.name if f.branch else 'All' }}</td>
     <td>{{ f.steps|length }}</td>
     <td>{% if runs[f.id] %}<a href="/flows/{{ f.id }}/submissions"
           title="Every run of this flow, with the answers it was started with"
@@ -68,10 +87,14 @@
   </tr>
   {% endfor %}
 </table></div>
-{% else %}<div class="empty">No flows configured yet.</div>{% endif %}
+{% endfor %}
+{% else %}<div class="empty">{{ 'No flows for this company yet.' if company
+   else 'No flows configured yet.' }}</div>{% endif %}
 
 <h2>Running now ({{ running|length }})</h2>
 {% if running %}
+{% for cname, cruns in run_groups %}
+<h3 class="cogroup">{{ cname }} <span class="m">({{ cruns|length }})</span></h3>
 <div class="table-wrap"><table>
   {# "Reference" on its own was read as a step, and the long ones made that
      worse: a run called "Prepare the message for therapists..." under the
@@ -81,7 +104,7 @@
      run is actually sitting on now has a column of its own. #}
   <tr><th>FMS no.</th><th>What this run is about</th><th>Flow</th><th>Now on</th>
       <th>Progress</th><th>State</th><th>Started</th><th></th></tr>
-  {% for i in running %}
+  {% for i in cruns %}
   {% set p = progress[i.id] %}
   {% set cur = (i.flow.steps | selectattr('position', 'equalto', i.current_position)
                 | list | first) %}
@@ -116,5 +139,6 @@
   </tr>
   {% endfor %}
 </table></div>
-{% else %}<div class="empty">Nothing running.</div>{% endif %}
+{% endfor %}
+{% else %}<div class="empty">Nothing running{{ ' for this company' if company }}.</div>{% endif %}
 {% endblock %}

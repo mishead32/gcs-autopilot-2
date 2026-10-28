@@ -1256,3 +1256,9 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
 /* Work handed in before its planned date. Green rather than plain, because
    early is a result and "on time" read the same as scraping in. */
 .early{color:var(--ok);font-weight:600}
+
+/* The company's name over its own block of flows. Smaller and quieter than
+   a section heading — it separates, it does not announce a new section. */
+.cogroup{margin:18px 0 6px;font-size:14px;font-weight:600;
+         letter-spacing:.02em;color:var(--muted)}
+.cogroup .m{font-weight:400}

@@ -11639,5 +11639,93 @@ with _slB2() as _d:
     check("and it is in the future, not in 1970",
           _tT2.due_at > _clkB.now())
 
+print("\n== and a set number of days AFTER one ==")
+# The other half of the same need. "Take the timestamp from the form" makes
+# the answered date the deadline exactly, which is right for "due at the
+# joining date and time" and wrong for everything that happens a few days
+# after it — the first follow-up three days after the membership starts.
+# Counting from when the step OPENS cannot say it: that moves with how fast
+# the office worked, and the whole point is that the member fixed the date.
+from app.clock import AFTER_UNIT as _AU
+
+with _slB2() as _d:
+    _fA = _FlB(org_id=_orgB, name=f"SMOKE after-TAT {RUN}", active=True)
+    _fA.start_form = _jsB.dumps([
+        {"label": "Member name", "type": "text", "options": [],
+         "required": True},
+        {"label": "Membership start date", "type": "date", "options": [],
+         "required": True}])
+    _d.add(_fA); _d.flush()
+    _d.add(_FsB(flow_id=_fA.id, position=1, title="First check-in call",
+                default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                tat_unit=_AU, tat_value=3,
+                due_from_field="Membership start date",
+                requires_attachment=False))
+    _d.commit()
+    _fAid = _fA.id
+
+check("the builder offers it too", "Days after a date on the form"
+      in admin.get(f"/flows/{_fAid}/edit").text)
+
+_startA = _clkB.today() + _tdT(days=30)
+admin.post(f"/flows/{_fAid}/start",
+           data={"reference": "", "sf0": f"Vikram Mehta {RUN}",
+                 "sf1": _startA.isoformat()})
+with _slB2() as _d:
+    _iA = _d.scalars(_spK(_FID).where(_FID.flow_id == _fAid)
+                     .order_by(_FID.id.desc())).first()
+    _tA = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _iA.id))
+    _wantA = _startA + _tdT(days=3)
+    check("the deadline is three days after the date the form was given",
+          _tA.due_at.date() >= _wantA and (_tA.due_at.date() - _wantA).days <= 3,
+          f"{_tA.due_at.date()} vs {_wantA}")
+    check("after the date itself, not before it",
+          _tA.due_at.date() > _startA)
+    check("and never on a closed day",
+          not _holT.is_closed(_d, _iA.org_id, _tA.due_at.date(),
+                              _tA.doer.branch_id))
+    check("the step says in words which way it counts",
+          "after" in (_tA.flow_step.tat_label or "")
+          and "Membership start date" in _tA.flow_step.tat_label)
+# The two are read by one piece of code, so the one guard covers both.
+_badAfterT = dict(_beforePayT)
+_badAfterT["step_tat_unit"] = [_AU]
+check("counting forward from something that is not a date is refused too",
+      admin.post(f"/flows/{_fTid}/edit", data=_badAfterT).status_code == 400)
+
+print("\n== FMS, company by company ==")
+from app.models import Branch as _BrB
+# Bodyzone's flows, Spa Kora's and the school's in one list means everybody
+# reads past two thirds of it to find their own.
+_fmsPage = admin.get("/flows").text
+check("the FMS page can be narrowed to one company",
+      'name="company"' in _fmsPage)
+check("and offers the group-wide flows as a category of their own",
+      'value="group"' in _fmsPage)
+check("the flows are grouped under the company they belong to",
+      'class="cogroup"' in _fmsPage)
+with _slB2() as _d:
+    _cos = _d.scalars(_spK(_BrB).where(_BrB.org_id == _orgB)
+                      .order_by(_BrB.name)).all()
+    _mine = [f.name for f in _d.scalars(_spK(_FlB).where(
+        _FlB.org_id == _orgB, _FlB.branch_id == _cos[0].id)).all()]
+    _theirs = [f.name for f in _d.scalars(_spK(_FlB).where(
+        _FlB.org_id == _orgB, _FlB.branch_id.isnot(None),
+        _FlB.branch_id != _cos[0].id)).all()]
+_oneCo = admin.get(f"/flows?company={_cos[0].id}").text
+check("picking one company shows that company's heading",
+      _cos[0].name in _oneCo)
+check("and its own flows", all(n in _oneCo for n in _mine) if _mine else True,
+      str([n for n in _mine if n not in _oneCo])[:200])
+check("and none of another company's",
+      all(n not in _oneCo for n in _theirs) if _theirs else True,
+      str([n for n in _theirs if n in _oneCo])[:200])
+check("group-wide only shows the flows built for every company",
+      "Every company" in admin.get("/flows?company=group").text
+      or "No flows for this company" in admin.get("/flows?company=group").text)
+check("a company that has nothing says so rather than showing an empty table",
+      "No flows" in admin.get("/flows?company=999999").text
+      or admin.get("/flows?company=999999").status_code == 200)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

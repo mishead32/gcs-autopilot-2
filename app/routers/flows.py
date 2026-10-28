@@ -65,7 +65,7 @@ def _read_start_form(form) -> str | None:
 
 
 @router.get("/flows", response_class=HTMLResponse)
-def flow_list(request: Request, export: str = "", q: str = "",
+def flow_list(request: Request, export: str = "", q: str = "", company: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     text_q = search.clean(q)
     flows = db.scalars(
@@ -84,6 +84,26 @@ def flow_list(request: Request, export: str = "", q: str = "",
             func.upper(FlowInstance.ref) == _ref_typed(text_q),
             search.clause([FlowInstance.reference], text_q),
         ))
+    # One list with Bodyzone's flows, Spa Kora's and the school's mixed
+    # together is three people each reading past two thirds of it. Narrowed
+    # to one company, or grouped company by company when it is not.
+    #
+    # "group" is its own answer rather than a blank: a flow built for every
+    # company is a real category — the HR and accounts ones are — and
+    # "no company" and "all companies" are the same rows read two ways.
+    branches = db.scalars(select(Branch).where(Branch.org_id == user.org_id)
+                          .order_by(Branch.name)).all()
+    pick = (company or "").strip()
+    if pick == "group":
+        flows = [f for f in flows if f.branch_id is None]
+    elif pick.isdigit():
+        flows = [f for f in flows if f.branch_id == int(pick)]
+    else:
+        pick = ""
+    if pick == "group":
+        run_q = run_q.where(FlowInstance.branch_id.is_(None))
+    elif pick:
+        run_q = run_q.where(FlowInstance.branch_id == int(pick))
     running = db.scalars(
         run_q.order_by(FlowInstance.started_at.desc()).limit(50)).all()
     if xlsx.wants(export):
@@ -126,9 +146,28 @@ def flow_list(request: Request, export: str = "", q: str = "",
         select(FlowInstance.flow_id, func.count())
         .where(FlowInstance.org_id == user.org_id)
         .group_by(FlowInstance.flow_id)).all())
+    def _by_company(rows):
+        """[(company name, rows)] — named companies first, group-wide last.
+
+        A heading with nothing under it is noise, so a company with no
+        flows is left out entirely rather than printed empty.
+        """
+        out = []
+        for b in branches:
+            got = [r for r in rows if r.branch_id == b.id]
+            if got:
+                out.append((b.name, got))
+        shared = [r for r in rows if r.branch_id is None]
+        if shared:
+            out.append(("Every company", shared))
+        return out
+
     return templates.TemplateResponse(request, "flows.html", {
         "q": text_q, "can_manage": user.has(Right.MANAGE_FLOW),
         "user": user, "flows": flows, "running": running,
+        "branches": branches, "company": pick,
+        "flow_groups": _by_company(flows),
+        "run_groups": _by_company(running),
         "runs": {f.id: counts.get(f.id, 0) for f in flows},
         "progress": {i.id: flow_svc.flow_progress(i) for i in running},
     })
@@ -384,9 +423,11 @@ def _check_routes(rows: list[dict]) -> None:
         # would count back from nothing and fall back to a day from now.
         # That is a deadline twenty days wrong, on a step whose whole job is
         # to land before something.
-        if r["tat_unit"] == clock.BEFORE_UNIT and not r["due_from_field"]:
+        if (r["tat_unit"] in (clock.BEFORE_UNIT, clock.AFTER_UNIT)
+                and not r["due_from_field"]):
+            _way = ("BEFORE" if r["tat_unit"] == clock.BEFORE_UNIT else "AFTER")
             raise HTTPException(
-                400, f"{where}: it is set to be due a number of days BEFORE a "
+                400, f"{where}: it is set to be due a number of days {_way} a "
                      "date, so it needs to say which date — and that has to "
                      "be a date question on the start form, not another "
                      "step's planned date. Pick one under “Start this step's "

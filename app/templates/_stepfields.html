@@ -207,9 +207,9 @@
        counted back from — so it says so rather than leaving somebody to
        guess which box the expiry date goes in. #}
     <div class="m beforenote" style="margin-top:12px" hidden>
-      This step is due a number of days <strong>before</strong> a date
-      answered on the start form. Pick which date below — the membership
-      expiry, the licence date, whatever the run is counting back from.
+      This step is due a number of days <strong><span class="bfway">before</span></strong>
+      a date answered on the start form. Pick which date below — the
+      membership expiry, the joining date, whatever this run counts from.
     </div>
     <div class="row duefromrow" style="margin-top:12px">
       <div style="max-width:420px"><label>Start this step's clock from</label>
@@ -309,6 +309,10 @@ function renumber(){
  */
 var FORM_UNIT = 'formtime';
 var BEFORE_UNIT = 'daysbefore';
+var AFTER_UNIT = 'daysafter';
+/* Both count from a date on the START FORM rather than from when the step
+ * opened, so both need the anchor row and both restrict it to questions. */
+function countsFromForm(v){ return v === BEFORE_UNIT || v === AFTER_UNIT; }
 
 /* The start form's questions, as they stand right now.
  *
@@ -405,7 +409,7 @@ function refreshDateFields(){
   // its second box, so it has to hear about this too.
   document.querySelectorAll('#steps .stepcard').forEach(function(card){
     var u = card.querySelector('.tatunit');
-    if (u && (u.value === FORM_UNIT || u.value === BEFORE_UNIT)
+    if (u && (u.value === FORM_UNIT || countsFromForm(u.value))
         && card._fillTat) card._fillTat();
   });
 
@@ -444,7 +448,7 @@ function refreshDateFields(){
   // because it cannot choose an option that does not exist yet.
   document.querySelectorAll('#steps .stepcard').forEach(function(card){
     var u = card.querySelector('.tatunit');
-    if (u && u.value === BEFORE_UNIT && card._anchorBox) card._anchorBox();
+    if (u && countsFromForm(u.value) && card._anchorBox) card._anchorBox();
   });
 }
 
@@ -506,7 +510,9 @@ function wire(card){
     // note of its own saying what it is for.
     if (dfrow) dfrow.hidden = form;
     if (dfnote) dfnote.hidden = !form;
-    if (bfnote) bfnote.hidden = unit.value !== BEFORE_UNIT;
+    if (bfnote) bfnote.hidden = !countsFromForm(unit.value);
+    var way = card.querySelector('.bfway');
+    if (way) way.textContent = unit.value === AFTER_UNIT ? 'after' : 'before';
 
     // Counting back only works from a date on the FORM. The same box also
     // offers "when this step opens" and "step 2's planned date", and
@@ -514,7 +520,7 @@ function wire(card){
     // nothing and fell back to a day from now — twenty days wrong, on a
     // step whose whole job is to land before something. The server refuses
     // that save; this stops it being offered in the first place.
-    var back = unit.value === BEFORE_UNIT;
+    var back = countsFromForm(unit.value);
     var sel = card.querySelector('.duefrom');
     if (sel) {
       // Only the step/opening choices are touched here. Whether a QUESTION
@@ -604,7 +610,8 @@ function wire(card){
     if (lbl) {
       lbl.textContent = CAL[unit.value]
         ? (unit.value === 'fortnight' ? 'Which dates' : 'Which one')
-        : (unit.value === BEFORE_UNIT ? 'How many days before' : 'How many');
+        : (unit.value === BEFORE_UNIT ? 'How many days before'
+          : unit.value === AFTER_UNIT ? 'How many days after' : 'How many');
     }
     // The fortnight rule has exactly one answer, so there is nothing to
     // choose — shown, but not pretending to be a decision.
