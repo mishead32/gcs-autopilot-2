@@ -7863,7 +7863,7 @@ check("a question renamed mid-build drops the anchor instead of saving a dud",
 # with nothing on screen saying the TYPE was what decided it. Somebody
 # looking for their own question found an empty space.
 check("every start-form question is listed, not only the dated ones",
-      "qs.push({name: name, dated:" in _sfD)
+      "qs.push({name: name," in _sfD and "dated: t.value === 'date'" in _sfD)
 check("and one that cannot hold a date says what to change",
       "set its answer type to Date to use it" in _sfD)
 check("while staying unchoosable, so a dud anchor cannot be saved",
@@ -11464,6 +11464,105 @@ check("the builder offers a step the start form's person questions",
 check("and explains what that is for",
       "different person on every run" in _rEditB
       or "four hundred members" in _rEditB)
+
+print("\n== the list of person questions is built as you type ==")
+# The bug this closes: the "Who does it" dropdown was rendered once by the
+# server from the SAVED flow, so a question typed on the same page was not
+# in it. Somebody adding "PT trainer" and then looking for it found two
+# options and concluded the feature had not shipped. Every other
+# cross-referencing list on that page is built in the browser; this one now
+# is too.
+_sfT = open("app/templates/_stepfields.html", encoding="utf-8").read()
+check("the builder rebuilds the doer list in the browser",
+      "function refreshDoerFields" in _sfT)
+check("and does it whenever the start form changes",
+      "refreshDoerFields();" in _sfT)
+check("person questions are collected alongside the dated ones",
+      "person: t.value === 'person'" in _sfT)
+check("a step already pointing at a question keeps its setting",
+      "if (chosen) sel.value = chosen;" in _sfT)
+check("the new builder page serves that script, not just the edit page",
+      "refreshDoerFields" in admin.get("/flows/new").text)
+
+print("\n== a step due a set number of days BEFORE a date on the form ==")
+# Found the hard way: the first name for this unit was eleven characters,
+# and `tat_unit` is VARCHAR(10). SQLite ignores column lengths, so every
+# test passed and the live PostgreSQL refused to save the step. This checks
+# the names against the column itself, not against a number typed twice.
+from app.clock import SPAN_UNITS as _SUT
+from app.models import FlowStep as _FsT
+check("every TAT unit name fits the column it is stored in",
+      all(len(_u) <= _FsT.__table__.c.tat_unit.type.length for _u in _SUT),
+      str([_u for _u in _SUT
+           if len(_u) > _FsT.__table__.c.tat_unit.type.length]))
+
+# "Take the renewal follow-up 30 days before the membership expires."
+# Every other TAT counts forward from when the step opens; this one counts
+# BACKWARDS from an answer, which is the only way a renewal chase lands
+# before the thing it is chasing.
+from datetime import timedelta as _tdT
+
+from app.clock import BEFORE_UNIT as _BU
+from app.services import holidays as _holT
+
+with _slB2() as _d:
+    _fT = _FlB(org_id=_orgB, name=f"SMOKE before-TAT {RUN}", active=True)
+    _fT.start_form = _jsB.dumps([
+        {"label": "Member name", "type": "text", "options": [],
+         "required": True},
+        {"label": "Membership expiry date", "type": "date", "options": [],
+         "required": True}])
+    _d.add(_fT); _d.flush()
+    _d.add(_FsB(flow_id=_fT.id, position=1, title="Call about renewal",
+                default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                tat_unit=_BU, tat_value=30,
+                due_from_field="Membership expiry date",
+                requires_attachment=False))
+    _d.commit()
+    _fTid, _doerT = _fT.id, _staffB[0].id
+
+check("the builder offers it as an answer to “when is it due”",
+      "Days before a date on the form" in admin.get(f"/flows/{_fTid}/edit").text)
+
+_expiryT = (_clkB.today() + _tdT(days=120))
+admin.post(f"/flows/{_fTid}/start",
+           data={"reference": "", "sf0": f"Ritu Bansal {RUN}",
+                 "sf1": _expiryT.isoformat()})
+with _slB2() as _d:
+    _iT = _d.scalars(_spK(_FID).where(_FID.flow_id == _fTid)
+                     .order_by(_FID.id.desc())).first()
+    _tT = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _iT.id))
+    _wantT = _expiryT - _tdT(days=30)
+    check("the run started and its one step has a deadline",
+          _tT is not None and _tT.due_at is not None)
+    # Not an exact date: a deadline that lands on a Sunday or a holiday is
+    # pushed FORWARD to the next working day, so the honest assertion is
+    # "on the day asked for, or the next working day after it".
+    check("the deadline is thirty days before the expiry the form was given",
+          _tT.due_at.date() >= _wantT
+          and (_tT.due_at.date() - _wantT).days <= 3)
+    check("and never on a closed day",
+          not _holT.is_closed(_d, _iT.org_id, _tT.due_at.date(),
+                              _tT.doer.branch_id))
+    check("well before the expiry itself, which is the whole point",
+          _tT.due_at.date() < _expiryT)
+    check("and the step says in words what it is counting back from",
+          "before" in (_tT.flow_step.tat_label or "").lower()
+          and "Membership expiry date" in _tT.flow_step.tat_label)
+
+# A run that leaves the anchor blank, or answers it with something that is
+# not a date, must still get a deadline — an unchaseable task is worse than
+# a rough one.
+admin.post(f"/flows/{_fTid}/start",
+           data={"reference": "", "sf0": f"No date {RUN}", "sf1": ""})
+with _slB2() as _d:
+    _iT2 = _d.scalars(_spK(_FID).where(_FID.flow_id == _fTid)
+                      .order_by(_FID.id.desc())).first()
+    _tT2 = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _iT2.id))
+    check("a run with the anchor left blank still gets a planned date",
+          _tT2 is not None and _tT2.due_at is not None)
+    check("and it is in the future, not in 1970",
+          _tT2.due_at > _clkB.now())
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

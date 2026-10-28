@@ -121,11 +121,38 @@ SPAN_UNITS[FORM_UNIT] = "Take timestamp from form"
 # questions, which only the page building the flow knows about.
 SPAN_CHOICES[FORM_UNIT] = []
 
+# ------------------------------------------- counting BACK from a date ----
+# The fifth shape, and the one every renewal, licence and contract needs:
+# a deadline a given number of days BEFORE a date somebody typed on the
+# start form. "Follow up thirty days before the membership expires."
+#
+# Every other unit counts forwards — from now, from when the step opened,
+# from an earlier step's date — and none of them can say this. Counting
+# forwards from the start of the run cannot either: a membership expiring
+# in March and one expiring in November are the same flow and want the same
+# rule, and the only thing they share is "thirty days before the date in
+# the file".
+#
+# It takes BOTH boxes, which no other unit does: the number of days in the
+# TAT box, and which question holds the date in the anchor box. Those are
+# two boxes that every step already posts, so the parallel lists the server
+# reads stay lined up — a third box only some steps sent would shift every
+# later step's settings onto the wrong step.
+# Ten characters, and not one more: `flow_steps.tat_unit` is VARCHAR(10) on
+# the live database. SQLite ignores the length and accepts anything, so a
+# longer name passes every test here and then refuses to save a step on the
+# real site. The check at the bottom of this file guards that for the next
+# unit somebody adds.
+BEFORE_UNIT = "daysbefore"
+SPAN_UNITS[BEFORE_UNIT] = "Days before a date on the form"
+SPAN_CHOICES[BEFORE_UNIT] = [1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
+
 # Units written as a sentence rather than from their key. "Monthday",
 # "Fortnight" and "Formtime" are not words anybody picking a deadline would
 # recognise.
 UNIT_SENTENCES = dict(CALENDAR_UNITS)
 UNIT_SENTENCES[FORM_UNIT] = SPAN_UNITS[FORM_UNIT]
+UNIT_SENTENCES[BEFORE_UNIT] = SPAN_UNITS[BEFORE_UNIT]
 
 # 1-28 only. The 29th, 30th and 31st do not exist in every month, and a
 # deadline that silently moves to the 28th in February is a deadline nobody
@@ -267,3 +294,15 @@ def span_label(unit: str, value: int) -> str:
     value = int(value or 0)
     word = (unit or "hours").rstrip("s")
     return f"{value} {word}" + ("" if value == 1 else "s")
+
+
+# How long a unit's name may be, because the column it is stored in says so.
+# Kept here rather than in the test suite so the limit sits next to the
+# names it governs.
+UNIT_KEY_MAX = 10
+_too_long = [u for u in SPAN_UNITS if len(u) > UNIT_KEY_MAX]
+if _too_long:                                        # pragma: no cover
+    raise ValueError(
+        "These TAT unit names will not fit in flow_steps.tat_unit "
+        f"(VARCHAR({UNIT_KEY_MAX})): {', '.join(_too_long)}. Shorten them, "
+        "or widen the column with a migration first.")

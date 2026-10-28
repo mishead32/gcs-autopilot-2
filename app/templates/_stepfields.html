@@ -197,6 +197,15 @@
       is nothing to count from — the question chosen above
       <strong>is</strong> the deadline.
     </div>
+    {# Shown when the deadline counts BACK from a date on the form. The
+       anchor row below is not optional then — it names the date being
+       counted back from — so it says so rather than leaving somebody to
+       guess which box the expiry date goes in. #}
+    <div class="m beforenote" style="margin-top:12px" hidden>
+      This step is due a number of days <strong>before</strong> a date
+      answered on the start form. Pick which date below — the membership
+      expiry, the licence date, whatever the run is counting back from.
+    </div>
     <div class="row duefromrow" style="margin-top:12px">
       <div style="max-width:420px"><label>Start this step's clock from</label>
         {# A list, not a number. "Count the TAT from 2" told nobody what 2
@@ -294,6 +303,7 @@ function renumber(){
  * because the questions and the steps are written on the same page.
  */
 var FORM_UNIT = 'formtime';
+var BEFORE_UNIT = 'daysbefore';
 
 /* The start form's questions, as they stand right now.
  *
@@ -315,19 +325,61 @@ function formQuestions(){
     var name = (l.value || '').trim();
     if (!name || seen[name]) return;          // unnamed, or already listed
     seen[name] = 1;
-    qs.push({name: name, dated: t.value === 'date' || t.value === 'datetime'});
+    qs.push({name: name,
+             dated: t.value === 'date' || t.value === 'datetime',
+             person: t.value === 'person'});
   });
   return qs;
 }
 
+/* "Who does it" can point at a person question on the start form, and that
+ * list has to be built HERE rather than by the server.
+ *
+ * The questions and the steps are written on the same page. Rendered once
+ * by the server, the option only appeared after saving the flow and opening
+ * it again — so somebody adding "PT trainer" and then looking for it under
+ * "Who does it" found two options and concluded the feature was not there.
+ * It is the same reason every other cross-referencing list on this page is
+ * built in the browser.
+ */
+function refreshDoerFields(){
+  var qs = formQuestions().filter(function(q){ return q.person; });
+
+  document.querySelectorAll('#steps select[name="step_doer"]').forEach(function(sel){
+    var chosen = sel.value;
+    var group = sel.querySelector('.fieldgroup');
+    if (group) group.remove();
+    if (!qs.length) {
+      // Nothing to offer. A step already set to a question keeps its own
+      // option below, so editing a flow never silently drops the setting.
+      if (chosen.indexOf('field:') === 0) sel.value = chosen;
+      return;
+    }
+    group = document.createElement('optgroup');
+    group.className = 'fieldgroup';
+    group.label = 'From an answer on the start form';
+    qs.forEach(function(q){
+      var o = document.createElement('option');
+      o.value = 'field:' + q.name;
+      o.textContent = 'Whoever is named in \u201c' + q.name + '\u201d';
+      group.appendChild(o);
+    });
+    sel.appendChild(group);
+    // Keep what was chosen, now that its option exists again.
+    if (chosen) sel.value = chosen;
+  });
+}
+
 function refreshDateFields(){
   var qs = formQuestions();
+  refreshDoerFields();
 
   // A step whose TAT is a form timestamp is listing those same questions in
   // its second box, so it has to hear about this too.
   document.querySelectorAll('#steps .stepcard').forEach(function(card){
     var u = card.querySelector('.tatunit');
-    if (u && u.value === FORM_UNIT && card._fillTat) card._fillTat();
+    if (u && (u.value === FORM_UNIT || u.value === BEFORE_UNIT)
+        && card._fillTat) card._fillTat();
   });
 
   var usable = qs.filter(function(q){ return q.dated; })
@@ -405,6 +457,7 @@ function wire(card){
   var box = card.querySelector('.tatvalbox');
   var dfrow = card.querySelector('.duefromrow');
   var dfnote = card.querySelector('.formtimenote');
+  var bfnote = card.querySelector('.beforenote');
   var CAL = {monthday: 1, weekday: 1, fortnight: 1};
 
   // "Start this step's clock from" and "take the timestamp from the form"
@@ -413,8 +466,12 @@ function wire(card){
   // what keeps every step posting one value for every name.
   function anchorBox(){
     var form = unit.value === FORM_UNIT;
+    // Counting back NEEDS the anchor row — it is where the date being
+    // counted back from is named — so that row stays on screen and gets a
+    // note of its own saying what it is for.
     if (dfrow) dfrow.hidden = form;
     if (dfnote) dfnote.hidden = !form;
+    if (bfnote) bfnote.hidden = unit.value !== BEFORE_UNIT;
   }
 
   /* The questions off the start form, offered as this step's deadline.
@@ -484,7 +541,7 @@ function wire(card){
     if (lbl) {
       lbl.textContent = CAL[unit.value]
         ? (unit.value === 'fortnight' ? 'Which dates' : 'Which one')
-        : 'How many';
+        : (unit.value === BEFORE_UNIT ? 'How many days before' : 'How many');
     }
     // The fortnight rule has exactly one answer, so there is nothing to
     // choose — shown, but not pretending to be a decision.

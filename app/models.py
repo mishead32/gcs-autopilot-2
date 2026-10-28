@@ -802,6 +802,14 @@ class FlowStep(Base):
             if self.due_from_field:
                 return f'the time answered for "{self.due_from_field}"'
             return "a time answered on the start form"
+        # Counting BACK from a date on the form. The number alone would read
+        # as "30 days" and be taken for thirty days from now, which is the
+        # opposite of what it means.
+        if (self.tat_unit or "") == clock.BEFORE_UNIT:
+            days = self.tat_value or 0
+            when = (f'"{self.due_from_field}"' if self.due_from_field
+                    else "a date on the start form")
+            return (f"{days} day{'' if days == 1 else 's'} before {when}")
         return clock.span_label(self.tat_unit or "hours",
                                 self.tat_value or self.tat_hours or 0)
 
@@ -848,6 +856,12 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
         # every such step an hour late.
         target.tat_value = 0
         target.tat_hours = 0
+    elif target.tat_unit == clock.BEFORE_UNIT:
+        # Days before a date on the form. 0 is a real answer — "on the day
+        # it expires" — so the floor below must not push it to 1 and make
+        # every such step a day early.
+        target.tat_value = max(0, target.tat_value or 0)
+        target.tat_hours = target.tat_value
     elif target.tat_unit in clock.CALENDAR_UNITS:
         # 0 is a real answer here — Monday, and the fortnight rule's single
         # placeholder — so the "no zero spans" floor below must not touch
