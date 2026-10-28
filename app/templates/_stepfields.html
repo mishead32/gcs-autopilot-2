@@ -411,6 +411,14 @@ function refreshDateFields(){
       sel.value = chosen;
     }
   });
+
+  // Now that the questions are on the list, let a counting-back step narrow
+  // it down to them and pick one. Done here rather than in the loop above
+  // because it cannot choose an option that does not exist yet.
+  document.querySelectorAll('#steps .stepcard').forEach(function(card){
+    var u = card.querySelector('.tatunit');
+    if (u && u.value === BEFORE_UNIT && card._anchorBox) card._anchorBox();
+  });
 }
 
 // A question's label or type changing changes the anchors on offer, and
@@ -472,6 +480,34 @@ function wire(card){
     if (dfrow) dfrow.hidden = form;
     if (dfnote) dfnote.hidden = !form;
     if (bfnote) bfnote.hidden = unit.value !== BEFORE_UNIT;
+
+    // Counting back only works from a date on the FORM. The same box also
+    // offers "when this step opens" and "step 2's planned date", and
+    // neither is a date, so a step saved that way counted back from
+    // nothing and fell back to a day from now — twenty days wrong, on a
+    // step whose whole job is to land before something. The server refuses
+    // that save; this stops it being offered in the first place.
+    var back = unit.value === BEFORE_UNIT;
+    var sel = card.querySelector('.duefrom');
+    if (sel) {
+      // Only the step/opening choices are touched here. Whether a QUESTION
+      // is choosable is refreshDateFields' business — it greys out the ones
+      // that are not date questions — so leaving those alone is what keeps
+      // the two from fighting over the same options.
+      sel.querySelectorAll('option').forEach(function(o){
+        if (o.value.indexOf('field:') !== 0) o.disabled = back;
+      });
+      // Nothing valid chosen? Take the first date question, so the common
+      // case needs no second click.
+      if (back) {
+        var cur = sel.options[sel.selectedIndex];
+        if (!cur || cur.value.indexOf('field:') !== 0 || cur.disabled) {
+          var first = sel.querySelector(
+            'option[value^="field:"]:not([disabled])');
+          sel.value = first ? first.value : '';
+        }
+      }
+    }
   }
 
   /* The questions off the start form, offered as this step's deadline.
@@ -550,6 +586,9 @@ function wire(card){
   unit.addEventListener('change', fillValues);
   // So a question typed on the start form can refresh this card's list.
   card._fillTat = fillValues;
+  // Called again once the anchor list has been rebuilt — see the end of
+  // refreshDateFields. The options have to exist before one can be picked.
+  card._anchorBox = anchorBox;
   fillValues();
 
   // "Who does it" and "Also done by" must never name the same person. The

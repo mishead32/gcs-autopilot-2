@@ -11520,6 +11520,7 @@ with _slB2() as _d:
                 requires_attachment=False))
     _d.commit()
     _fTid, _doerT = _fT.id, _staffB[0].id
+    _stepTid = _fT.steps[0].id
 
 check("the builder offers it as an answer to “when is it due”",
       "Days before a date on the form" in admin.get(f"/flows/{_fTid}/edit").text)
@@ -11549,6 +11550,53 @@ with _slB2() as _d:
     check("and the step says in words what it is counting back from",
           "before" in (_tT.flow_step.tat_label or "").lower()
           and "Membership expiry date" in _tT.flow_step.tat_label)
+
+# The trap this closes. The anchor box also offers "when this step opens"
+# and "step 2's planned date", and neither is a date on the form — so a
+# step saved that way counted back from nothing and quietly fell back to a
+# day from now. On a step whose whole job is to land twenty days before
+# something, that is not a near miss.
+_beforePayT = {
+    "name": f"SMOKE before-TAT {RUN}", "description": "", "branch_id": "",
+    "sf_label": ["Member name", "Membership expiry date"],
+    "sf_type": ["text", "date"], "sf_options": ["", ""],
+    "sf_required": ["1", "1"],
+    # The step's own id, so this is a CHANGE to it. Left out, the route
+    # reads it as removing step 1 and adding a new one, which it refuses
+    # while a run is still going — a different refusal from the one under
+    # test here.
+    "step_id": [str(_stepTid)],
+    "step_title": ["Call about renewal"], "step_doer": [str(_doerT)],
+    "step_tat_unit": [_BU], "step_tat": ["20"],
+    "step_priority": ["medium"], "step_instructions": [""],
+    "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
+    "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+    "step_no": [""], "step_fail": [""],
+    "step_due_from": [""]}            # "when this step opens" — not a date
+_badBeforeT = admin.post(f"/flows/{_fTid}/edit", data=_beforePayT)
+check("counting back from something that is not a date on the form is "
+      "refused, not silently wrong",
+      _badBeforeT.status_code == 400, str(_badBeforeT.status_code))
+check("and the refusal says it has to be a date on the start form",
+      "start form" in _badBeforeT.text and "planned date" in _badBeforeT.text)
+check("the step that was already saved is untouched by the refused save",
+      admin.get(f"/flows/{_fTid}/edit").text.count("Call about renewal") >= 1)
+# And the same save goes through once it names the date.
+_okBeforeT = dict(_beforePayT)
+_okBeforeT["step_due_from"] = ["field:Membership expiry date"]
+_okRespT = admin.post(f"/flows/{_fTid}/edit", data=_okBeforeT)
+check("naming the date question saves it", _okRespT.status_code == 200,
+      f"{_okRespT.status_code}: {_okRespT.text.split("<p")[-1][:300]}")
+with _slB2() as _d:
+    _stT = _d.get(_FlB, _fTid).steps[0]
+    check("with the question and the number of days both stored",
+          _stT.tat_unit == _BU and _stT.tat_value == 20
+          and _stT.due_from_field == "Membership expiry date",
+          f"{_stT.tat_unit}/{_stT.tat_value}/{_stT.due_from_field}")
+    check("and no leftover pointer at a step",
+          _stT.due_from_pos is None, str(_stT.due_from_pos))
+check("the builder stops offering those choices once it is counting back",
+      "if (o.value.indexOf('field:') !== 0) o.disabled = back;" in _sfT)
 
 # A run that leaves the anchor blank, or answers it with something that is
 # not a date, must still get a deadline — an unchaseable task is worse than

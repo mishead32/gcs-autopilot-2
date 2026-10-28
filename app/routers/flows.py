@@ -377,6 +377,22 @@ def _check_routes(rows: list[dict]) -> None:
                      "in the box beside it — and if the form has no date "
                      "question yet, add one (answer type: Date, or Date and "
                      "time) and it will appear there.")
+        # And counting BACKWARDS has to say which date it is counting back
+        # from, for the same reason — but with a sharper edge. The anchor
+        # box also offers "when this step opens" and "step 2's planned
+        # date", and neither is a date on the form, so a step saved that way
+        # would count back from nothing and fall back to a day from now.
+        # That is a deadline twenty days wrong, on a step whose whole job is
+        # to land before something.
+        if r["tat_unit"] == clock.BEFORE_UNIT and not r["due_from_field"]:
+            raise HTTPException(
+                400, f"{where}: it is set to be due a number of days BEFORE a "
+                     "date, so it needs to say which date — and that has to "
+                     "be a date question on the start form, not another "
+                     "step's planned date. Pick one under “Start this step's "
+                     "clock from”. If the form has no date question yet, add "
+                     "one (answer type: Date, or Date and time) and it will "
+                     "appear there.")
         if r["due_from_pos"] and r["due_from_pos"] not in valid:
             raise HTTPException(
                 400, f"{where}: its clock is set to start from step "
