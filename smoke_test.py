@@ -8595,6 +8595,28 @@ check("how long it is measured in is a box of its own",
 check("and which side of the date, in another",
       'name="step_form_way"' in _newT and "Before the date" in _newT
       and "After the date" in _newT)
+check("days, working days, weeks, months and years are all offered",
+      all(f'value="{_s}"' in _newT
+          for _s in ("days", "workdays", "weeks", "months", "years")))
+# Where the question list IS. Rendered twelve rows below the unit that
+# needs it, it read as not being there at all — the complaint was "where is
+# the form based question list?". The SAME control is moved up beside the
+# unit, not copied: two boxes posting one setting is a page lying about
+# what it will save.
+_sfM = open("app/templates/_stepfields.html", encoding="utf-8").read()
+check("the question box moves up beside the unit that needs it",
+      ".duefromcell" in _sfM and ".dfslot" in _sfM
+      and "insertBefore(cell" in _sfM)
+check("and goes back where it came from when the unit changes",
+      ".dfhome" in _sfM)
+check("there is still only one of it per step, not a copy",
+      _newT.count('name="step_due_from"') == _newT.count('class="duefromcell"'),
+      f'{_newT.count(chr(34) + "step_due_from" + chr(34))} boxes vs '
+      f'{_newT.count("duefromcell")} cells')
+check("and the list shows only the questions once it is in use",
+      "o.hidden = back || !exists;" in _sfM)
+check("which does not fight the rule that hides steps that do not exist",
+      "opt.dataset.ok = ok ? '1' : '';" in _sfM)
 
 with _slK() as _d:
     _uT = [u for u in _d.scalars(_spK(_UT).where(_UT.active.is_(True))).all()
@@ -11642,7 +11664,7 @@ with _slB2() as _d:
     check("and no leftover pointer at a step",
           _stT.due_from_pos is None, str(_stT.due_from_pos))
 check("the builder stops offering those choices once it is counting back",
-      "if (o.value.indexOf('field:') !== 0) o.disabled = back;" in _sfT)
+      "o.disabled = back || !exists;" in _sfT)
 
 # A run that leaves the anchor blank, or answers it with something that is
 # not a date, must still get a deadline — an unchaseable task is worse than
@@ -11793,6 +11815,17 @@ check("and reads as one month, singular",
 _dZ, _lblZ, _iZ, _tZ = _plan("months", "before", 2, _anchorZ)
 check("two months before a date is well before it",
       _dZ < _anchorZ and (_anchorZ - _dZ).days >= 55, f"{_dZ} vs {_anchorZ}")
+
+# A year is twelve calendar months, not 365 days: "a year after 1 March" is
+# 1 March, and a membership renewed on the 31st keeps its date in every
+# month that has one.
+_dY, _lblY, _iY, _tY = _plan("years", "after", 1, _anchorZ)
+check("a year after a date is the same date a year on",
+      _dY.year == _anchorZ.year + 1
+      and abs((_dY - _anchorZ.replace(year=_anchorZ.year + 1)).days) <= 3,
+      f"{_dY} vs {_anchorZ}")
+check("and reads as one year, singular",
+      _lblY == '1 year after "Bill date"', _lblY)
 
 # Working days: counted against the calendar, not multiplied. The run's own
 # company decides which days those are — the office keeps Sunday off, the

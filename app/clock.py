@@ -161,6 +161,7 @@ FORM_SPANS = {
     "workdays": "working days",
     "weeks": "weeks",
     "months": "months",
+    "years": "years",
 }
 FORM_WAYS = {"before": "before", "after": "after"}
 # How far a working-day count may walk before giving up. Ninety calendar

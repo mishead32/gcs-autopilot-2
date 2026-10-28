@@ -82,9 +82,12 @@ def _form_deadline(db: Session, inst: FlowInstance, step: FlowStep,
             if not holidays.is_closed(db, inst.org_id, day, _step_branch(inst, step)):
                 left -= 1
         return datetime.combine(day, anchor.time())
-    if span == "months":
-        months = -n if way == "before" else n
-        return clock.add_months(anchor, months)
+    if span in ("months", "years"):
+        # Calendar arithmetic, not 30 or 365 days: "a year after 1 March"
+        # is 1 March, and a membership renewed on the 31st keeps its date
+        # in every month that has one.
+        months = n * (12 if span == "years" else 1)
+        return clock.add_months(anchor, -months if way == "before" else months)
     days = n * (7 if span == "weeks" else 1)
     return anchor + timedelta(days=-days if way == "before" else days)
 

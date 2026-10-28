@@ -77,6 +77,13 @@
           {{ 'selected' if (step and step.tat_unit == k) or (not step and k == 'hours') }}>{{ lbl }}</option>
         {% endfor %}
       </select></div>
+    {# Where the question list moves to when the deadline is measured from
+       a date on the start form. The SAME control, moved — not a second one
+       — because two boxes posting one setting is how a page starts lying
+       about what it will save. It sits here because the first thing
+       somebody picks after that unit is which date, and having it twelve
+       rows further down read as not being there at all. #}
+    <span class="dfslot"></span>
     {# One box, three jobs: how many (a span), which date (a calendar rule),
        or which question (a timestamp off the start form). ONE box because the
        server reads every step field as a parallel list lined up by position
@@ -232,7 +239,9 @@
       which question below, then say how long and which side above.
     </div>
     <div class="row duefromrow" style="margin-top:12px">
-      <div style="max-width:420px"><label class="dflabel">Start this step's clock from</label>
+      <span class="dfhome" hidden></span>
+      <div class="duefromcell" style="max-width:420px"><label class="dflabel"
+        >Start this step's clock from</label>
         {# A list, not a number. "Count the TAT from 2" told nobody what 2
            meant, and the one answer people most often wanted — count from
            when the run was started — could not be typed at all. #}
@@ -302,6 +311,10 @@ function renumber(){
     card.querySelectorAll('.duefrom .stepopt').forEach(function(opt){
       var pos = Number(opt.dataset.pos);
       var ok = pos <= cards.length && pos !== (i + 1);
+      // Recorded on the option itself, because anchorBox hides these too
+      // when the deadline comes off the start form — and the two must not
+      // overwrite each other's reasons for hiding something.
+      opt.dataset.ok = ok ? '1' : '';
       opt.hidden = !ok;
       opt.disabled = !ok;
       // A choice that has just become impossible — a step was removed — is
@@ -548,8 +561,26 @@ function wire(card){
     // out that one box has two jobs.
     var dfl = card.querySelector('.dflabel');
     if (dfl) {
-      dfl.textContent = fromForm ? 'Which question'
+      dfl.textContent = fromForm ? 'Which question on the start form'
                                  : "Start this step's clock from";
+    }
+    // Moved, not duplicated. Picked up and set down beside the unit that
+    // needs it, so the order on screen is the order of the decision: this
+    // kind of deadline, measured from this question, this long, this side.
+    // Twelve rows further down it read as not being there at all.
+    var cell = card.querySelector('.duefromcell');
+    var slot = card.querySelector('.dfslot');
+    var home = card.querySelector('.dfhome');
+    if (cell && slot && home) {
+      var want = fromForm ? slot : home;
+      if (cell.previousElementSibling !== want) {
+        want.parentNode.insertBefore(cell, want.nextSibling);
+      }
+      // The row it came from has nothing else in it, so it goes too.
+      // `form` is the older unit, where the question lived in the TAT box
+      // and this row was hidden for the same reason: nothing left to set.
+      var row = card.querySelector('.duefromrow');
+      if (row) row.hidden = fromForm || form;
     }
 
     // Counting back only works from a date on the FORM. The same box also
@@ -566,7 +597,17 @@ function wire(card){
       // that are not date questions — so leaving those alone is what keeps
       // the two from fighting over the same options.
       sel.querySelectorAll('option').forEach(function(o){
-        if (o.value.indexOf('field:') !== 0) o.disabled = back;
+        if (o.value.indexOf('field:') === 0) return;
+        // Hidden, not merely greyed. Fifteen unusable "step N's planned
+        // date" lines above the questions is a list somebody has to read
+        // past to find the one thing this unit can use — which is how the
+        // questions came to look as though they were not there.
+        // A step option is also hidden when that step does not exist —
+        // renumber() records that on the option, so neither reason for
+        // hiding one can overwrite the other.
+        var exists = !o.classList.contains('stepopt') || o.dataset.ok === '1';
+        o.disabled = back || !exists;
+        o.hidden = back || !exists;
       });
       // Nothing valid chosen? Take the first date question, so the common
       // case needs no second click.
