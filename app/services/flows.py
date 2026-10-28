@@ -601,13 +601,72 @@ def catch_up_all(db: Session, limit: int = 200) -> int:
     return changed
 
 
+# How many answers go into a run's name, and how long one of them may be
+# before it is skipped.
+#
+# Two. One is often ambiguous — "January" is twelve runs over three years —
+# and three starts collecting whatever the form happens to ask next: a
+# month-and-year form that also records who typed it gives "January · 2026
+# · Amit Kumar", where the name was "January · 2026" and the rest is noise.
+# Two answers is what somebody says out loud to identify the thing.
+NAME_PARTS = 2
+NAME_PART_MAX = 60
+NAME_MAX = 150
+
+
+def reference_from(flow: Flow, context: dict | None) -> str:
+    """Name a run from what was answered on its start form.
+
+    There used to be a "Reference" box at the top of every start form, asked
+    for on top of whatever the flow's own questions were. It was there
+    because a run needs a name — it goes in every step's title, in the
+    submissions register, in escalation emails — but it meant every form had
+    a question nobody had added to it, and the answer repeated something the
+    real questions had already asked.
+
+    So the answers name the run. The first two short ones, in the order the
+    form asks them, which is the order somebody would say them out loud:
+    "January · 2026", "Sharma & Co · INV-7741".
+
+    Long answers are skipped rather than truncated. A long-answer box holds
+    a paragraph, and the first sixty characters of a paragraph makes a worse
+    name than the question after it.
+
+    Returns "" when nothing usable was answered; the caller falls back to
+    the run's own FMS number, which is always a true name even if it is not
+    a descriptive one.
+    """
+    data = context or {}
+    parts: list[str] = []
+    for field in flow.start_form_fields:
+        if len(parts) >= NAME_PARTS:
+            break
+        if field["type"] == "file":
+            # The answer is a filename chosen on somebody's laptop. It names
+            # the document, not the thing the run is about.
+            continue
+        value = str(data.get(field["label"], "") or "").strip()
+        if not value or len(value) > NAME_PART_MAX:
+            continue
+        parts.append(" ".join(value.split()))
+    return " \u00b7 ".join(parts)[:NAME_MAX]
+
+
 def start_flow(db: Session, flow: Flow, reference: str, starter: User,
                doer_overrides: dict[int, int] | None = None,
                context: dict | None = None,
                branch_id: int | None = None) -> FlowInstance:
-    """doer_overrides maps flow_step.id -> user.id for steps with no default doer."""
+    """doer_overrides maps flow_step.id -> user.id for steps with no default doer.
+
+    `reference` may be blank. A run still needs a name — it goes into every
+    step's title — so a blank one is built from the start-form answers, and
+    failing that from the run's own FMS number. Done here rather than in the
+    router so every way of starting a run gets the same answer.
+    """
     if not flow.steps:
         raise ValueError("This flow has no steps configured.")
+
+    reference = (reference or "").strip() or reference_from(flow, context)
 
     inst = FlowInstance(
         org_id=flow.org_id,
@@ -622,6 +681,13 @@ def start_flow(db: Session, flow: Flow, reference: str, starter: User,
     )
     db.add(inst)
     db.flush()
+
+    if not inst.reference:
+        # Nothing was answered that could name it — a flow with no questions
+        # at all, or one whose only questions are files and paragraphs. Its
+        # own number is a true name, and it is the one people will quote.
+        inst.reference = inst.ref or f"Run {inst.id}"
+        db.flush()
 
     first = flow.steps[0]
     _open_step(db, inst, first, starter, starter, doer_overrides)

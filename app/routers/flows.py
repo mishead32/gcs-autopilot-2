@@ -767,9 +767,12 @@ async def start_flow(flow_id: int, request: Request,
                  "started from it. Switch it back on under Edit flow if it "
                  "is still in use.")
     form = await request.form()
+    # No longer asked for. The start form shows the flow's own questions and
+    # nothing else; the run is named from the answers, and from its own FMS
+    # number when there are none. Still read from the form so anything that
+    # posts one — an older page left open in a tab, a script — is honoured
+    # rather than ignored.
     reference = (form.get("reference") or "").strip()
-    if not reference:
-        raise HTTPException(400, "A reference is required (member name, lead id, invoice no.)")
 
     # No "first step doer (override)" any more. The flow already says who
     # does step 1 — that is the whole point of writing the flow down — and

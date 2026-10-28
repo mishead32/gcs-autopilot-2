@@ -63,8 +63,11 @@
          bytes and sends only the file name. #}
       <form method="post" action="/flows/{{ flow.id }}/start"
             enctype="multipart/form-data" style="margin-top:12px">
-        <label>Reference</label>
-        <input name="reference" required placeholder="Member name / lead id / invoice no.">
+        {# No Reference box. It used to sit at the top of every start form,
+           asked for on top of whatever the flow's own questions were —
+           a question nobody had added, usually repeating something the real
+           questions already asked. The run is named from the answers now,
+           and from its own FMS number when a flow asks nothing. #}
         {% for f in flow.start_form_fields %}
         <label>{{ f.label }}{% if not f.required %}
           <span class="m">(optional)</span>{% endif %}</label>
@@ -108,7 +111,14 @@
         {% endfor %}
         {% if flow.start_form_fields %}
         <div class="m" style="margin-top:4px">
-          These are carried through every step of this run.
+          These are carried through every step of this run. The first two
+          answers also name it, so it reads as something recognisable
+          wherever it appears.
+        </div>
+        {% else %}
+        <div class="m" style="margin-top:4px">
+          This flow asks nothing to get going, so there is nothing to fill
+          in. The run will be known by its FMS number.
         </div>
         {% endif %}
         {# Which company this run is for. Asked rather than taken from

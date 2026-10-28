@@ -8344,8 +8344,14 @@ check("but a SPAN of zero is still floored, because no time at all is not a TAT"
 from app.models import (Flow as _FlC, FlowInstance as _FIC, Task as _TC,
                         User as _UC)
 with _slK() as _d:
-    _uC = [u for u in _d.scalars(_spK(_UC).where(_UC.active.is_(True))).all()
-           if u.receives_work][0].id
+    # Ordered on purpose. Without it PostgreSQL and SQLite pick different
+    # people, and this check depends on which COMPANY the doer belongs to:
+    # the offices close on Sunday and the gym and the spa do not.
+    _uRowC = [u for u in _d.scalars(_spK(_UC).where(_UC.active.is_(True))
+                                    .order_by(_UC.id)).all()
+              if u.receives_work][0]
+    _uC = _uRowC.id
+    _uBranchC = _uRowC.branch_id
 _joinName = f"SMOKE joining date {RUN}"
 admin.post("/flows/new", data={
     "name": _joinName, "description": "", "branch_id": "",
@@ -8375,8 +8381,13 @@ with _slK() as _d:
 check("joining 10 Nov with a TAT of 'the 15th' lands on the 15th or just after",
       _dtC(2026, 11, 15) <= _jT.due_at <= _dtC(2026, 11, 17, 23, 59),
       str(_jT.due_at))
-check("and not on the Sunday itself",
-      _jT.due_at.weekday() != 6, str(_jT.due_at))
+# Not "never a Sunday" — Bodyzone and Spa Kora are open on Sundays, and
+# that is the whole point of the weekly-off being per company. The rule is
+# that a deadline never lands on a day THIS doer's company is shut.
+with _slK() as _dC:
+    check("and never on a day that doer's own company is closed",
+          not _holJ.is_closed(_dC, 1, _jT.due_at.date(), _uBranchC),
+          f"{_jT.due_at:%a %d %b} for branch {_uBranchC}")
 
 print("\n== the desk is only asked to chase what is worth chasing ==")
 # A desk handed 150 daily low-priority rows stops ticking any of them, and a
@@ -9021,13 +9032,22 @@ with _slK() as _d:
     check("step 4 after step 3", _d4 >= _d3, (str(_d3), str(_d4)))
     check("and each step is planned later than the one before it",
           _d1 <= _d2 <= _d3 <= _d4)
-    # The span is a ceiling, not an exact figure. The gaps add up to four
-    # days, and a planned date landing on a closed day is pulled BACK to the
-    # working day before — never forward — so the chain can only ever be
-    # shorter than its gaps, by however many closed days it crosses. That it
-    # never runs backwards is the assertion above; this is the other half.
-    check("the chain spans no more than the gaps it is built from",
-          (_d4 - _d1).days <= 4, str(_d4 - _d1))
+    # The gaps add up to four days, and a planned date landing on a closed
+    # day now moves FORWARD to the next working day — never back — so the
+    # chain is at least as long as its gaps and longer by however many
+    # closed days it crosses. A floor and a generous ceiling, rather than an
+    # exact figure that would fail on whichever weekday the suite happens to
+    # run. The thing that actually matters is checked beneath it: not one of
+    # those dates is a day nobody is in.
+    check("the chain spans at least the gaps it is built from",
+          (_d4 - _d1).days >= 4, str(_d4 - _d1))
+    check("and no more than those gaps plus the closed days it crosses",
+          (_d4 - _d1).days <= 4 + 3, str(_d4 - _d1))
+    with _slK() as _dW:
+        check("and not one planned date falls on a closed day",
+              not any(_holJ.is_closed(_dW, 1, _x.date(), None)
+                      for _x in (_d1, _d2, _d3, _d4)),
+              [f"{_x:%a %d %b}" for _x in (_d1, _d2, _d3, _d4)])
 
     # Visible, but not work anybody is behind on.
     check("a planned step is not chased", not _chW.needs_chasing(_rows[2]))
@@ -11047,6 +11067,150 @@ check("and each one says which step it is",
       "Step 4 of 8" in _rMineQ)
 check("the later ones are marked planned rather than chased",
       "planned" in _rMineQ.lower())
+
+
+# ==========================================================================
+# A run is named by its answers — there is no Reference box any more
+# ==========================================================================
+print("\n-- the start form asks only what the flow asks --")
+# There used to be a "Reference" box at the top of every start form, asked
+# on top of whatever the flow's own questions were: a question nobody had
+# added, usually repeating something the real questions already asked.
+
+import json as _jsonN
+from app.db import SessionLocal as _slN
+from app.models import (Flow as _FlN, FlowInstance as _FiN, Task as _TkN,
+                        User as _UsN)
+from app.services import flows as _fsvN
+
+_SELN = __import__("sqlalchemy").select
+
+
+def _ask(db, flow_id, questions):
+    """Give a flow a start form and hand back its field keys, by label."""
+    f = db.get(_FlN, flow_id)
+    f.start_form = _jsonN.dumps([
+        {"label": q, "type": t, "options": o, "required": False}
+        for q, t, o in questions])
+    db.commit()
+    return {x["label"]: x["key"] for x in f.start_form_fields}
+
+
+with _slN() as _d:
+    _flowN = _d.scalar(_SELN(_FlN).where(_FlN.active.is_(True)))
+    _fidN = _flowN.id
+    _keysN = _ask(_d, _fidN, [
+        (f"Month {RUN}", "select", ["January", "February"]),
+        (f"Year {RUN}", "select", ["2026", "2027"]),
+        (f"Entered by {RUN}", "text", []),
+    ])
+
+_rFormN = admin.get(f"/flows/{_fidN}")
+check("the start form no longer asks for a Reference",
+      'name="reference"' not in _rFormN.text, _rFormN.status_code)
+for _qN in _keysN:
+    check(f"but it does ask “{_qN[:22]}…”", _qN in _rFormN.text)
+check("and says the answers will name the run",
+      "also name it" in _rFormN.text or "name it" in _rFormN.text)
+
+_rStartN = admin.post(f"/flows/{_fidN}/start", data={
+    "run_branch": "",
+    _keysN[f"Month {RUN}"]: "January",
+    _keysN[f"Year {RUN}"]: "2026",
+    _keysN[f"Entered by {RUN}"]: "Amit Kumar"})
+check("a run starts with no reference supplied at all",
+      _rStartN.status_code == 200, _rStartN.text[:200])
+
+with _slN() as _d:
+    _iN = _d.scalars(_SELN(_FiN).where(_FiN.flow_id == _fidN)
+                     .order_by(_FiN.id.desc())).first()
+    check("and is named from the first two answers",
+          _iN.reference == "January · 2026", _iN.reference)
+    check("not from all of them — the third is noise in a name",
+          "Amit Kumar" not in _iN.reference, _iN.reference)
+    check("every step's title carries that name",
+          all(t.title.endswith("January · 2026") for t in _d.scalars(
+              _SELN(_TkN).where(_TkN.flow_instance_id == _iN.id)).all()),
+          [t.title for t in _d.scalars(
+              _SELN(_TkN).where(_TkN.flow_instance_id == _iN.id)).all()][:1])
+    _namedIdN = _iN.id
+
+# It is still findable by that name, which is the point of having one.
+check("the FMS list finds it by its name",
+      "January" in admin.get("/flows?q=January").text)
+check("and the submissions register does too",
+      "January" in admin.get(f"/flows/{_fidN}/submissions?q=January").text)
+
+# The shapes a start form actually comes in.
+_shapesN = [
+    ("a vendor form names the run by vendor and bill",
+     [("Vendor name", "text", []), ("Bill number", "text", []),
+      ("Amount", "number", []), ("Due date", "date", [])],
+     ["Sharma & Co", "INV-7741", "240000", "2026-11-05"],
+     "Sharma & Co · INV-7741"),
+    ("a paragraph is skipped, not chopped into a name",
+     [("What happened", "textarea", []), ("Member name", "text", [])],
+     ["The member called to complain at length about the treadmill in the "
+      "corner, which has been broken for three weeks now", "Ritu Bansal"],
+     "Ritu Bansal"),
+    ("one question is enough on its own",
+     [("Candidate name", "text", [])], ["Kabir Singh"], "Kabir Singh"),
+    ("a blank optional answer does not leave a gap in the name",
+     [("Branch code", "text", []), ("Member name", "text", []),
+      ("Remark", "text", [])], ["", "Diya Mehta", "walk-in"],
+     "Diya Mehta · walk-in"),
+]
+for _labelN, _qsN, _ansN, _wantN in _shapesN:
+    with _slN() as _d:
+        _kN = _ask(_d, _fidN, _qsN)
+    _dataN = {"run_branch": ""}
+    _dataN.update(dict(zip([_kN[q] for q, _t, _o in _qsN], _ansN)))
+    admin.post(f"/flows/{_fidN}/start", data=_dataN)
+    with _slN() as _d:
+        _gotN = _d.scalars(_SELN(_FiN).where(_FiN.flow_id == _fidN)
+                           .order_by(_FiN.id.desc())).first().reference
+    check(_labelN, _gotN == _wantN, (_gotN, _wantN))
+
+# A flow that asks nothing still has to be called something.
+with _slN() as _d:
+    _bareN = _d.get(_FlN, _fidN)
+    _bareN.start_form = None
+    _bareN.start_fields = None
+    _d.commit()
+_rBareN = admin.get(f"/flows/{_fidN}")
+check("a flow with no questions shows no boxes to fill in",
+      'name="reference"' not in _rBareN.text and "sf0" not in _rBareN.text)
+check("and says the run will be known by its number",
+      "known by its FMS number" in _rBareN.text)
+admin.post(f"/flows/{_fidN}/start", data={"run_branch": ""})
+with _slN() as _d:
+    _bareIN = _d.scalars(_SELN(_FiN).where(_FiN.flow_id == _fidN)
+                         .order_by(_FiN.id.desc())).first()
+    check("a run with nothing answered is named by its own FMS number",
+          _bareIN.reference == _bareIN.ref, (_bareIN.reference, _bareIN.ref))
+    check("so its steps are still titled something a person can quote",
+          all(t.title.endswith(_bareIN.ref) for t in _d.scalars(
+              _SELN(_TkN).where(_TkN.flow_instance_id == _bareIN.id)).all()))
+    check("and the name is never empty, whatever was asked",
+          bool((_bareIN.reference or "").strip()))
+
+# A reference posted by an older page still open in a tab is honoured
+# rather than silently dropped.
+admin.post(f"/flows/{_fidN}/start",
+           data={"run_branch": "", "reference": f"TYPED BY HAND {RUN}"})
+with _slN() as _d:
+    _typedN = _d.scalars(_SELN(_FiN).where(_FiN.flow_id == _fidN)
+                         .order_by(_FiN.id.desc())).first()
+    check("a reference that IS posted is still used",
+          _typedN.reference == f"TYPED BY HAND {RUN}", _typedN.reference)
+
+# The builder says what will happen, so nobody has to find out by starting one.
+_rBuildN = admin.get(f"/flows/{_fidN}/edit").text
+check("the builder says the start form is the only thing asked",
+      "<strong>only</strong>" in _rBuildN)
+check("and that the first two answers name the run",
+      "first\n  two short answers" in _rBuildN
+      or "two short answers" in _rBuildN)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
