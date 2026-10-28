@@ -3,7 +3,7 @@
    one, and as the blank template the "+ Add step" button clones. Written once
    because a field that exists when a flow is created and not when it is
    edited is a field somebody can never change again. #}
-{% macro step_card(doers, priorities, span_units, step=None, locked=false) %}
+{% macro step_card(doers, priorities, span_units, step=None, locked=false, person_fields=[]) %}
 <div class="card stepcard" style="background:var(--card)">
   <div class="step-no">Step <b class="num">{{ step.position if step else 1 }}</b>
     {% if step and step.used_count %}
@@ -44,6 +44,24 @@
         {% endif %}
         </optgroup>
         {% endif %}
+        {% if person_fields %}
+        {# The only way a step's doer can differ from run to run. A name is
+           the same person every time; a position is the same person for
+           every run at one company. A renewal flow run for four hundred
+           members has four hundred different trainers, and only an answer
+           on the start form can say that. #}
+        <optgroup label="From an answer on the start form">
+        {% for pf in person_fields %}<option value="field:{{ pf }}"
+          {{ 'selected' if step and step.doer_field == pf }}
+          >Whoever is named in “{{ pf }}”</option>{% endfor %}
+        </optgroup>
+        {% endif %}
+        {# A question renamed or removed since this step was built. Kept so
+           editing the flow does not silently drop what it was set to. #}
+        {% if step and step.doer_field and step.doer_field not in person_fields %}
+        <option value="field:{{ step.doer_field }}" selected
+          >“{{ step.doer_field }}” — no longer a question on the start form</option>
+        {% endif %}
       </select></div>
     <div style="max-width:260px;flex:1 1 240px"><label>TAT — measured in</label>
       <select name="step_tat_unit" class="tatunit">
@@ -73,11 +91,23 @@
           >{{ p.value|title }} — {{ PRIORITY_WEIGHT[p] }}×</option>{% endfor %}
       </select></div>
   </div>
-  {% if dept_names %}
-  <div class="m" style="margin-top:-4px">Under <strong>Who does it</strong> you
-    can pick a <strong>position</strong> instead of a name — the run then
-    finds whoever holds it at the company that run is for, so one flow serves
-    every company instead of a copy each.</div>
+  {% if dept_names or person_fields %}
+  <div class="m" style="margin-top:-4px">Under <strong>Who does it</strong>
+    {% if dept_names %}you can pick a <strong>position</strong> instead of a
+    name — the run then finds whoever holds it at the company that run is
+    for, so one flow serves every company instead of a copy each.{% endif %}
+    {% if person_fields %}
+    You can also point it at a <strong>person question on the start
+    form</strong>, and the step goes to whoever that particular run named.
+    That is what lets one renewal flow serve four hundred members who each
+    have a different trainer — by hand, or four hundred rows at a time from
+    a spreadsheet.
+    {% else %}
+    To send a step to a <em>different</em> person on every run, add a
+    question of type <strong>A person on GCS</strong> to the start form
+    below; it will appear here.
+    {% endif %}
+  </div>
   {% endif %}
   {# More than one person on a step: pick a name, it becomes a tag.
 

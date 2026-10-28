@@ -123,6 +123,9 @@ ADDITIONS = {
         ("extra_doer_ids", "TEXT"),
         # A step assigned to a position rather than a person.
         ("doer_dept", "VARCHAR(120)"),
+        # A step done by whoever a start-form question named, which is the
+        # only way a step's doer can differ from run to run.
+        ("doer_field", "VARCHAR(160)"),
         ("how_to", "TEXT"),
         # Left NULL on purpose for flows built before routing existed — the
         # engine reads NULL as "whatever comes next in order", so every

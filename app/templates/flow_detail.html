@@ -100,6 +100,17 @@
           <div class="m">File uploads are switched off on this server, so this
             question cannot be answered. Ask an admin to set up storage.</div>
           {% endif %}
+        {% elif f.type == 'person' %}
+          {# A member of staff. The step that follows this answer goes to
+             whoever is picked here, which is how one flow serves four
+             hundred members with four hundred different trainers. #}
+          <select name="{{ f.key }}" {{ 'required' if f.required }}>
+            <option value="">— choose —</option>
+            {% for s in staff %}
+            <option value="{{ s.email or s.name }}">{{ s.name }}{% if s.branch %}
+              — {{ s.branch.name }}{% endif %}</option>
+            {% endfor %}
+          </select>
         {% elif f.type == 'yesno' %}
           <select name="{{ f.key }}" {{ 'required' if f.required }}>
             <option value="">— choose —</option>
@@ -150,7 +161,13 @@
           itself — worth doing unless the run is genuinely group-wide.</div>
         {% endif %}
         {% endif %}
-        <div style="margin-top:14px"><button class="btn">Start flow</button></div>
+        <div style="margin-top:14px"><button class="btn">Start flow</button>
+          {% if flow.start_form_fields %}
+          <a class="btn ghost" href="/flows/{{ flow.id }}/bulk"
+             title="One row, one run — for a list of members or bills">
+            Start many from a file</a>
+          {% endif %}
+        </div>
       </form>
     </div>
     {% elif not flow.steps %}

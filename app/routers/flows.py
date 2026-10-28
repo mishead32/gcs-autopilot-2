@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -12,8 +12,9 @@ from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Departme
                       Attachment,
                       Priority,
                       Right, FIELD_TYPES, BUILDER_FIELD_TYPES,
-                      RUN_PREFIX, ref_text)
-from ..services import flows as flow_svc, xlsx, storage, shrink
+                      RUN_PREFIX, ref_text, CONTEXT_PEOPLE, context_answers)
+from ..services import (flows as flow_svc, flowbulk, flowform, xlsx, storage,
+                        shrink)
 from ..templating import templates
 
 router = APIRouter()
@@ -146,6 +147,9 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "field_types": BUILDER_FIELD_TYPES,
         "dept_names": _position_names(db, user.org_id),
+        # A brand-new flow has no questions yet; the page builds the list
+        # again in the browser as questions are typed.
+        "person_fields": [],
     })
 
 
@@ -218,6 +222,15 @@ def _read_steps(form) -> list[dict]:
         raw = (doers[i] if i < len(doers) else "").strip()
         return raw[5:].strip()[:120] or None if raw.startswith("dept:") else None
 
+    def _doer_field(i) -> str | None:
+        """'field:PT trainer' -> 'PT trainer'. Anything else -> None.
+
+        The step goes to whoever THIS run named in that question, which is
+        the only way a step's doer can differ from run to run.
+        """
+        raw = (doers[i] if i < len(doers) else "").strip()
+        return raw[6:].strip()[:160] or None if raw.startswith("field:") else None
+
     def _doer_id(i) -> int | None:
         raw = (doers[i] if i < len(doers) else "").strip()
         return int(raw) if raw.isdigit() else None
@@ -285,6 +298,11 @@ def _read_steps(form) -> list[dict]:
             # starts. Mutually exclusive with a name by construction: it is
             # one dropdown with one value.
             "doer_dept": _dept(i),
+            # "PT trainer", resolved to whoever THAT run named. The third
+            # and last answer to "who does this step", and the only one
+            # that can differ run to run. Mutually exclusive with the other
+            # two by construction: it is one dropdown with one value.
+            "doer_field": _doer_field(i),
             # Stripped of whoever is already named in "Who does it": the same
             # person on a step twice is one person, and leaving them in both
             # places means changing the primary doer would quietly leave the
@@ -391,6 +409,7 @@ def _check_routes(rows: list[dict]) -> None:
 
 
 STEP_COLUMNS = ("title", "instructions", "how_to", "default_doer_id", "doer_dept",
+                "doer_field",
                 "tat_hours",
                 "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
                 "extra_doer_ids",
@@ -451,6 +470,8 @@ def flow_detail(flow_id: int, request: Request, user: User = Depends(current_use
         # Which positions this flow names, so the start form can say what
         # the company it is about to run for will have to have somebody in.
         "positions": [s.doer_dept for s in flow.steps if s.doer_dept],
+        # Everybody a person question may name, for its dropdown.
+        "staff": flowform.staff(db, user.org_id),
         # A file question needs somewhere to put the file. Saying so on the
         # form beats a picker that silently loses the document.
         "uploads_on": storage.uploads_available(),
@@ -495,7 +516,7 @@ def flow_submissions(flow_id: int, request: Request, state: str = "",
             data = json.loads(inst.context or "{}")
         except json.JSONDecodeError:
             data = {}
-        answers[inst.id] = data if isinstance(data, dict) else {}
+        answers[inst.id] = context_answers(data) if isinstance(data, dict) else {}
 
     columns = [f["label"] for f in flow.start_form_fields]
     for data in answers.values():
@@ -562,6 +583,108 @@ def flow_submissions(flow_id: int, request: Request, state: str = "",
     })
 
 
+# ------------------------------------------------- starting many at once --
+# A renewal flow is run for four hundred members. Filling the start form
+# four hundred times is not a thing anybody does — they stop using the
+# system and keep the list in Excel, which is where it was before.
+
+@router.get("/flows/{flow_id}/bulk", response_class=HTMLResponse)
+def bulk_form(flow_id: int, request: Request, user: User = Depends(current_user),
+              db: Session = Depends(get_db)):
+    flow = _flow_or_404(db, user, flow_id)
+    return templates.TemplateResponse(request, "flow_bulk.html", {
+        "user": user, "flow": flow, "parsed": None,
+        "cols": flowbulk.columns(flow, flowbulk.needs_company(flow)),
+        "uploads_on": storage.uploads_available(),
+        "file_questions": [f["label"] for f in flow.start_form_fields
+                           if f["type"] == "file"],
+    })
+
+
+@router.get("/flows/{flow_id}/bulk/template")
+def bulk_template(flow_id: int, user: User = Depends(current_user),
+                  db: Session = Depends(get_db)):
+    """The file to fill in — its headings are this flow's own questions."""
+    flow = _flow_or_404(db, user, flow_id)
+    blob = flowbulk.template(db, flow)
+    # ASCII only, and a plain hyphen. An HTTP header is latin-1, so a flow
+    # whose name carries a dash somebody pasted from Word — or any Hindi
+    # in it — would otherwise fail to download at all rather than download
+    # under a slightly wrong name.
+    safe = "".join(c for c in flow.name
+                   if c.isascii() and (c.isalnum() or c in " -_")).strip()
+    return xlsx.download(blob, f"{safe[:40] or 'flow'} - rows")
+
+
+@router.post("/flows/{flow_id}/bulk", response_class=HTMLResponse)
+async def bulk_check(flow_id: int, request: Request,
+                     user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
+    """Read the file and show what is ready and what needs fixing.
+
+    Nothing is created here. The whole point of a separate check is that
+    somebody sees four hundred rows resolved — including WHO each step will
+    go to — before any of it exists.
+    """
+    flow = _flow_or_404(db, user, flow_id)
+    form = await request.form()
+    picked = form.get("file")
+    if not _is_upload(picked):
+        raise HTTPException(400, "Choose the filled-in .xlsx file first.")
+    blob = await picked.read()
+    try:
+        parsed = flowbulk.parse(db, flow, blob)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    # Held in the session so confirming does not need the file again. Only
+    # the answers, which are small; the file itself is not kept.
+    request.session["flowbulk"] = {
+        "flow_id": flow.id,
+        "rows": [{"number": r.number, "context": r.context,
+                  "branch_id": r.branch_id, "name": r.name}
+                 for r in parsed.ready],
+    }
+    return templates.TemplateResponse(request, "flow_bulk.html", {
+        "user": user, "flow": flow, "parsed": parsed,
+        "cols": flowbulk.columns(flow, flowbulk.needs_company(flow)),
+        "uploads_on": storage.uploads_available(),
+        "file_questions": [f["label"] for f in flow.start_form_fields
+                           if f["type"] == "file"],
+    })
+
+
+@router.post("/flows/{flow_id}/bulk/start")
+def bulk_start(flow_id: int, request: Request,
+               user: User = Depends(current_user),
+               db: Session = Depends(get_db)):
+    """Start the rows the check said were ready."""
+    flow = _flow_or_404(db, user, flow_id)
+    held = request.session.pop("flowbulk", None) or {}
+    if held.get("flow_id") != flow.id or not held.get("rows"):
+        raise HTTPException(
+            400, "There is nothing waiting to be started. Upload the file "
+                 "again — the check is only kept for the page that shows it.")
+    if not flow.active:
+        raise HTTPException(
+            400, f"“{flow.name}” is switched off, so no new run can be "
+                 "started from it.")
+
+    made = []
+    for row in held["rows"]:
+        try:
+            made.append(flow_svc.start_flow(
+                db, flow, "", user, context=dict(row.get("context") or {}),
+                branch_id=row.get("branch_id")))
+        except Exception:                             # noqa: BLE001
+            db.rollback()
+    flash.set(request, "saved",
+              f"{len(made)} run(s) started from the file"
+              + (f", {len(held['rows']) - len(made)} could not be"
+                 if len(made) != len(held["rows"]) else ""))
+    return RedirectResponse(f"/flows/{flow.id}/submissions", status_code=303)
+
+
 def _flow_or_404(db: Session, user: User, flow_id: int) -> Flow:
     flow = db.get(Flow, flow_id)
     if not flow or flow.org_id != user.org_id:
@@ -615,6 +738,10 @@ def edit_flow_form(flow_id: int, request: Request,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
         "dept_names": _position_names(db, user.org_id),
+        # The person questions this flow already asks, so a step can be set
+        # to follow one of them.
+        "person_fields": [f["label"] for f in flow.start_form_fields
+                          if f["type"] == "person"],
         "runs": runs, "live": live,
     })
 
@@ -855,26 +982,20 @@ async def start_flow(flow_id: int, request: Request,
                          "admin to set up storage.")
             uploads.append((field["label"], picked))
             continue
-        value = (form.get(field["key"]) or "").strip()
+        # The same check the bulk importer runs, so a file cannot create a
+        # run this form would have refused.
+        value, person, problem = flowform.check_answer(
+            db, flow.org_id, field, form.get(field["key"]))
+        if problem:
+            raise HTTPException(400, problem)
         if not value:
-            if field["required"]:
-                raise HTTPException(
-                    400, f"'{field['label']}' is needed to start this flow.")
             continue
-        if field["type"] == "number":
-            try:
-                float(value)
-            except ValueError:
-                raise HTTPException(
-                    400, f"'{field['label']}' should be a number — got '{value}'.")
-        if field["type"] == "yesno" and value not in ("Yes", "No"):
-            raise HTTPException(
-                400, f"'{field['label']}' should be Yes or No — got '{value}'.")
-        if field["type"] == "select" and value not in field["options"]:
-            raise HTTPException(
-                400, f"'{value}' is not one of the choices for "
-                     f"'{field['label']}'.")
         context[field["label"]] = value
+        if person is not None:
+            # Which person, not just the name they are known by. A step set
+            # to follow this answer needs to be sure, and two people can
+            # share a name.
+            context.setdefault(CONTEXT_PEOPLE, {})[field["label"]] = person.id
 
     # The files are read BEFORE the run is created: a file over the limit, or
     # of a type this server does not take, should stop the start rather than
@@ -1009,7 +1130,7 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
         select(Task).where(Task.flow_instance_id == inst.id).order_by(Task.created_at)
     ).all()
     try:
-        started_with = json.loads(inst.context or "{}")
+        started_with = context_answers(json.loads(inst.context or "{}"))
     except json.JSONDecodeError:
         started_with = {}
     run_files = db.scalars(

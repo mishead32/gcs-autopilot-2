@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}{{ flow.name }} — start many · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Start many at once</h1>
+    <p class="sub">One row, one run. The file's column headings are this
+      flow's own questions, so nothing has to be matched up by hand.</p>
+  </div>
+  <a class="btn ghost" href="/flows/{{ flow.id }}">Start just one</a>
+</div>
+
+{% if not flow.start_form_fields %}
+<div class="card warnbox">
+  <strong>This flow asks nothing to get going</strong>
+  <p class="m" style="margin:8px 0 0">
+    There is nothing for a spreadsheet to carry, so starting many at once
+    would make identical runs that nobody could tell apart. Add some
+    questions to the start form first
+    {% if user.has_manage_flow %}under
+    <a href="/flows/{{ flow.id }}/edit">Edit steps &amp; questions</a>{% endif %}.
+  </p>
+</div>
+{% else %}
+
+{# ---------------------------------------------------------- 1. the file #}
+<div class="grid g2 wide">
+  <div class="card">
+    <strong>1 · Get the file</strong>
+    <p class="m" style="margin:8px 0 12px">
+      Its headings are generated from this flow, so a file built for one
+      flow cannot be read as another — and if you change the questions
+      later, an old file says so instead of importing into the wrong
+      columns.
+    </p>
+    <table style="margin-bottom:14px">
+      <tr><th>Column</th><th>What goes in it</th></tr>
+      {% for c in cols %}
+      <tr>
+        <td><strong>{{ c.label }}</strong>
+          {% if c.required %}<div class="m rowsub">required</div>{% endif %}</td>
+        <td class="m">
+          {% if c.type == 'person' %}
+            A person's name as it is here, or their email. Any step set to
+            “whoever is named in {{ c.label }}” goes to them.
+          {% elif c.type == 'select' %}
+            One of: {{ c.options|join(', ') }}
+          {% elif c.type == 'company' %}
+            Which company the run is for.
+          {% elif c.type == 'yesno' %}YES or NO
+          {% elif c.type == 'number' %}A number
+          {% elif c.type == 'date' %}A date, e.g. 2026-11-20
+          {% elif c.type == 'datetime' %}A date and time
+          {% else %}Text{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <a class="btn" href="/flows/{{ flow.id }}/bulk/template">Download the file</a>
+    {% if file_questions %}
+    <p class="m" style="margin:12px 0 0">
+      <strong>{{ file_questions|join(', ') }}</strong>
+      {{ 'is a file question and is' if file_questions|length == 1
+         else 'are file questions and are' }} left out — a cell cannot hold
+      a document. Runs started this way have no file against them; attach
+      it on the step that needs it, or start those runs one at a time.
+    </p>
+    {% endif %}
+  </div>
+
+  {# -------------------------------------------------------- 2. upload it #}
+  <form class="card" method="post" action="/flows/{{ flow.id }}/bulk"
+        enctype="multipart/form-data">
+    <strong>2 · Upload it filled in</strong>
+    <p class="m" style="margin:8px 0 12px">
+      Nothing is created yet. You will see every row resolved — including
+      who each step will go to — before anything exists.
+    </p>
+    <input type="file" name="file" accept=".xlsx" required>
+    <div style="margin-top:14px"><button class="btn">Check the file</button></div>
+  </form>
+</div>
+
+{# ----------------------------------------------------------- 3. the check #}
+{% if parsed is not none %}
+<h2 style="margin-top:26px">3 · What the file says</h2>
+
+{% if parsed.missing %}
+<div class="card warnbox">
+  <strong>This file is missing {{ parsed.missing|length }} of the columns</strong>
+  <p class="m" style="margin:8px 0 0">
+    <strong>{{ parsed.missing|join(', ') }}</strong> — nothing was read.
+    Reading on would mean starting runs with whole questions unanswered.
+    Download the file again above; it will have the right headings.
+  </p>
+</div>
+{% else %}
+
+{% if parsed.extra %}
+<div class="card">
+  <p class="m" style="margin:0">
+    Ignored {{ parsed.extra|length }} column(s) this flow does not ask for:
+    {{ parsed.extra|join(', ') }}.
+  </p>
+</div>
+{% endif %}
+
+<p class="sub" style="margin:14px 0 10px">
+  <strong>{{ parsed.rows|length }}</strong> row(s) read —
+  <strong>{{ parsed.ready|length }}</strong> ready
+  {% if parsed.bad %}, <strong>{{ parsed.bad|length }}</strong> need
+  fixing{% endif %}.
+</p>
+
+{% if parsed.bad %}
+<div class="card warnbox">
+  <strong>{{ parsed.bad|length }} row(s) need fixing</strong>
+  <p class="m" style="margin:6px 0 10px">
+    These are left out. Fix the cells and upload again — the ready ones can
+    go now either way.
+  </p>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Row</th><th>What is wrong</th></tr>
+    {% for r in parsed.bad %}
+    <tr>
+      <td><strong>{{ r.number }}</strong></td>
+      <td>{% for p in r.problems %}<div>{{ p }}</div>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+{% if parsed.ready %}
+<div class="table-wrap">
+<table>
+  <tr><th>Row</th><th>The run will be called</th>
+    {% for c in cols %}<th>{{ c.label }}</th>{% endfor %}</tr>
+  {% for r in parsed.ready %}
+  <tr>
+    <td class="m">{{ r.number }}</td>
+    <td><strong>{{ r.name or '—' }}</strong></td>
+    {% for c in cols %}
+    <td>{% if c.type == 'company' %}
+      <span class="m">{{ r.branch_id and '✓' or '—' }}</span>
+      {% else %}{{ r.context.get(c.label, '') or '—' }}{% endif %}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table></div>
+
+<form method="post" action="/flows/{{ flow.id }}/bulk/start" class="card"
+      style="margin-top:16px">
+  <strong>4 · Start them</strong>
+  <p class="m" style="margin:8px 0 12px">
+    {{ parsed.ready|length }} run(s), each with every step planned and dated
+    from the moment it starts. This cannot be undone in one go — a run is
+    stopped one at a time.
+  </p>
+  <button class="btn" onclick="return confirm('Start {{ parsed.ready|length }} run(s)?')">
+    Start {{ parsed.ready|length }} run(s)</button>
+  <a class="btn ghost" href="/flows/{{ flow.id }}/bulk">Start over</a>
+</form>
+{% else %}
+<div class="empty">Not one row is ready, so there is nothing to start.</div>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

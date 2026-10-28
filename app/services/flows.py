@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..models import (
+    CONTEXT_PEOPLE,
     Department, Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus,
     TaskSource, User
 )
@@ -107,8 +108,62 @@ def dept_people(db: Session, org_id: int, branch_id: int | None,
     return [u for u in rows if branch_id in u.extra_branch_ids]
 
 
+def answered_person(db: Session, inst: FlowInstance, label: str) -> User | None:
+    """The person a run named in answer to one question, or None.
+
+    The id is read first, because that is what was resolved when the run was
+    started and it stays right even if two people share a name or somebody
+    is renamed afterwards. The typed name is the fallback, for a run started
+    before person questions existed or imported by some other route.
+    """
+    if not label:
+        return None
+    try:
+        data = json.loads(inst.context or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    picked = (data.get(CONTEXT_PEOPLE) or {}) if isinstance(
+        data.get(CONTEXT_PEOPLE), dict) else {}
+    uid = picked.get(label)
+    if uid:
+        person = db.get(User, int(uid)) if str(uid).isdigit() else None
+        if person is not None and person.active:
+            return person
+
+    name = str(data.get(label, "") or "").strip()
+    if not name:
+        return None
+    want = " ".join(name.split()).lower()
+    rows = db.scalars(select(User).where(User.org_id == inst.org_id,
+                                         User.active.is_(True))).all()
+    for u in rows:
+        if (u.email or "").strip().lower() == want:
+            return u
+    hits = [u for u in rows
+            if " ".join((u.name or "").split()).lower() == want]
+    # Two people with the same name and no id to separate them: answering
+    # with either would be a guess, and a guess about who does the work is
+    # the one thing not worth saving a click for.
+    return hits[0] if len(hits) == 1 else None
+
+
 def step_people(db: Session, inst: FlowInstance, step: FlowStep) -> list[User]:
-    """Who this step opens for on THIS run — names, or a position resolved."""
+    """Who this step opens for on THIS run.
+
+    Three ways a flow can answer it, in the order they are checked:
+
+      an answer   whoever this run named in a person question — the only
+                  one that differs run to run, so one renewal flow serves
+                  four hundred members with four hundred trainers
+      a position  whoever is in Accounts at the company this run is for
+      a name      the person written into the flow itself
+    """
+    if step.doer_field:
+        person = answered_person(db, inst, step.doer_field)
+        return [person] if person is not None else []
     if step.doer_dept:
         return dept_people(db, inst.org_id, inst.branch_id, step.doer_dept)
     people = [db.get(User, i) for i in step.doer_ids]
@@ -644,6 +699,11 @@ def reference_from(flow: Flow, context: dict | None) -> str:
         if field["type"] == "file":
             # The answer is a filename chosen on somebody's laptop. It names
             # the document, not the thing the run is about.
+            continue
+        if field["type"] == "person":
+            # Who DOES the work, not what the run is about. The doer is on
+            # every task already; putting them in the name as well gives
+            # "Ritu Bansal · Amit Kumar" where the run is about Ritu.
             continue
         value = str(data.get(field["label"], "") or "").strip()
         if not value or len(value) > NAME_PART_MAX:

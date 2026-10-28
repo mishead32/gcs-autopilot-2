@@ -11212,5 +11212,258 @@ check("and that the first two answers name the run",
       "first\n  two short answers" in _rBuildN
       or "two short answers" in _rBuildN)
 
+
+# ==========================================================================
+# One flow, four hundred members, a different trainer on each
+# ==========================================================================
+print("\n-- person questions, and starting many from a file --")
+
+import io as _ioB
+import json as _jsonB
+from openpyxl import load_workbook as _loadB
+from app.db import SessionLocal as _slB2
+from app.models import (CONTEXT_PEOPLE as _CPB, Flow as _FlB,
+                        FlowInstance as _FiB, FlowStep as _FsB,
+                        Priority as _PrB, Task as _TkB, User as _UsB)
+from app.services import flowbulk as _fbB, flowform as _ffB, flows as _fsB
+
+_SELB = __import__("sqlalchemy").select
+
+with _slB2() as _d:
+    _orgB = _d.scalar(_SELB(_UsB.org_id))
+    _bossB = _d.scalar(_SELB(_UsB).where(_UsB.email == "mis@gcs.local"))
+    _staffB = _ffB.staff(_d, _orgB)
+    check("a person question offers people who are given work",
+          _staffB and all(u.receives_work for u in _staffB))
+    check("and never the admin, who hands work out and is given none",
+          _bossB not in _staffB)
+
+    _flowB = _FlB(org_id=_orgB, name=f"SMOKE renewal {RUN}", active=True,
+                  branch_id=None)
+    _flowB.start_form = _jsonB.dumps([
+        {"label": "Member name", "type": "text", "options": [], "required": True},
+        {"label": "Expiry date", "type": "date", "options": [], "required": True},
+        {"label": "Package", "type": "select",
+         "options": ["3 month", "6 month", "12 month"], "required": True},
+        {"label": "PT trainer", "type": "person", "options": [], "required": True},
+        {"label": "Salesperson", "type": "person", "options": [], "required": True},
+    ])
+    _d.add(_flowB); _d.flush()
+    for _pos, (_t, _who) in enumerate([
+            ("Call the member", "PT trainer"),
+            ("Offer the package", "Salesperson"),
+            ("Collect payment", None)], start=1):
+        _st = _FsB(flow_id=_flowB.id, position=_pos, title=_t,
+                   priority=_PrB.MEDIUM, tat_unit="days", tat_value=1,
+                   requires_attachment=False)
+        if _who:
+            _st.doer_field = _who
+        else:
+            _st.default_doer_id = _staffB[0].id
+        _d.add(_st)
+    _d.commit()
+    _fidB = _flowB.id
+    _namesB = [u.name for u in _staffB[:3]]
+    _mailB = _staffB[0].email
+
+# ------------------------------------------- one run, by hand, per person --
+_rFormB = admin.get(f"/flows/{_fidB}")
+check("the start form offers the people a person question may name",
+      _namesB[0] in _rFormB.text and 'name="sf3"' in _rFormB.text)
+for _i, (_member, _trainer) in enumerate(
+        [("Ritu Bansal", _namesB[0]), ("Vikram Mehta", _namesB[1])]):
+    _rB = admin.post(f"/flows/{_fidB}/start", data={
+        "run_branch": "", "sf0": _member, "sf1": "2026-11-20",
+        "sf2": "6 month", "sf3": _trainer, "sf4": _namesB[2]})
+    check(f"a run starts for {_member}", _rB.status_code == 200,
+          _rB.text[:160])
+
+with _slB2() as _d:
+    _runsB = _d.scalars(_SELB(_FiB).where(_FiB.flow_id == _fidB)
+                        .order_by(_FiB.id)).all()
+    check("two runs of the one flow", len(_runsB) == 2, len(_runsB))
+    _doersB = []
+    for _r in _runsB:
+        _first = [t for t in _d.scalars(_SELB(_TkB).where(
+            _TkB.flow_instance_id == _r.id)).all()
+            if t.flow_step.position == 1][0]
+        _doersB.append(_first.doer.name)
+    check("and step 1 went to a DIFFERENT person on each",
+          _doersB == _namesB[:2], _doersB)
+    check("while the step with a name on it went to the same person both times",
+          len({[t for t in _d.scalars(_SELB(_TkB).where(
+              _TkB.flow_instance_id == _r.id)).all()
+              if t.flow_step.position == 3][0].doer_id
+              for _r in _runsB}) == 1)
+    check("the run is named by what it is about, not by who does it",
+          all(_n not in _runsB[0].reference for _n in _namesB),
+          _runsB[0].reference)
+    check("and which person was meant is recorded, not just their name",
+          _CPB in _jsonB.loads(_runsB[0].context),
+          _runsB[0].context[:120])
+    check("while the register shows the answers and not the bookkeeping",
+          _CPB not in admin.get(f"/flows/{_fidB}/submissions").text)
+
+# A person question answered with somebody who does not exist.
+_rBadB = admin.post(f"/flows/{_fidB}/start", data={
+    "run_branch": "", "sf0": "Nobody", "sf1": "2026-11-20",
+    "sf2": "6 month", "sf3": "Who Even", "sf4": _namesB[2]})
+check("a person question refuses a name nobody has",
+      _rBadB.status_code == 400, _rBadB.status_code)
+
+# ------------------------------------------------------ many, from a file --
+_rTplB = admin.get(f"/flows/{_fidB}/bulk/template")
+check("the template downloads", _rTplB.status_code == 200
+      and len(_rTplB.content) > 3000, _rTplB.status_code)
+check("and its filename survives an HTTP header",
+      "attachment" in _rTplB.headers.get("content-disposition", ""))
+
+_wsB = _loadB(_ioB.BytesIO(_rTplB.content)).active
+_headsB = [c.value for c in _wsB[1]]
+check("the headings ARE this flow's questions",
+      "Member name" in _headsB and "PT trainer" in _headsB
+      and "Package" in _headsB, _headsB)
+check("plus the company, because a run is for one",
+      _fbB.COMPANY in _headsB, _headsB)
+check("and a file question is left out — a cell cannot hold a document",
+      not any("upload" in str(h).lower() for h in _headsB))
+
+_rowsB = [
+    {"Member name": "Aarav Sharma", "Expiry date": "2026-11-25",
+     "Package": "6 month", "PT trainer": _namesB[0],
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+    {"Member name": "Diya Mehta", "Expiry date": "26/11/2026",
+     "Package": "12 month", "PT trainer": _mailB,
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+    {"Member name": "Bad trainer", "Expiry date": "2026-11-27",
+     "Package": "6 month", "PT trainer": "A. Nonexistent",
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+    {"Member name": "Bad date", "Expiry date": "32/11/2026",
+     "Package": "6 month", "PT trainer": _namesB[0],
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+    {"Member name": "Bad package", "Expiry date": "2026-11-28",
+     "Package": "9 month", "PT trainer": _namesB[0],
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+    {"Member name": "", "Expiry date": "2026-11-29",
+     "Package": "6 month", "PT trainer": _namesB[0],
+     "Salesperson": _namesB[2], _fbB.COMPANY: "Bodyzone Fitness & Spa"},
+]
+for _n, _row in enumerate(_rowsB, start=3):
+    for _i, _h in enumerate(_headsB, start=1):
+        _wsB.cell(row=_n, column=_i, value=_row.get(_h, ""))
+_bufB = _ioB.BytesIO(); _wsB.parent.save(_bufB)
+_fileB = _bufB.getvalue()
+
+with _slB2() as _d:
+    _parsedB = _fbB.parse(_d, _d.get(_FlB, _fidB), _fileB)
+    check("every row is read", len(_parsedB.rows) == 6, len(_parsedB.rows))
+    check("two are ready", len(_parsedB.ready) == 2,
+          [r.number for r in _parsedB.ready])
+    check("and four need fixing", len(_parsedB.bad) == 4,
+          [(r.number, r.problems) for r in _parsedB.bad])
+    _whyB = " ".join(p for r in _parsedB.bad for p in r.problems)
+    check("a name nobody has is named in the reason",
+          "A. Nonexistent" in _whyB, _whyB[:200])
+    check("an impossible date is caught, not rolled into December",
+          "32/11/2026" in _whyB, _whyB[:200])
+    check("a choice that is not on the list says what is",
+          "9 month" in _whyB and "3 month" in _whyB, _whyB[:300])
+    check("and a required answer left blank is refused",
+          "Member name" in _whyB, _whyB[:300])
+    check("a person can be given by email as well as by name",
+          any(r.context.get("PT trainer") == _staffB[0].name
+              for r in _parsedB.ready),
+          [r.context for r in _parsedB.ready])
+    check("a date typed the other way round is read and stored one way",
+          any(r.context.get("Expiry date") == "2026-11-26"
+              for r in _parsedB.ready),
+          [r.context.get("Expiry date") for r in _parsedB.ready])
+    check("the check says what each run will be called before it exists",
+          all(r.name for r in _parsedB.ready),
+          [r.name for r in _parsedB.ready])
+
+# Through the pages, which is how somebody actually does it.
+_rCheckB = admin.post(f"/flows/{_fidB}/bulk", files={"file": (
+    "rows.xlsx", _fileB,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+check("the check page opens", _rCheckB.status_code == 200)
+check("it says how many are ready", "<strong>2</strong> ready" in _rCheckB.text)
+check("it lists what is wrong with the rest",
+      "A. Nonexistent" in _rCheckB.text)
+check("and nothing has been created yet",
+      len(_parsedB.ready) == 2)
+
+_beforeB = len(_runsB)
+_rGoB = admin.post(f"/flows/{_fidB}/bulk/start")
+check("starting them lands on the register", _rGoB.status_code == 200)
+with _slB2() as _d:
+    _allB = _d.scalars(_SELB(_FiB).where(_FiB.flow_id == _fidB)).all()
+    check("two more runs exist", len(_allB) == _beforeB + 2,
+          (len(_allB), _beforeB))
+    _madeB = sorted(_allB, key=lambda r: r.id)[-2:]
+    check("each named from its own row",
+          {r.reference.split(" · ")[0] for r in _madeB}
+          == {"Aarav Sharma", "Diya Mehta"},
+          [r.reference for r in _madeB])
+    _step1B = []
+    for _r in _madeB:
+        _step1B.append([t for t in _d.scalars(_SELB(_TkB).where(
+            _TkB.flow_instance_id == _r.id)).all()
+            if t.flow_step.position == 1][0].doer.name)
+    check("and step 1 of each went to the trainer named in that row",
+          _step1B == [_namesB[0], _staffB[0].name], _step1B)
+    check("every step of every uploaded run is planned, not just step 1",
+          all(len({t.flow_step.position for t in _d.scalars(_SELB(_TkB).where(
+              _TkB.flow_instance_id == _r.id)).all()}) == 3 for _r in _madeB))
+    check("and each run is filed under the company the row gave",
+          all(r.branch_id is not None for r in _madeB))
+
+check("the same check cannot be started twice",
+      admin.post(f"/flows/{_fidB}/bulk/start").status_code == 400)
+
+# A file built for a different flow, or an old one after the questions
+# changed, must say so rather than import into the wrong columns.
+_wrongB = _loadB(_ioB.BytesIO(_rTplB.content)).active
+_wrongB.cell(row=1, column=2, value="Something else entirely")
+_bufW = _ioB.BytesIO(); _wrongB.parent.save(_bufW)
+with _slB2() as _d:
+    _pW = _fbB.parse(_d, _d.get(_FlB, _fidB), _bufW.getvalue())
+    check("a file missing a column is refused whole",
+          _pW.missing and not _pW.rows, (_pW.missing, len(_pW.rows)))
+    check("and the missing column is named",
+          "Member name" in _pW.missing, _pW.missing)
+_rWrongB = admin.post(f"/flows/{_fidB}/bulk", files={"file": (
+    "rows.xlsx", _bufW.getvalue(),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+check("the page says so rather than importing anything",
+      "missing" in _rWrongB.text and "nothing was read" in _rWrongB.text.lower())
+
+check("something that is not a workbook is refused politely",
+      admin.post(f"/flows/{_fidB}/bulk", files={"file": (
+          "x.xlsx", b"not a workbook",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+      ).status_code == 400)
+
+# A flow that asks nothing has nothing for a spreadsheet to carry.
+with _slB2() as _d:
+    _bareB = _FlB(org_id=_orgB, name=f"SMOKE bare bulk {RUN}", active=True)
+    _d.add(_bareB); _d.flush()
+    _d.add(_FsB(flow_id=_bareB.id, position=1, title="Only step",
+                default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                tat_unit="days", tat_value=1, requires_attachment=False))
+    _d.commit()
+    _bareIdB = _bareB.id
+check("a flow with no questions says bulk makes no sense for it",
+      "asks nothing to get going" in admin.get(
+          f"/flows/{_bareIdB}/bulk").text)
+
+# The builder offers the third way of saying who does a step.
+_rEditB = admin.get(f"/flows/{_fidB}/edit").text
+check("the builder offers a step the start form's person questions",
+      "Whoever is named in" in _rEditB and "PT trainer" in _rEditB)
+check("and explains what that is for",
+      "different person on every run" in _rEditB
+      or "four hundred members" in _rEditB)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

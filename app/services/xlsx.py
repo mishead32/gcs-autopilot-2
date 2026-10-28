@@ -146,6 +146,16 @@ def one(filename: str, title: str, columns, rows, note: str = "") -> Response:
     return book(filename, [(title, columns, rows, note)])
 
 
+def download(data: bytes, filename: str) -> Response:
+    """Hand bytes back as a dated .xlsx download.
+
+    Public because the FMS bulk template is a workbook built elsewhere but
+    delivered exactly like every other download here — same media type,
+    same date stamp, same no-store.
+    """
+    return _download(data, filename)
+
+
 def _download(data: bytes, filename: str) -> Response:
     stamped = f"{filename}-{clock.today():%Y-%m-%d}.xlsx"
     return Response(

@@ -60,7 +60,7 @@
   </div>
   <div id="steps">
     {% for s in flow.steps %}
-    {{ step_card(doers, priorities, span_units, s, s.used_count > 0 and live) }}
+    {{ step_card(doers, priorities, span_units, s, s.used_count > 0 and live, person_fields) }}
     {% endfor %}
   </div>
   <button type="button" class="btn ghost sm" onclick="addStep()">+ Add step</button>
@@ -72,7 +72,7 @@
 </form>
 
 <template id="tpl">
-{{ step_card(doers, priorities, span_units) }}
+{{ step_card(doers, priorities, span_units, none, false, person_fields) }}
 </template>
 
 {# Switching off and deleting are separate things and the page says which is

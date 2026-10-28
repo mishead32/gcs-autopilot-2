@@ -575,7 +575,34 @@ FIELD_TYPES = {
     # people were starting a run and then hunting for somewhere to put the
     # document that the whole run is about.
     "file": "File upload",
+    # A member of staff. A dropdown of people when a run is started by hand,
+    # a name or an email address in a column when runs are uploaded in bulk.
+    #
+    # This is the answer type that lets one flow serve work that belongs to
+    # a different person every time. A renewal flow run for four hundred
+    # members has four hundred different PT trainers; before this the only
+    # ways to say who does a step were a name fixed in the flow and a
+    # position resolved against the company, and neither can vary per
+    # member. A step can now be set to "whoever is named in PT trainer" —
+    # see FlowStep.doer_field.
+    "person": "A person on GCS",
 }
+
+# Reserved keys inside a run's context. The ANSWER to a person question is
+# stored as the person's name, because that is what belongs in the register
+# and in the run's own title; the id is kept beside it under this key so a
+# step can find exactly who was meant even if two people share a name or
+# somebody is renamed later.
+#
+# Everything that SHOWS a run's answers has to leave these out, which is
+# why there is one helper for it rather than a filter written twice.
+CONTEXT_PEOPLE = "__people"
+
+
+def context_answers(raw: dict | None) -> dict:
+    """The answers somebody typed, without the bookkeeping kept beside them."""
+    return {k: v for k, v in (raw or {}).items()
+            if not str(k).startswith("__")}
 
 # What the builder actually offers. Yes/No is still rendered and still
 # answered on any flow already using it — dropping it from FIELD_TYPES
@@ -697,6 +724,19 @@ class FlowStep(Base):
     # company, so an id would pin the step back to one company — exactly
     # what this exists to avoid.
     doer_dept: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # Who does it, said as AN ANSWER ON THE START FORM: the label of a
+    # person question, and the step goes to whoever that run named.
+    #
+    # The third and last way to answer "who does this step", and the only
+    # one that can differ from run to run. A name fixed in the flow is the
+    # same person every time; a position is the same person for every run
+    # at one company. A renewal flow run for four hundred members has four
+    # hundred different PT trainers, and nothing above can say that.
+    #
+    # Stored as the question's LABEL rather than an index, so reordering
+    # the questions does not silently point the step at a different one.
+    doer_field: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
     # Turnaround time, as a unit and a number: 30 minutes, 2 days, 1 month.
     # tat_hours is the original column and is kept so older rows and the
