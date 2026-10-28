@@ -348,7 +348,13 @@ function formQuestions(){
  * built in the browser.
  */
 function refreshDoerFields(){
-  var qs = formQuestions().filter(function(q){ return q.person; });
+  // Every question, not only the ones that name a person. A question
+  // called "PT trainer" left on the default Short text answer type simply
+  // did not appear here, with nothing on screen saying the TYPE was what
+  // decided it — so it looked as though the flow had to be saved first.
+  // It is listed, greyed, with the fix written on it, exactly as the
+  // deadline anchor list does.
+  var all = formQuestions();
 
   document.querySelectorAll('#steps select[name="step_doer"]').forEach(function(sel){
     var chosen = sel.value;
@@ -358,25 +364,31 @@ function refreshDoerFields(){
     // The server also leaves a loose option for a question that was
     // renamed away. If that name is back on the form it is about to be
     // listed properly, so the loose copy would be the same line twice.
-    var names = qs.map(function(q){ return 'field:' + q.name; });
+    var names = all.map(function(q){ return 'field:' + q.name; });
     sel.querySelectorAll('option').forEach(function(o){
       if (!o.parentNode.classList.contains('fieldgroup')
           && names.indexOf(o.value) !== -1) o.remove();
     });
-    var group = null;
-    if (!qs.length) {
-      // Nothing to offer. A step already set to a question keeps its own
-      // option below, so editing a flow never silently drops the setting.
+    if (!all.length) {
+      // The form asks nothing, so there is nothing to point at. A step
+      // already set to a question keeps its own option below, so editing a
+      // flow never silently drops the setting.
       if (chosen.indexOf('field:') === 0) sel.value = chosen;
       return;
     }
-    group = document.createElement('optgroup');
+    var group = document.createElement('optgroup');
     group.className = 'fieldgroup';
     group.label = 'From an answer on the start form';
-    qs.forEach(function(q){
+    all.forEach(function(q){
       var o = document.createElement('option');
       o.value = 'field:' + q.name;
-      o.textContent = 'Whoever is named in \u201c' + q.name + '\u201d';
+      if (q.person) {
+        o.textContent = 'Whoever is named in \u201c' + q.name + '\u201d';
+      } else {
+        o.textContent = '\u201c' + q.name
+                      + '\u201d \u2014 set its answer type to A person on GCS to use it';
+        o.disabled = true;
+      }
       group.appendChild(o);
     });
     sel.appendChild(group);

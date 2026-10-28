@@ -11479,6 +11479,18 @@ check("so every one of those groups on the page is one the script owns",
 _sfDup = open("app/templates/_stepfields.html", encoding="utf-8").read()
 check("and the script clears every old group before adding its own",
       "querySelectorAll('.fieldgroup').forEach" in _sfDup)
+# Why somebody concluded the flow had to be SAVED before the option
+# appeared: a question called "PT trainer" left on the default Short text
+# answer type was simply absent from this list, with nothing on screen
+# saying the type was what decided it. Now it is listed, greyed, with the
+# fix written on it — the same treatment the deadline anchor list gives.
+check("a question that does not name a person is still listed",
+      "set its answer type to A person on GCS to use it" in _sfDup)
+check("but not choosable, so a step cannot point at a text box",
+      "o.disabled = true;" in _sfDup)
+check("and the list is built from every question, not only the person ones",
+      "var all = formQuestions();" in _sfDup
+      and "all.forEach(function(q){" in _sfDup)
 
 print("\n== the list of person questions is built as you type ==")
 # The bug this closes: the "Who does it" dropdown was rendered once by the
