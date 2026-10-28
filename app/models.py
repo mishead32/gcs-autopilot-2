@@ -745,6 +745,13 @@ class FlowStep(Base):
     tat_hours: Mapped[int] = mapped_column(Integer, default=24)
     tat_unit: Mapped[str] = mapped_column(String(10), default="hours")
     tat_value: Mapped[int] = mapped_column(Integer, default=24)
+    # Only read when the TAT is a date off the start form. How the gap is
+    # measured — days, working days, weeks, months — and which side of that
+    # date it falls. Kept as plain columns with defaults rather than
+    # nullable extras: every step posts them, and a step that does not use
+    # them is not harmed by carrying "0 days after".
+    form_span: Mapped[str] = mapped_column(String(10), default="days")
+    form_way: Mapped[str] = mapped_column(String(6), default="after")
 
     # Whose planned date this step's turnaround is measured from.
     #
@@ -795,29 +802,30 @@ class FlowStep(Base):
 
     @property
     def tat_label(self) -> str:
-        # A turnaround taken straight off the start form has no length to
-        # report, so reporting one ("0 hours") would be a lie on every page
-        # that reads this back. It names the question instead.
-        if (self.tat_unit or "") == clock.FORM_UNIT:
-            if self.due_from_field:
-                return f'the time answered for "{self.due_from_field}"'
-            return "a time answered on the start form"
-        # Counting BACK from a date on the form. The number alone would read
-        # as "30 days" and be taken for thirty days from now, which is the
-        # opposite of what it means.
-        if (self.tat_unit or "") == clock.BEFORE_UNIT:
-            days = self.tat_value or 0
+        """How this step's deadline reads on a page. A sentence, not a key.
+
+        A turnaround measured from the start form has no length of its own
+        to report — "0 hours" would be a lie on every page that reads this
+        back — so it names the question and which side of it instead. All
+        four spellings the setting has had are written the same way, so a
+        step saved last month reads like one saved today.
+        """
+        unit = self.tat_unit or ""
+        if unit in clock.FORM_ANCHORED:
             when = (f'"{self.due_from_field}"' if self.due_from_field
                     else "a date on the start form")
-            return (f"{days} day{'' if days == 1 else 's'} before {when}")
-        # And forwards from one. Read as a bare span it would say "3 days"
-        # and be taken for three days from when the step opened, which is
-        # the thing anchoring to the form exists to avoid.
-        if (self.tat_unit or "") == clock.AFTER_UNIT:
-            days = self.tat_value or 0
-            when = (f'"{self.due_from_field}"' if self.due_from_field
-                    else "a date on the start form")
-            return (f"{days} day{'' if days == 1 else 's'} after {when}")
+            if unit == clock.FORMDATE_UNIT:
+                n = self.tat_value or 0
+                span, way = (clock.form_span(self.form_span),
+                             clock.form_way(self.form_way))
+            else:
+                n, span, way = clock.as_formdate(unit, self.tat_value or 0)
+            if n == 0:
+                return f"the date answered for {when}"
+            word = clock.FORM_SPANS[span]
+            if n == 1:
+                word = word[:-1] if word.endswith("s") else word
+            return f"{n} {word} {way} {when}"
         return clock.span_label(self.tat_unit or "hours",
                                 self.tat_value or self.tat_hours or 0)
 
@@ -858,18 +866,22 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
                 if target.tat_value == 24 else target.tat_value
         target.tat_hours = target.tat_value
     elif target.tat_unit == clock.FORM_UNIT:
-        # There is no number to keep. The deadline is the moment named in
-        # due_from_field, and 0 is what "nothing is added to it" looks like
-        # — so the floor below must not push it up to 1 and quietly make
-        # every such step an hour late.
+        # The older spelling of "the answered date itself". There is no
+        # number to keep, and 0 is what "nothing either side of it" looks
+        # like — so the floor below must not push it up to 1 and quietly
+        # make every such step an hour late.
         target.tat_value = 0
         target.tat_hours = 0
-    elif target.tat_unit in (clock.BEFORE_UNIT, clock.AFTER_UNIT):
-        # Days either side of a date on the form. 0 is a real answer — "on
-        # the day it expires", "on the joining day itself" — so the floor
-        # below must not push it to 1 and move every such step by a day.
+    elif target.tat_unit in clock.FORM_ANCHORED:
+        # A gap either side of a date on the form. 0 is a real answer —
+        # "on the day it expires", "on the joining day itself" — so the
+        # floor below must not push it to 1 and move every such step.
         target.tat_value = max(0, target.tat_value or 0)
         target.tat_hours = target.tat_value
+        # Never trusted from whatever set them: a bad span would otherwise
+        # be stored and read back as a deadline nobody chose.
+        target.form_span = clock.form_span(target.form_span)
+        target.form_way = clock.form_way(target.form_way)
     elif target.tat_unit in clock.CALENDAR_UNITS:
         # 0 is a real answer here — Monday, and the fortnight rule's single
         # placeholder — so the "no zero spans" floor below must not touch

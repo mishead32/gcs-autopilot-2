@@ -120,6 +120,12 @@ ADDITIONS = {
         ("tat_value", "INTEGER DEFAULT 24"),
         ("due_from_pos", "INTEGER"),
         ("due_from_field", "VARCHAR(160)"),
+        # A deadline measured from a date on the start form: how the gap is
+        # counted, and which side of that date it falls. Only meaningful
+        # when tat_unit is the form-date unit; harmless on every other step,
+        # which is why they are plain defaults rather than nullable flags.
+        ("form_span", "VARCHAR(10) DEFAULT 'days'"),
+        ("form_way", "VARCHAR(6) DEFAULT 'after'"),
         ("extra_doer_ids", "TEXT"),
         # A step assigned to a position rather than a person.
         ("doer_dept", "VARCHAR(120)"),
@@ -271,6 +277,16 @@ def run() -> list[str]:
                     f"ALTER TABLE {table} ADD COLUMN {name} {_ddl_for(ddl, dialect)}"))
                 applied.append(f"{table}.{name}")
 
+        # `insp` was taken before those ALTERs ran and still describes the
+        # database as it was, so every data fix below that asks "does this
+        # column exist yet?" would answer no on the one run that matters —
+        # the deploy that adds it. It would then do its work on the NEXT
+        # restart, which is a migration that silently takes two deploys and
+        # a day of wrong-looking data in between. Caught doing exactly that
+        # to the form-date conversion. A fresh inspector on this connection
+        # sees the columns that were just added.
+        insp = inspect(conn)
+
         # A task flagged for audit used to read "Audit pending" from the
         # moment it was created, so the auditor's list was full of work
         # nobody had started. Anything still unfinished goes back to
@@ -285,6 +301,35 @@ def run() -> list[str]:
             if moved.rowcount:
                 applied.append(
                     f"{moved.rowcount} unfinished task(s): audit pending -> waiting")
+
+        # Three ways of saying one thing, folded into one. "Take timestamp
+        # from form", "Days before a date on the form" and "Days after a
+        # date on the form" were three dropdown entries for the same
+        # setting with the number fixed at 0, negative and positive — so
+        # somebody choosing read all three to find out they were the same.
+        # They are now one entry with the number, the span and the side
+        # chosen separately.
+        #
+        # Converted rather than left alone, so a step saved last month and
+        # one saved today are the same shape on the page and in the
+        # database. The deadlines do not move: each old unit maps to the
+        # exact arithmetic it already did.
+        if "flow_steps" in existing_tables:
+            cols = {c["name"] for c in insp.get_columns("flow_steps")}
+            if {"form_span", "form_way"} <= cols:
+                for was, value, way in (("formtime", "0", "after"),
+                                        ("daysbefore", None, "before"),
+                                        ("daysafter", None, "after")):
+                    sets = ["tat_unit = 'formdate'", "form_span = 'days'",
+                            f"form_way = '{way}'"]
+                    if value is not None:
+                        sets.append(f"tat_value = {value}")
+                    moved = conn.execute(text(
+                        f"UPDATE flow_steps SET {', '.join(sets)} "
+                        "WHERE tat_unit = :was"), {"was": was})
+                    if moved.rowcount:
+                        applied.append(
+                            f"{moved.rowcount} step(s): {was} -> formdate")
 
         # "Weekdays" is no longer offered: Monday to Friday is Weekly with
         # five days ticked, and two names for one schedule only ever made

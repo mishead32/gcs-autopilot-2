@@ -89,6 +89,27 @@
       <select name="step_tat" class="tatval"
               data-value="{{ step.tat_value if step is not none and step.tat_value is not none else 24 }}"
               data-field="{{ step.due_from_field or '' if step and step.tat_unit == 'formtime' else '' }}"></select></div>
+    {# Only meaningful when the TAT is a date off the start form, but
+       posted by every step card all the same: the server reads these as
+       parallel lists lined up by position, and a box only some steps sent
+       would shift every later step's settings onto the wrong step. #}
+    <div class="formspanbox" style="max-width:170px;flex:1 1 150px" hidden>
+      <label>Counted in</label>
+      <select name="step_form_span">
+        {% for k, lbl in form_spans.items() %}
+        <option value="{{ k }}"
+          {{ 'selected' if step and (step.form_span or 'days') == k
+          }}>{{ lbl[0]|upper }}{{ lbl[1:] }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="formwaybox" style="max-width:150px;flex:1 1 130px" hidden>
+      <label>Which side</label>
+      <select name="step_form_way" class="formway">
+        <option value="after" {{ 'selected' if not step or (step.form_way or 'after') == 'after' }}
+          >After the date</option>
+        <option value="before" {{ 'selected' if step and step.form_way == 'before' }}
+          >Before the date</option>
+      </select></div>
     <div><label>Priority</label>
       <select name="step_priority">
         {% for p in priorities %}<option value="{{ p.value }}"
@@ -194,25 +215,24 @@
       below · 0 = the flow finishes here · an earlier number sends it back for
       rework.</div>
 
-    {# Hidden — never disabled — when the TAT itself names a form question:
-       a hidden field is still submitted, so every step posts one value for
+    {# Hidden — never disabled — so every step still posts one value for
        every name and the parallel lists stay lined up. #}
     <div class="m formtimenote" style="margin-top:12px" hidden>
       This step's deadline is the moment answered on the start form, so there
       is nothing to count from — the question chosen above
       <strong>is</strong> the deadline.
     </div>
-    {# Shown when the deadline counts BACK from a date on the form. The
-       anchor row below is not optional then — it names the date being
-       counted back from — so it says so rather than leaving somebody to
-       guess which box the expiry date goes in. #}
+    {# Shown when the deadline is measured from a date on the form. The row
+       below is not optional then — it names the date being measured from —
+       so it says so rather than leaving somebody to guess which box the
+       expiry date goes in. #}
     <div class="m beforenote" style="margin-top:12px" hidden>
-      This step is due a number of days <strong><span class="bfway">before</span></strong>
-      a date answered on the start form. Pick which date below — the
-      membership expiry, the joining date, whatever this run counts from.
+      This step's deadline is measured from a date answered on the start
+      form — the membership expiry, the joining date, the bill date. Pick
+      which question below, then say how long and which side above.
     </div>
     <div class="row duefromrow" style="margin-top:12px">
-      <div style="max-width:420px"><label>Start this step's clock from</label>
+      <div style="max-width:420px"><label class="dflabel">Start this step's clock from</label>
         {# A list, not a number. "Count the TAT from 2" told nobody what 2
            meant, and the one answer people most often wanted — count from
            when the run was started — could not be typed at all. #}
@@ -307,12 +327,16 @@ function renumber(){
  * Rebuilt from the question rows rather than rendered once by the server,
  * because the questions and the steps are written on the same page.
  */
+/* One setting, four spellings. FORMDATE_UNIT is the only one offered now;
+ * the other three are older names for the same thing and are still read so
+ * a flow saved under them keeps working until the migrator converts it. */
+var FORMDATE_UNIT = 'formdate';
 var FORM_UNIT = 'formtime';
 var BEFORE_UNIT = 'daysbefore';
 var AFTER_UNIT = 'daysafter';
-/* Both count from a date on the START FORM rather than from when the step
- * opened, so both need the anchor row and both restrict it to questions. */
-function countsFromForm(v){ return v === BEFORE_UNIT || v === AFTER_UNIT; }
+function countsFromForm(v){
+  return v === FORMDATE_UNIT || v === BEFORE_UNIT || v === AFTER_UNIT;
+}
 
 /* The start form's questions, as they stand right now.
  *
@@ -510,9 +534,23 @@ function wire(card){
     // note of its own saying what it is for.
     if (dfrow) dfrow.hidden = form;
     if (dfnote) dfnote.hidden = !form;
-    if (bfnote) bfnote.hidden = !countsFromForm(unit.value);
-    var way = card.querySelector('.bfway');
-    if (way) way.textContent = unit.value === AFTER_UNIT ? 'after' : 'before';
+    var fromForm = countsFromForm(unit.value);
+    if (bfnote) bfnote.hidden = !fromForm;
+    // "How long" and "which side" only mean anything for this unit. Hidden,
+    // never disabled: a hidden field is still submitted, which is what keeps
+    // every step posting one value for every name.
+    var spanBox = card.querySelector('.formspanbox');
+    var wayBox = card.querySelector('.formwaybox');
+    if (spanBox) spanBox.hidden = !fromForm;
+    if (wayBox) wayBox.hidden = !fromForm;
+    // The anchor row stops being "where the clock starts" and becomes the
+    // question itself, so it says that rather than leaving somebody to work
+    // out that one box has two jobs.
+    var dfl = card.querySelector('.dflabel');
+    if (dfl) {
+      dfl.textContent = fromForm ? 'Which question'
+                                 : "Start this step's clock from";
+    }
 
     // Counting back only works from a date on the FORM. The same box also
     // offers "when this step opens" and "step 2's planned date", and
@@ -610,8 +648,7 @@ function wire(card){
     if (lbl) {
       lbl.textContent = CAL[unit.value]
         ? (unit.value === 'fortnight' ? 'Which dates' : 'Which one')
-        : (unit.value === BEFORE_UNIT ? 'How many days before'
-          : unit.value === AFTER_UNIT ? 'How many days after' : 'How many');
+        : (countsFromForm(unit.value) ? 'How long' : 'How many');
     }
     // The fortnight rule has exactly one answer, so there is nothing to
     // choose — shown, but not pretending to be a decision.

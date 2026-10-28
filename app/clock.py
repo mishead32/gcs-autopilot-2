@@ -121,53 +121,114 @@ SPAN_UNITS[FORM_UNIT] = "Take timestamp from form"
 # questions, which only the page building the flow knows about.
 SPAN_CHOICES[FORM_UNIT] = []
 
-# ------------------------------------------- counting BACK from a date ----
-# The fifth shape, and the one every renewal, licence and contract needs:
-# a deadline a given number of days BEFORE a date somebody typed on the
-# start form. "Follow up thirty days before the membership expires."
+# ------------------------------------------ a date off the form, ± a span -
+# The fifth shape, and the one every renewal, licence, contract and
+# onboarding needs: a deadline measured from a date somebody typed on the
+# start form. "Follow up thirty days before the membership expires." "First
+# check-in three days after it starts." "Audit a month after the bill date."
 #
-# Every other unit counts forwards — from now, from when the step opened,
-# from an earlier step's date — and none of them can say this. Counting
-# forwards from the start of the run cannot either: a membership expiring
-# in March and one expiring in November are the same flow and want the same
-# rule, and the only thing they share is "thirty days before the date in
-# the file".
+# No other unit can say it. They all count forwards from when the step
+# opened, which moves with how fast the office worked — and the whole point
+# here is that the date was fixed by the member, not by us. Counting from
+# the start of the run cannot say it either: a membership expiring in March
+# and one expiring in November are the same flow and want the same rule.
 #
-# It takes BOTH boxes, which no other unit does: the number of days in the
-# TAT box, and which question holds the date in the anchor box. Those are
-# two boxes that every step already posts, so the parallel lists the server
-# reads stay lined up — a third box only some steps sent would shift every
-# later step's settings onto the wrong step.
+# ONE entry in the dropdown, not one per shape. Before and after are not
+# two ideas, and three near-identical lines ("Take timestamp from form",
+# "Days before…", "Days after…") made somebody choosing read all three to
+# find out they were the same thing. Picking it reveals the three answers
+# that actually differ: which question, how long, and which side.
+#
+# Those live in boxes every step posts — the number in the TAT box, the
+# question in the anchor box, the length and the side in two boxes of their
+# own that are on every step card whether or not it uses them. A box only
+# some steps sent would shift every later step's settings onto the wrong
+# step, because the server reads them as parallel lists.
+#
 # Ten characters, and not one more: `flow_steps.tat_unit` is VARCHAR(10) on
 # the live database. SQLite ignores the length and accepts anything, so a
 # longer name passes every test here and then refuses to save a step on the
-# real site. The check at the bottom of this file guards that for the next
-# unit somebody adds.
-BEFORE_UNIT = "daysbefore"
-SPAN_UNITS[BEFORE_UNIT] = "Days before a date on the form"
-SPAN_CHOICES[BEFORE_UNIT] = [1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
+# real site. The check at the bottom of this file guards that.
+FORMDATE_UNIT = "formdate"
+SPAN_UNITS[FORMDATE_UNIT] = "A date answered on the start form"
+SPAN_CHOICES[FORMDATE_UNIT] = [0, 1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
 
-# And the same thing the other way round. "Take the timestamp from the
-# form" makes the answered date the deadline exactly — which is right for
-# "due at the joining date and time" and wrong for everything that has to
-# happen a few days AFTER it: the first follow-up three days after the
-# membership starts, the audit a week after the bill date.
-#
-# Counting from when the step opens cannot say it. A step opens when the
-# one before it is finished, and the whole point of anchoring to the form
-# is that the date is fixed by the member, not by how fast the office
-# worked. Same two boxes as counting back, read the same way.
-AFTER_UNIT = "daysafter"
+# How the gap is measured. Working days are here because "three days after
+# the bill date" and "three WORKING days after it" are different promises,
+# and a spa that opens on Sunday counts them differently from the office.
+FORM_SPANS = {
+    "days": "days",
+    "workdays": "working days",
+    "weeks": "weeks",
+    "months": "months",
+}
+FORM_WAYS = {"before": "before", "after": "after"}
+# How far a working-day count may walk before giving up. Ninety calendar
+# days to find at most a few dozen open ones is generous for any real
+# calendar; a run of closed days longer than that means the calendar is
+# wrong, and a deadline three months out is not the fix.
+MAX_WORKDAY_STEPS = 400
+FORM_SPAN_DEFAULT = "days"
+FORM_WAY_DEFAULT = "after"
+
+
+def form_span(raw) -> str:
+    """One of FORM_SPANS, or the default. Never trusts what was posted."""
+    raw = (raw or "").strip().lower()
+    return raw if raw in FORM_SPANS else FORM_SPAN_DEFAULT
+
+
+def form_way(raw) -> str:
+    """"before" or "after", defaulting to after."""
+    raw = (raw or "").strip().lower()
+    return raw if raw in FORM_WAYS else FORM_WAY_DEFAULT
+
+
+# The three older shapes, kept because steps saved under them are running
+# right now and their deadlines must not move. They are read everywhere the
+# new one is, and converted to it by the migrator, but they are no longer
+# offered — see HIDDEN_UNITS below.
+FORM_UNIT = "formtime"            # the answered moment exactly
+BEFORE_UNIT = "daysbefore"        # N days before it
+AFTER_UNIT = "daysafter"          # N days after it
+SPAN_UNITS[FORM_UNIT] = "Take timestamp from form"
+SPAN_UNITS[BEFORE_UNIT] = "Days before a date on the form"
 SPAN_UNITS[AFTER_UNIT] = "Days after a date on the form"
-SPAN_CHOICES[AFTER_UNIT] = [1, 2, 3, 5, 7, 10, 14, 15, 20, 21, 30, 45, 60, 90]
+SPAN_CHOICES[FORM_UNIT] = []
+SPAN_CHOICES[BEFORE_UNIT] = SPAN_CHOICES[FORMDATE_UNIT]
+SPAN_CHOICES[AFTER_UNIT] = SPAN_CHOICES[FORMDATE_UNIT]
+
+# Every unit that reads its date off the start form, old and new. The
+# engine, the builder and the save check all ask this rather than listing
+# three names each and drifting apart.
+FORM_ANCHORED = (FORMDATE_UNIT, FORM_UNIT, BEFORE_UNIT, AFTER_UNIT)
+
+# Still understood, never offered again. A step saved under one of these
+# keeps working; the builder shows it as the one that replaced it.
+HIDDEN_UNITS = (FORM_UNIT, BEFORE_UNIT, AFTER_UNIT)
+
+
+def as_formdate(unit: str, value: int) -> tuple[int, str, str]:
+    """An old form-anchored unit as (value, span, way) under the new one.
+
+    One place, so the migrator, the builder and anything reading an
+    unconverted row all say the same thing about a step.
+    """
+    if unit == BEFORE_UNIT:
+        return max(0, int(value or 0)), "days", "before"
+    if unit == AFTER_UNIT:
+        return max(0, int(value or 0)), "days", "after"
+    # "Take the timestamp from the form" is the same deadline as nothing
+    # either side of it.
+    return 0, "days", "after"
+
 
 # Units written as a sentence rather than from their key. "Monthday",
 # "Fortnight" and "Formtime" are not words anybody picking a deadline would
 # recognise.
 UNIT_SENTENCES = dict(CALENDAR_UNITS)
-UNIT_SENTENCES[FORM_UNIT] = SPAN_UNITS[FORM_UNIT]
-UNIT_SENTENCES[BEFORE_UNIT] = SPAN_UNITS[BEFORE_UNIT]
-UNIT_SENTENCES[AFTER_UNIT] = SPAN_UNITS[AFTER_UNIT]
+for _k in (FORMDATE_UNIT,) + HIDDEN_UNITS:
+    UNIT_SENTENCES[_k] = SPAN_UNITS[_k]
 
 # 1-28 only. The 29th, 30th and 31st do not exist in every month, and a
 # deadline that silently moves to the 28th in February is a deadline nobody
@@ -191,6 +252,12 @@ def unit_labels() -> dict:
     """
     out = {}
     for key in SPAN_UNITS:
+        if key in HIDDEN_UNITS:
+            # Replaced by FORMDATE_UNIT, which says the same things in one
+            # line. Offering all four would be four ways to describe three
+            # settings, which is how somebody ends up reading every option
+            # to find out they are the same.
+            continue
         out[key] = UNIT_SENTENCES.get(key) or key.title()
     return out
 

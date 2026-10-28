@@ -8575,9 +8575,26 @@ from app import clock as _ckT
 
 _newT = admin.get("/flows/new").text
 check("the TAT dropdown itself offers it",
-      'value="formtime"' in _newT and "Take timestamp from form" in _newT)
+      'value="formdate"' in _newT
+      and "A date answered on the start form" in _newT)
 check("and it sits in the TAT box, not somewhere else on the card",
-      _newT.index("Take timestamp from form") > _newT.index("TAT — measured in"))
+      _newT.index("A date answered on the start form")
+      > _newT.index("TAT — measured in"))
+# Three dropdown entries for one setting — "Take timestamp from form",
+# "Days before a date on the form", "Days after a date on the form" — meant
+# reading all three to find out they were the same thing with the number
+# fixed at 0, negative and positive. One entry now, and how long and which
+# side are boxes of their own.
+check("and the three it replaced are no longer offered",
+      all(f'value="{_u}"' not in _newT
+          for _u in ("formtime", "daysbefore", "daysafter")),
+      [_u for _u in ("formtime", "daysbefore", "daysafter")
+       if f'value="{_u}"' in _newT])
+check("how long it is measured in is a box of its own",
+      'name="step_form_span"' in _newT and "Working days" in _newT)
+check("and which side of the date, in another",
+      'name="step_form_way"' in _newT and "Before the date" in _newT
+      and "After the date" in _newT)
 
 with _slK() as _d:
     _uT = [u for u in _d.scalars(_spK(_UT).where(_UT.active.is_(True))).all()
@@ -8593,26 +8610,26 @@ admin.post("/flows/new", data={
     "sf_options": ["", "", "", ""],
     "step_title": ["Provide kpi kra to new employee"],
     "step_doer": [str(_uT)], "step_doers": [""],
-    "step_tat_unit": ["formtime"], "step_tat": [f"field:{_joinQ}"],
+    "step_tat_unit": ["formdate"], "step_tat": ["0"],
+    "step_form_span": ["days"], "step_form_way": ["after"],
     "step_priority": ["medium"],
     "step_instructions": [""], "step_howto": [""], "step_fields": [""],
     "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
     "step_yes": [""], "step_next": ["0"], "step_no": [""], "step_fail": [""],
-    # Left on its default on purpose: the TAT box is in charge now, and the
-    # anchor box is hidden on the page. Honouring it as well would be two
-    # settings quietly contradicting each other.
-    "step_due_from": [""]})
+    # The question lives here now — one box with one job, instead of the
+    # TAT box doing double duty.
+    "step_due_from": [f"field:{_joinQ}"]})
 
 with _slK() as _d:
     _kF = _d.scalar(_spK(_FlT).where(_FlT.name == _kpiName))
-    check("the step saved the unit it was given", _kF.steps[0].tat_unit == "formtime",
+    check("the step saved the unit it was given", _kF.steps[0].tat_unit == "formdate",
           _kF.steps[0].tat_unit)
     check("and which question it takes the moment from",
           _kF.steps[0].due_from_field == _joinQ, _kF.steps[0].due_from_field)
     check("with no length added on top", _kF.steps[0].tat_value == 0,
           _kF.steps[0].tat_value)
     check("read back it names the question rather than claiming '0 hours'",
-          _kF.steps[0].tat_label == f'the time answered for "{_joinQ}"',
+          _kF.steps[0].tat_label == f'the date answered for "{_joinQ}"',
           _kF.steps[0].tat_label)
     _kFid = _kF.id
 
@@ -8644,13 +8661,14 @@ with _slK() as _d:
 # Saved without naming a question there is nothing to be due at, so it is
 # refused while the flow is being built rather than discovered by whoever is
 # holding the work.
-check("a form timestamp with no question chosen is refused",
+check("a deadline off the form with no question chosen is refused",
       admin.post("/flows/new", data={
           "name": f"SMOKE no question {RUN}", "description": "", "branch_id": "",
           "sf_label": ["Name"], "sf_type": ["text"], "sf_required": ["1"],
           "sf_options": [""],
           "step_title": ["Do it"], "step_doer": [str(_uT)], "step_doers": [""],
-          "step_tat_unit": ["formtime"], "step_tat": [""],
+          "step_tat_unit": ["formdate"], "step_tat": ["3"],
+          "step_form_span": ["days"], "step_form_way": ["after"],
           "step_priority": ["medium"], "step_instructions": [""],
           "step_howto": [""], "step_fields": [""], "step_audit": ["0"],
           "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
@@ -8668,10 +8686,10 @@ check("and the legacy hour count agrees with it", _ftT.tat_hours == 0, _ftT.tat_
 # Editing the flow must offer the setting back, with the question it chose.
 _edT = admin.get(f"/flows/{_kFid}/edit").text
 check("editing the flow keeps the unit selected",
-      'value="formtime" selected' in " ".join(_edT.split()),
-      [_l for _l in _edT.splitlines() if "formtime" in _l])
+      'value="formdate" selected' in " ".join(_edT.split()),
+      [_l for _l in _edT.splitlines() if "formdate" in _l])
 check("and remembers which question, so editing never loses it",
-      f'data-field="{_joinQ}"' in _edT)
+      f'value="field:{_joinQ}"' in _edT and "selected" in _edT)
 check("the card explains that there is nothing left to count from",
       "is</strong> the deadline" in _edT)
 check("the spans and the calendar rules are all still on offer",
@@ -11550,7 +11568,8 @@ with _slB2() as _d:
     _stepTid = _fT.steps[0].id
 
 check("the builder offers it as an answer to “when is it due”",
-      "Days before a date on the form" in admin.get(f"/flows/{_fTid}/edit").text)
+      "A date answered on the start form"
+      in admin.get(f"/flows/{_fTid}/edit").text)
 
 _expiryT = (_clkB.today() + _tdT(days=120))
 admin.post(f"/flows/{_fTid}/start",
@@ -11664,7 +11683,7 @@ with _slB2() as _d:
     _d.commit()
     _fAid = _fA.id
 
-check("the builder offers it too", "Days after a date on the form"
+check("the builder offers it too", "A date answered on the start form"
       in admin.get(f"/flows/{_fAid}/edit").text)
 
 _startA = _clkB.today() + _tdT(days=30)
@@ -11726,6 +11745,149 @@ check("group-wide only shows the flows built for every company",
 check("a company that has nothing says so rather than showing an empty table",
       "No flows" in admin.get("/flows?company=999999").text
       or admin.get("/flows?company=999999").status_code == 200)
+
+print("\n== one setting, measured any way, either side ==")
+# What the three replaced options could not say between them: weeks,
+# months, and working days. "Three days after the bill date" and "three
+# WORKING days after it" are different promises, and a spa that opens on
+# Sunday counts them differently from the office.
+from app.clock import FORMDATE_UNIT as _FD
+from app.services import holidays as _holZ
+
+def _plan(span, way, n, when, q="Bill date"):
+    """Start a one-step run with this setting and give back its deadline."""
+    with _slB2() as _d:
+        _f = _FlB(org_id=_orgB, name=f"SMOKE {span}-{way}-{n} {RUN}", active=True)
+        _f.start_form = _jsB.dumps(
+            [{"label": q, "type": "date", "options": [], "required": True}])
+        _d.add(_f); _d.flush()
+        _d.add(_FsB(flow_id=_f.id, position=1, title="Do the thing",
+                    default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                    tat_unit=_FD, tat_value=n, form_span=span, form_way=way,
+                    due_from_field=q, requires_attachment=False))
+        _d.commit()
+        _fid = _f.id
+    admin.post(f"/flows/{_fid}/start",
+               data={"reference": "", "sf0": when.isoformat()})
+    with _slB2() as _d:
+        _i = _d.scalars(_spK(_FID).where(_FID.flow_id == _fid)
+                        .order_by(_FID.id.desc())).first()
+        _t = _d.scalar(_spK(_TD).where(_TD.flow_instance_id == _i.id))
+        return _t.due_at.date(), _t.flow_step.tat_label, _i, _t
+
+_anchorZ = _clkB.today() + _tdT(days=60)
+_dZ, _lblZ, _iZ, _tZ = _plan("weeks", "after", 2, _anchorZ)
+check("two weeks after a date is fourteen days, not two",
+      (_dZ - _anchorZ).days >= 14 and (_dZ - _anchorZ).days <= 17,
+      f"{_dZ} vs {_anchorZ}")
+check("and it reads as weeks, not as the days it works out to",
+      _lblZ == f'2 weeks after "Bill date"', _lblZ)
+
+_dZ, _lblZ, _iZ, _tZ = _plan("months", "after", 1, _anchorZ)
+check("a month after a date lands in the next month, not thirty days on",
+      _dZ.month == (_anchorZ.month % 12) + 1 or (_dZ - _anchorZ).days >= 28,
+      f"{_dZ} vs {_anchorZ}")
+check("and reads as one month, singular",
+      _lblZ == '1 month after "Bill date"', _lblZ)
+
+_dZ, _lblZ, _iZ, _tZ = _plan("months", "before", 2, _anchorZ)
+check("two months before a date is well before it",
+      _dZ < _anchorZ and (_anchorZ - _dZ).days >= 55, f"{_dZ} vs {_anchorZ}")
+
+# Working days: counted against the calendar, not multiplied. The run's own
+# company decides which days those are — the office keeps Sunday off, the
+# gym and the spa do not.
+_dW, _lblW, _iW, _tW = _plan("workdays", "after", 5, _anchorZ)
+with _slB2() as _d:
+    _openW = 0
+    _dayW = _anchorZ
+    while _dayW < _dW:
+        _dayW += _tdT(days=1)
+        if not _holZ.is_closed(_d, _orgB, _dayW, _iW.branch_id):
+            _openW += 1
+check("five working days after a date counts five days somebody is in",
+      _openW == 5, f"{_openW} open days between {_anchorZ} and {_dW}")
+check("which is never fewer calendar days than that",
+      (_dW - _anchorZ).days >= 5, f"{_dW} vs {_anchorZ}")
+check("and it says working days, so nobody reads it as plain days",
+      _lblW == '5 working days after "Bill date"', _lblW)
+
+_dN, _lblN, _iN, _tN = _plan("days", "after", 0, _anchorZ)
+check("nothing either side of the date is the date itself",
+      _dN == _anchorZ or not _holZ.is_closed(_d, _orgB, _dN, _iN.branch_id),
+      f"{_dN} vs {_anchorZ}")
+check("and it reads as the date, not as '0 days after' it",
+      _lblN == 'the date answered for "Bill date"', _lblN)
+
+print("\n== steps saved under the old three still work ==")
+# They are running right now, so their deadlines must not move by a day.
+# The migrator converts them to the one setting that replaced them; until
+# it has, the engine reads them anyway.
+with _slB2() as _d:
+    _fO = _FlB(org_id=_orgB, name=f"SMOKE legacy units {RUN}", active=True)
+    _fO.start_form = _jsB.dumps([{"label": "Expiry date", "type": "date",
+                                  "options": [], "required": True}])
+    _d.add(_fO); _d.flush()
+    for _pos, (_u, _v) in enumerate(
+            [("formtime", 0), ("daysbefore", 10), ("daysafter", 4)], start=1):
+        _d.add(_FsB(flow_id=_fO.id, position=_pos, title=f"Old {_u}",
+                    default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                    tat_unit=_u, tat_value=_v, due_from_field="Expiry date",
+                    requires_attachment=False))
+    _d.commit()
+    _fOid = _fO.id
+    _oldLabels = [s.tat_label for s in _d.get(_FlB, _fOid).steps]
+check("an old 'take timestamp from form' step still names its question",
+      _oldLabels[0] == 'the date answered for "Expiry date"', _oldLabels[0])
+check("an old 'days before' step still reads as before",
+      _oldLabels[1] == '10 days before "Expiry date"', _oldLabels[1])
+check("an old 'days after' step still reads as after",
+      _oldLabels[2] == '4 days after "Expiry date"', _oldLabels[2])
+
+_expO = _clkB.today() + _tdT(days=90)
+admin.post(f"/flows/{_fOid}/start",
+           data={"reference": "", "sf0": _expO.isoformat()})
+with _slB2() as _d:
+    _iO = _d.scalars(_spK(_FID).where(_FID.flow_id == _fOid)
+                     .order_by(_FID.id.desc())).first()
+    _tsO = sorted(_d.scalars(_spK(_TD).where(_TD.flow_instance_id == _iO.id)).all(),
+                  key=lambda t: t.flow_step.position)
+    check("all three are planned, by the same arithmetic as before",
+          len(_tsO) == 3, str(len(_tsO)))
+    check("the timestamp one is on the date itself",
+          abs((_tsO[0].due_at.date() - _expO).days) <= 2,
+          str(_tsO[0].due_at.date()))
+    check("the 'before' one is ten days earlier",
+          _tsO[1].due_at.date() < _expO
+          and 10 <= (_expO - _tsO[1].due_at.date()).days <= 13,
+          str(_tsO[1].due_at.date()))
+    check("the 'after' one is four days later",
+          _tsO[2].due_at.date() > _expO
+          and 4 <= (_tsO[2].due_at.date() - _expO).days <= 7,
+          str(_tsO[2].due_at.date()))
+
+# And the migrator folds them in, so the page and the database agree.
+from app import migrate as _mgZ
+_mgZ.run()
+with _slB2() as _d:
+    _after = [(s.tat_unit, s.tat_value, s.form_span, s.form_way)
+              for s in _d.get(_FlB, _fOid).steps]
+check("the migrator converts every old spelling to the one that replaced it",
+      all(u == _FD for u, _, _, _ in _after), str(_after))
+check("keeping the number and the side each one meant",
+      _after[0][1] == 0 and _after[1][1:] == (10, "days", "before")
+      and _after[2][1:] == (4, "days", "after"), str(_after))
+_mgZ.run()
+with _slB2() as _d:
+    check("and running it again changes nothing",
+          [(s.tat_unit, s.tat_value, s.form_span, s.form_way)
+           for s in _d.get(_FlB, _fOid).steps] == _after,
+          str([(s.tat_unit, s.tat_value, s.form_span, s.form_way)
+               for s in _d.get(_FlB, _fOid).steps]))
+with _slB2() as _d:
+    check("the labels read exactly as they did before the conversion",
+          [s.tat_label for s in _d.get(_FlB, _fOid).steps] == _oldLabels,
+          str([s.tat_label for s in _d.get(_FlB, _fOid).steps]))
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

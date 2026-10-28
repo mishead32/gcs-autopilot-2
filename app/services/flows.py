@@ -41,6 +41,64 @@ from . import notify, holidays
 FIELD_DATE_HOUR = int(os.getenv("FIELD_DATE_HOUR", "9"))
 
 
+def _form_deadline(db: Session, inst: FlowInstance, step: FlowStep,
+                   opens_at: datetime | None) -> datetime:
+    """A deadline measured from a date answered on the start form.
+
+    One function for all four spellings this setting has had, so a step
+    saved last month and one saved today are planned by the same code. The
+    older three are read through clock.as_formdate; the current one keeps
+    its number, its span and its side in columns of its own.
+
+    A question that cannot be read as a date — renamed, left blank,
+    answered with "next week" — falls back to a day from now. Counting from
+    "now" instead would hand somebody a deadline already in the past, and a
+    task that was late the second it arrived is one nobody can act on.
+    """
+    unit = step.tat_unit or ""
+    value = step.tat_value if step.tat_value is not None else (step.tat_hours or 0)
+    if unit == clock.FORMDATE_UNIT:
+        n, span, way = (max(0, int(value or 0)),
+                        clock.form_span(step.form_span),
+                        clock.form_way(step.form_way))
+    else:
+        n, span, way = clock.as_formdate(unit, value)
+
+    anchor = _answered_moment(inst, step.due_from_field or "")
+    if anchor is None:
+        return clock.add_span(opens_at or clock.now(), "hours", 24)
+    if n == 0:
+        return anchor
+    if span == "workdays":
+        # Counted, not multiplied: three working days from a Thursday is
+        # the following Tuesday at the office and the following Sunday at
+        # the gym, and only the calendar knows which.
+        step_days = -1 if way == "before" else 1
+        day, left = anchor.date(), n
+        for _ in range(clock.MAX_WORKDAY_STEPS):
+            if left == 0:
+                break
+            day += timedelta(days=step_days)
+            if not holidays.is_closed(db, inst.org_id, day, _step_branch(inst, step)):
+                left -= 1
+        return datetime.combine(day, anchor.time())
+    if span == "months":
+        months = -n if way == "before" else n
+        return clock.add_months(anchor, months)
+    days = n * (7 if span == "weeks" else 1)
+    return anchor + timedelta(days=-days if way == "before" else days)
+
+
+def _step_branch(inst: FlowInstance, step: FlowStep) -> int | None:
+    """Whose calendar a working-day count follows: the run's company.
+
+    The run's, not the doer's: a step counted in working days is counted
+    against the business the work is for. A trainer covering the spa does
+    not make the gym's Sunday a closed day.
+    """
+    return inst.branch_id
+
+
 def _answered_moment(inst: FlowInstance, label: str) -> datetime | None:
     """The date somebody typed on the start form, as a moment — or None.
 
@@ -251,43 +309,17 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
     # CALENDAR unit is a date that comes round, found at or after it. Both
     # start from the same anchor, so "the date of joining, then the next
     # 15th" is one setting rather than arithmetic somebody does by hand.
-    if unit in (clock.BEFORE_UNIT, clock.AFTER_UNIT):
-        # A deadline a number of days either side of a date somebody typed
-        # on the start form: "follow up thirty days before the membership
-        # expires", "first check-in three days after it starts".
+    if unit in clock.FORM_ANCHORED:
+        # A deadline measured from a date somebody typed on the START FORM:
+        # "thirty days before the membership expires", "three working days
+        # after the bill date", or the answered moment itself.
         #
-        # The point of both is that the date is fixed by the FORM, not by
-        # when the step happened to open. Every other span counts from the
-        # moment the step before it was finished, so a slow week moves
-        # every deadline after it — which is right for a chain of work and
-        # wrong for "three days after the membership starts".
-        days = max(0, int(value or 0))
-        anchor = _answered_moment(inst, step.due_from_field or "")
-        if anchor is None:
-            # The question was renamed, left blank, or answered with
-            # something that is not a date. A day from now keeps the run
-            # moving with a deadline somebody can actually meet; counting
-            # from "now" instead would hand them one in the past.
-            want = clock.add_span(opens_at or clock.now(), "hours", 24)
-        elif unit == clock.BEFORE_UNIT:
-            want = anchor - timedelta(days=days)
-        else:
-            want = anchor + timedelta(days=days)
-    elif unit == clock.FORM_UNIT:
-        # The deadline IS the moment somebody typed on the start form —
-        # "due at the joining date and time" means exactly that, with
-        # nothing added to it.
-        #
-        # Read here rather than taken from the anchor above, because the two
-        # failures want different answers. An anchor that cannot be read
-        # falls back to now and the step still gets its TAT on top; this one
-        # has no TAT on top, so falling back to now would hand somebody a
-        # task that was already late the second it arrived. A day is the
-        # honest stand-in: the run keeps moving and the deadline is one
-        # somebody can actually meet.
-        want = _answered_moment(inst, step.due_from_field or "")
-        if want is None:
-            want = clock.add_span(opens_at or clock.now(), "hours", 24)
+        # The point is that the date was fixed by the member, not by us.
+        # Every other span counts from the moment the step before it was
+        # finished, so a slow week moves every deadline after it — right
+        # for a chain of work, wrong for a renewal that expires when it
+        # expires.
+        want = _form_deadline(db, inst, step, opens_at)
     elif unit in clock.CALENDAR_UNITS:
         want = clock.next_occurrence(base, unit, value)
     else:
@@ -518,18 +550,10 @@ def _planned_due(db: Session, inst: FlowInstance, step: FlowStep,
     base = _deadline_base(db, inst, step, opens_at)
     unit = step.tat_unit or "hours"
     value = step.tat_value if step.tat_value is not None else (step.tat_hours or 0)
-    if unit in (clock.BEFORE_UNIT, clock.AFTER_UNIT):
-        anchor = _answered_moment(inst, step.due_from_field or "")
-        days = max(0, int(value or 0))
-        if anchor is None:
-            want = clock.add_span(opens_at, "hours", 24)
-        else:
-            want = (anchor - timedelta(days=days) if unit == clock.BEFORE_UNIT
-                    else anchor + timedelta(days=days))
-    elif unit == clock.FORM_UNIT:
-        want = _answered_moment(inst, step.due_from_field or "")
-        if want is None:
-            want = clock.add_span(opens_at, "hours", 24)
+    # The same one function the real deadline uses, so what the plan shows
+    # and what the task is given can never disagree.
+    if unit in clock.FORM_ANCHORED:
+        want = _form_deadline(db, inst, step, opens_at)
     elif unit in clock.CALENDAR_UNITS:
         want = clock.next_occurrence(base, unit, value)
     else:

@@ -184,6 +184,7 @@ def new_flow_form(request: Request, user: User = Depends(require_right(Right.MAN
         "user": user, "branches": branches, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
+        "form_spans": clock.FORM_SPANS,
         "field_types": BUILDER_FIELD_TYPES,
         "dept_names": _position_names(db, user.org_id),
         # A brand-new flow has no questions yet; the page builds the list
@@ -220,6 +221,12 @@ def _read_steps(form) -> list[dict]:
     tats = form.getlist("step_tat")
     tat_units = form.getlist("step_tat_unit")
     dfroms = form.getlist("step_due_from")
+    # Only meaningful when the TAT is a date off the start form, but posted
+    # by EVERY step card so the parallel lists stay lined up with the step
+    # numbers — a box only some steps sent would shift every later step's
+    # settings onto the wrong step.
+    fspans = form.getlist("step_form_span")
+    fways = form.getlist("step_form_way")
     prios = form.getlist("step_priority")
     audits = form.getlist("step_audit")
     proofs = form.getlist("step_proof")
@@ -303,6 +310,8 @@ def _read_steps(form) -> list[dict]:
         what the person chose.
         """
         if _unit(i) == clock.FORM_UNIT:
+            # The older spelling, where the TAT box itself held the
+            # question. Still read so a flow saved under it keeps working.
             return None, _field_label(tats, i)
         return (None if _is_field(dfroms, i) else _pos(dfroms, i),
                 _field_label(dfroms, i))
@@ -359,6 +368,8 @@ def _read_steps(form) -> list[dict]:
             # construction: it is one dropdown with one value.
             "due_from_pos": _clock_from(i)[0],
             "due_from_field": _clock_from(i)[1],
+            "form_span": clock.form_span(fspans[i] if i < len(fspans) else ""),
+            "form_way": clock.form_way(fways[i] if i < len(fways) else ""),
             "priority": (Priority(prios[i]) if i < len(prios) and prios[i]
                          else Priority.MEDIUM),
             "requires_audit": (audits[i] == "1") if i < len(audits) else False,
@@ -405,35 +416,21 @@ def _check_routes(rows: list[dict]) -> None:
                     400, f"{where}: its {label} points at step {target}, which "
                          f"this flow does not have. Steps are numbered 1 to "
                          f"{max(valid)}.")
-        # "Take the timestamp from the form" has to say WHICH question.
-        # Saved without one there is nothing to be due at, and the step would
-        # quietly fall back to a day from whenever it opened — a deadline
-        # nobody set and nobody would understand.
-        if r["tat_unit"] == clock.FORM_UNIT and not r["due_from_field"]:
+        # A deadline measured from the start form has to say WHICH
+        # question. Saved without one there is nothing to measure from, and
+        # the step falls back to a day from whenever it opened — a deadline
+        # nobody set, on a step whose whole job was to land relative to
+        # something else. The anchor box also offers "when this step opens"
+        # and "step 2's planned date", and neither is a date on the form.
+        if r["tat_unit"] in clock.FORM_ANCHORED and not r["due_from_field"]:
             raise HTTPException(
-                400, f"{where}: its TAT is set to take the timestamp from the "
-                     "start form, so it needs to say which question. Pick one "
-                     "in the box beside it — and if the form has no date "
-                     "question yet, add one (answer type: Date, or Date and "
-                     "time) and it will appear there.")
-        # And counting BACKWARDS has to say which date it is counting back
-        # from, for the same reason — but with a sharper edge. The anchor
-        # box also offers "when this step opens" and "step 2's planned
-        # date", and neither is a date on the form, so a step saved that way
-        # would count back from nothing and fall back to a day from now.
-        # That is a deadline twenty days wrong, on a step whose whole job is
-        # to land before something.
-        if (r["tat_unit"] in (clock.BEFORE_UNIT, clock.AFTER_UNIT)
-                and not r["due_from_field"]):
-            _way = ("BEFORE" if r["tat_unit"] == clock.BEFORE_UNIT else "AFTER")
-            raise HTTPException(
-                400, f"{where}: it is set to be due a number of days {_way} a "
-                     "date, so it needs to say which date — and that has to "
-                     "be a date question on the start form, not another "
-                     "step's planned date. Pick one under “Start this step's "
-                     "clock from”. If the form has no date question yet, add "
-                     "one (answer type: Date, or Date and time) and it will "
-                     "appear there.")
+                400, f"{where}: its deadline is measured from a date on the "
+                     "start form, so it needs to say which question. Pick "
+                     "one under “Which question” — and it has to be a date "
+                     "question on the start form, not another step's "
+                     "planned date. If the form has no date question yet, "
+                     "add one (answer type: Date, or Date and time) and it "
+                     "will appear there.")
         if r["due_from_pos"] and r["due_from_pos"] not in valid:
             raise HTTPException(
                 400, f"{where}: its clock is set to start from step "
@@ -468,7 +465,8 @@ def _check_routes(rows: list[dict]) -> None:
 STEP_COLUMNS = ("title", "instructions", "how_to", "default_doer_id", "doer_dept",
                 "doer_field",
                 "tat_hours",
-                "tat_unit", "tat_value", "due_from_pos", "due_from_field", "priority",
+                "tat_unit", "tat_value", "due_from_pos", "due_from_field",
+                "form_span", "form_way", "priority",
                 "extra_doer_ids",
                 "requires_audit", "requires_attachment", "capture_fields",
                 "next_step_pos", "fail_step_pos", "is_decision",
@@ -794,6 +792,7 @@ def edit_flow_form(flow_id: int, request: Request,
         "field_types": BUILDER_FIELD_TYPES, "doers": doers,
         "priorities": list(Priority),
         "span_units": clock.unit_labels(), "span_choices": clock.span_options(),
+        "form_spans": clock.FORM_SPANS,
         "dept_names": _position_names(db, user.org_id),
         # The person questions this flow already asks, so a step can be set
         # to follow one of them.
