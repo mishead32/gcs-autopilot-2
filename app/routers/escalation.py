@@ -143,10 +143,21 @@ def save_settings(request: Request, esc_on: str = Form(""),
         # that is working. Better to refuse and say which company is short.
         gaps = esc_svc.missing_ladders(db, org.id)
         if not esc_svc.ladder(db, org.id, None) and gaps:
+            # "Fill in at least one level" was what this used to say, and it
+            # was read by somebody who had just filled in three — for one
+            # company. The levels they added were real; what is missing is
+            # the ladder every OTHER company falls back on, and the message
+            # has to name the tab rather than leave them adding the same
+            # three levels to the company they already did.
+            more = (f" and {len(gaps) - 3} other(s)" if len(gaps) > 3 else "")
             raise HTTPException(
-                400, "Fill in at least one level before switching escalation "
-                     "on — otherwise overdue work at " + ", ".join(gaps[:3]) +
-                     " would be escalated to nobody.")
+                400, "Escalation is still off. " + ", ".join(gaps[:3]) + more
+                     + " have no levels of their own, and the “Every other "
+                       "company” ladder they would fall back on is empty — "
+                       "so overdue work there would be escalated to nobody. "
+                       "Add at least Level 1 under the “Every other company” "
+                       "tab (the first one), then switch escalation on. Any "
+                       "company with its own levels keeps using those.")
 
     if after_top not in AFTER_TOP:
         raise HTTPException(400, "Choose what happens after the top level.")

@@ -10656,6 +10656,55 @@ _rOnQ = adminQ.post("/escalation/settings",
                           "after_top": "stop", "scope": "chased", "hour": "9"})
 check("switching escalation on with no ladder at all is refused",
       _rOnQ.status_code == 400, _rOnQ.status_code)
+# And the refusal has to say WHERE to put the levels. The old wording said
+# "fill in at least one level", which was read by somebody who had just
+# filled in three — for one company — and left them adding the same three
+# again to the tab they had already done.
+check("and it names the tab the missing ladder lives on",
+      "Every other company" in _rOnQ.text, _rOnQ.text[:200])
+check("and says which companies would escalate to nobody",
+      any(b in _rOnQ.text for b in ("ABC", "BIPS", "BODYZONE", "SPA KORA")),
+      _rOnQ.text[:300])
+
+# One company's own levels are NOT enough on their own: every other
+# company still falls back on a ladder that does not exist.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _oneBrQ = _d.scalar(_SEL(_BrQ).where(_BrQ.org_id == _orgQ.id))
+    _d.add(_ErQ(org_id=_orgQ.id, branch_id=_oneBrQ.id, level=1,
+                to_name="Head of that company", to_email="hod@gcs.local"))
+    _d.commit()
+    _oneNameQ = _oneBrQ.name
+_rOneQ = adminQ.post("/escalation/settings",
+                     data={"esc_on": "1", "working_days": "1",
+                           "after_top": "stop", "scope": "chased", "hour": "9"})
+check("one company's own levels do not switch it on for everybody",
+      _rOneQ.status_code == 400, _rOneQ.status_code)
+check("and the company that IS covered is not listed as a gap",
+      _oneNameQ not in _rOneQ.text, _oneNameQ)
+
+# Fill the fallback and it goes on.
+with _slQ() as _d:
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    _d.add(_ErQ(org_id=_orgQ.id, branch_id=None, level=1,
+                to_name="The EA", to_email="ea@gcs.local"))
+    _d.commit()
+_rGoQ = adminQ.post("/escalation/settings",
+                    data={"esc_on": "1", "working_days": "1",
+                          "after_top": "stop", "scope": "chased", "hour": "9"})
+check("filling the every-other-company ladder is what switches it on",
+      _rGoQ.status_code in (200, 303), _rGoQ.status_code)
+with _slQ() as _d:
+    check("and it really is on", _d.scalar(_SEL(_OgQ)).esc_on)
+    # Put the ladder back as the rest of the suite expects to find it.
+    for _r in _d.scalars(_SEL(_ErQ).where(_ErQ.org_id == _orgQ.id)).all():
+        _d.delete(_r)
+    _d.commit()
+    _orgQ = _d.scalar(_SEL(_OgQ))
+    for _n, (_nm, _em, _uid) in enumerate(_savedQ, start=1):
+        _d.add(_ErQ(org_id=_orgQ.id, branch_id=None, level=_n,
+                    to_name=_nm, to_email=_em, user_id=_uid))
+    _d.commit()
 
 
 # ==========================================================================
