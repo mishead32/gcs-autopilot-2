@@ -26,6 +26,7 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       cmd as cmd_router)
 from .services import recurring
 from .services import detective
+from .services import flowsheet
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
 from .templating import templates
@@ -140,6 +141,14 @@ async def _daily_spawn():
                 last_done = today
                 if created:
                     print(f"Checklist for {today}: created {created} task(s)")
+            # Any Google Sheet wired to a flow, every tick. A row typed
+            # at 11:04 is a run by about 11:14 — close enough that nobody
+            # waits for it, and inside working hours only, so a sleeping
+            # database is never woken on its account.
+            picked = await asyncio.to_thread(_sheets_once)
+            if picked:
+                print(f"Google Sheets: started {picked} run(s)")
+
             # And a few of the oldest unchecked tasks handed to the
             # detective, every tick, within the day's allowance. The free
             # allowance is about twenty a day, so a backlog only ever clears
@@ -177,6 +186,24 @@ async def _daily_spawn():
 def _spawn_once() -> int:
     with SessionLocal() as db:
         return recurring.run_spawn(db)
+
+
+def _sheets_once() -> int:
+    """One look at every connected Google Sheet. Never raises.
+
+    On the app's own clock, which is a shared thread: a sheet that has
+    been unshared, renamed or deleted must cost this tick and nothing
+    else. Each connection records its own failure where the person who
+    made it will see it, on that flow's sheet page.
+    """
+    if not flowsheet.enabled():
+        return 0
+    try:
+        with SessionLocal() as db:
+            return flowsheet.run_all(db).get("started", 0)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"Google Sheets check failed: {exc}")
+        return 0
 
 
 def _catch_up_runs() -> int:

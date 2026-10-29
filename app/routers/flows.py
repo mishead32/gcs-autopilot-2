@@ -8,12 +8,12 @@ import json
 
 from ..db import get_db
 from ..deps import current_user, manager_up, require_right
-from ..models import (Flow, FlowStep, FlowInstance, Task, User, Branch, Department,
+from ..models import (Flow, FlowStep, FlowInstance, FlowSheet, Task, User, Branch, Department,
                       Attachment,
                       Priority,
                       Right, FIELD_TYPES, BUILDER_FIELD_TYPES,
                       RUN_PREFIX, ref_text, CONTEXT_PEOPLE, context_answers)
-from ..services import (flows as flow_svc, flowbulk, flowform, xlsx, storage,
+from ..services import (flows as flow_svc, flowbulk, flowform, flowsheet, xlsx, storage,
                         shrink)
 from ..templating import templates
 
@@ -738,6 +738,160 @@ def bulk_start(flow_id: int, request: Request,
               + (f", {len(held['rows']) - len(made)} could not be"
                  if len(made) != len(held["rows"]) else ""))
     return RedirectResponse(f"/flows/{flow.id}/submissions", status_code=303)
+
+
+# ------------------------------------------------ a live Google Sheet ----
+# The third way to start a run. The form is one at a time, the upload is
+# four hundred at once and finished, and this one keeps going: a sheet the
+# office is already typing into, checked every few minutes.
+@router.get("/flows/{flow_id}/sheet", response_class=HTMLResponse)
+def sheet_form(flow_id: int, request: Request,
+               user: User = Depends(require_right(Right.MANAGE_FLOW)),
+               db: Session = Depends(get_db)):
+    flow = _flow_or_404(db, user, flow_id)
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    return templates.TemplateResponse(request, "flow_sheet.html", {
+        "user": user, "flow": flow, "cfg": cfg,
+        "enabled": flowsheet.enabled(),
+        "robot": flowsheet.service_account_email(),
+        "cols": flowbulk.columns(flow, flowbulk.needs_company(flow)),
+        "stamps": flowsheet.STAMP_COLS,
+        "file_questions": [f["label"] for f in flow.start_form_fields
+                           if f["type"] == "file"],
+    })
+
+
+@router.post("/flows/{flow_id}/sheet")
+async def sheet_connect(flow_id: int, request: Request,
+                        user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                        db: Session = Depends(get_db)):
+    """Connect a sheet, or change which one is connected."""
+    flow = _flow_or_404(db, user, flow_id)
+    form = await request.form()
+    if not flowsheet.enabled():
+        raise HTTPException(
+            400, "This site has no Google account set up yet, so it cannot "
+                 "read a sheet. Add GOOGLE_SERVICE_ACCOUNT in Render first.")
+    if not flow.start_form_fields:
+        raise HTTPException(
+            400, f"“{flow.name}” asks nothing to get going, so there is "
+                 "nothing for a sheet's columns to answer.")
+
+    sheet_id = flowsheet.sheet_id_from(form.get("sheet") or "")
+    if not sheet_id:
+        raise HTTPException(
+            400, "That does not look like a Google Sheet link. Open the "
+                 "sheet and copy the address from the browser bar — it "
+                 "looks like docs.google.com/spreadsheets/d/…")
+
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    if cfg is None:
+        cfg = FlowSheet(org_id=flow.org_id, flow_id=flow.id,
+                        connected_by_id=user.id)
+        db.add(cfg)
+    cfg.sheet_id = sheet_id
+    cfg.tab = (form.get("tab") or "").strip()[:120]
+    cfg.active = True
+    cfg.last_error = None
+    db.flush()
+
+    # Read it once now rather than leaving the first surprise to a tick
+    # nobody is watching: a sheet that is not shared, a tab that does not
+    # exist, or a heading that does not match a question is told to the
+    # person connecting it, while they are looking at it.
+    try:
+        found = flowsheet.scan(db, cfg)
+    except Exception as exc:                          # noqa: BLE001
+        db.rollback()
+        raise HTTPException(
+            400, f"Could not open that sheet: {exc}. Share it with "
+                 f"{flowsheet.service_account_email()} (Viewer is not "
+                 "enough — it has to be Editor, because it writes the FMS "
+                 "number back beside each row).")
+    if not found.ok:
+        db.rollback()
+        raise HTTPException(
+            400, "The sheet has no column for: " + ", ".join(found.missing)
+                 + ". The headings in row 1 have to match this flow's "
+                   "questions exactly — the Download template button on the "
+                   "bulk page prints them in the right words.")
+
+    # What happens to the rows already there. Starting runs for all of them
+    # is a real answer — sometimes the sheet IS the list of work — but it
+    # is never the quiet one, so it has to be asked for.
+    if (form.get("existing") or "skip") == "start":
+        result = flowsheet.poll(db, cfg)
+        note = (f"Connected, and {result['started']} run(s) started from "
+                "the rows already in the sheet")
+    else:
+        marked = flowsheet.baseline(db, cfg)
+        note = (f"Connected. The {marked} row(s) already in the sheet were "
+                "left alone — only new rows from now on will start a run")
+    db.commit()
+    flash.set(request, "saved", note)
+    return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+
+
+@router.post("/flows/{flow_id}/sheet/run")
+def sheet_run_now(flow_id: int, request: Request,
+                  user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                  db: Session = Depends(get_db)):
+    """Look at the sheet this second, rather than waiting for the clock."""
+    flow = _flow_or_404(db, user, flow_id)
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    if cfg is None:
+        raise HTTPException(404, "No sheet is connected to this flow.")
+    try:
+        result = flowsheet.poll(db, cfg)
+    except Exception as exc:                          # noqa: BLE001
+        db.rollback()
+        cfg.last_error = f"Could not read the sheet: {exc}"[:400]
+        db.commit()
+        flash.set(request, "error", cfg.last_error)
+        return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+    if not result.get("ok"):
+        flash.set(request, "error", result.get("error", "Could not read it"))
+    else:
+        flash.set(request, "saved",
+                  f"{result['started']} run(s) started"
+                  + (f", {result['refused']} row(s) need fixing"
+                     if result["refused"] else ""))
+    return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+
+
+@router.post("/flows/{flow_id}/sheet/pause")
+def sheet_pause(flow_id: int, request: Request,
+                user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                db: Session = Depends(get_db)):
+    """Stop looking, without forgetting which sheet it was."""
+    flow = _flow_or_404(db, user, flow_id)
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    if cfg is None:
+        raise HTTPException(404, "No sheet is connected to this flow.")
+    cfg.active = not cfg.active
+    db.commit()
+    flash.set(request, "saved",
+              "Watching that sheet again" if cfg.active
+              else "Paused. The sheet is remembered, and nothing will start "
+                   "from it until you switch it back on")
+    return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+
+
+@router.post("/flows/{flow_id}/sheet/forget")
+def sheet_forget(flow_id: int, request: Request,
+                 user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                 db: Session = Depends(get_db)):
+    flow = _flow_or_404(db, user, flow_id)
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    if cfg is not None:
+        db.delete(cfg)
+        db.commit()
+    # The runs it already started are left alone: they are real work
+    # somebody is holding, and disconnecting a sheet is not a reason to
+    # take it off them.
+    flash.set(request, "saved", "Disconnected. The runs it already started "
+                                "are untouched")
+    return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
 
 
 def _flow_or_404(db: Session, user: User, flow_id: int) -> Flow:

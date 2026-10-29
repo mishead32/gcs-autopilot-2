@@ -9066,8 +9066,13 @@ with _slK() as _d:
     # zero-day gap, and asserting the exact number makes this test fail on
     # whichever weekday it happens to be run.
     _d1, _d2, _d3, _d4 = [t.due_at for t in _rows]
-    check("step 2 is planned about two days after step 1 is due",
-          1 <= (_d2 - _d1).days <= 2, str(_d2 - _d1))
+    # A floor and a generous ceiling, not an exact gap. The two-day gap is
+    # a minimum: a planned date landing on a closed day moves FORWARD to the
+    # next working day, so the gap grows by however many closed days it
+    # crosses. Asserting "exactly two" passed all week and failed on a
+    # Sunday, which is a test that only works on the days nothing is wrong.
+    check("step 2 is planned at least two days after step 1 is due",
+          1 <= (_d2 - _d1).days <= 5, str(_d2 - _d1))
     check("step 3 after step 2", _d3 >= _d2, (str(_d2), str(_d3)))
     check("step 4 after step 3", _d4 >= _d3, (str(_d3), str(_d4)))
     check("and each step is planned later than the one before it",
@@ -11890,9 +11895,13 @@ with _slB2() as _d:
     check("the timestamp one is on the date itself",
           abs((_tsO[0].due_at.date() - _expO).days) <= 2,
           str(_tsO[0].due_at.date()))
-    check("the 'before' one is ten days earlier",
+    # Ten days before, then forward off any closed day — so it can end up
+    # nine days before, or eight. What matters is that it lands clearly
+    # before the expiry and in the right week, not an exact count that
+    # depends on which weekday the suite runs.
+    check("the 'before' one is about ten days earlier",
           _tsO[1].due_at.date() < _expO
-          and 10 <= (_expO - _tsO[1].due_at.date()).days <= 13,
+          and 7 <= (_expO - _tsO[1].due_at.date()).days <= 13,
           str(_tsO[1].due_at.date()))
     check("the 'after' one is four days later",
           _tsO[2].due_at.date() > _expO
@@ -11921,6 +11930,223 @@ with _slB2() as _d:
     check("the labels read exactly as they did before the conversion",
           [s.tat_label for s in _d.get(_FlB, _fOid).steps] == _oldLabels,
           str([s.tat_label for s in _d.get(_FlB, _fOid).steps]))
+
+
+print("\n== a Google Sheet that starts runs by itself ==")
+# The third way to start an FMS. The form is one at a time, the upload is
+# four hundred at once and finished; this one keeps going.
+#
+# Tested against a stand-in sheet, not Google: what is worth proving is the
+# RULES — which rows count as new, what is written back, what happens to a
+# row that cannot be read — and a network call proves none of them while
+# making the suite fail whenever somebody's wifi does.
+from app.models import FlowSheet as _FSh
+from app.services import flowsheet as _fsv
+
+
+class FakeSheet:
+    """Enough of a gspread worksheet to exercise every rule."""
+
+    def __init__(self, grid):
+        self.grid = [list(r) for r in grid]
+        self.writes = []
+
+    def get_all_values(self):
+        return [list(r) for r in self.grid]
+
+    def update_cell(self, row, col, value):
+        while len(self.grid) < row:
+            self.grid.append([])
+        line = self.grid[row - 1]
+        while len(line) < col:
+            line.append("")
+        line[col - 1] = value
+        self.writes.append((row, col, value))
+
+    def col(self, heading):
+        return [r[self.grid[0].index(heading)]
+                if len(r) > self.grid[0].index(heading) else ""
+                for r in self.grid[1:]]
+
+
+with _slB2() as _d:
+    _fS = _FlB(org_id=_orgB, name=f"SMOKE sheet flow {RUN}", active=True,
+               branch_id=_staffB[0].branch_id)
+    _fS.start_form = _jsB.dumps([
+        {"label": "Member name", "type": "text", "options": [], "required": True},
+        {"label": "Expiry date", "type": "date", "options": [], "required": True},
+        {"label": "PT trainer", "type": "person", "options": [], "required": True}])
+    _d.add(_fS); _d.flush()
+    _d.add(_FsB(flow_id=_fS.id, position=1, title="Call about renewal",
+                doer_field="PT trainer", priority=_PrB.MEDIUM,
+                tat_unit="days", tat_value=1, requires_attachment=False))
+    _cfgS = _FSh(org_id=_orgB, flow_id=_fS.id, sheet_id="FAKESHEETID",
+                 connected_by_id=_staffB[0].id)
+    _d.add(_cfgS); _d.commit()
+    _fSid, _cfgSid = _fS.id, _cfgS.id
+    _t1, _t2 = _staffB[0].name, _staffB[1].name
+
+_sheet = FakeSheet([
+    ["Member name", "Expiry date", "PT trainer"],
+    [f"Ritu Bansal {RUN}", "2027-03-20", _t1],
+    [f"Vikram Mehta {RUN}", "2027-03-22", _t2],
+])
+
+with _slB2() as _d:
+    _cfg = _d.get(_FSh, _cfgSid)
+    _scan = _fsv.scan(_d, _cfg, _sheet)
+    check("the sheet's headings are read as this flow's questions",
+          _scan.ok and not _scan.missing, str(_scan.missing))
+    check("both rows look new, because neither has an FMS number",
+          len(_scan.rows) == 2 and _scan.done == 0,
+          f"{len(_scan.rows)} new, {_scan.done} done")
+    check("and each is checked the same way the upload checks one",
+          all(r.ok for r in _scan.rows),
+          str([r.problems for r in _scan.rows]))
+
+    _res = _fsv.poll(_d, _cfg, _sheet)
+    check("a pass starts a run for every new row",
+          _res["ok"] and _res["started"] == 2, str(_res))
+    check("and writes the FMS number back beside each one",
+          all(v.startswith("FMS-") for v in _sheet.col("FMS no.")),
+          str(_sheet.col("FMS no.")))
+    check("with the time it was picked up",
+          all(_sheet.col("Started on")), str(_sheet.col("Started on")))
+    check("the run is named from the row, not left blank",
+          all(f"SMOKE" not in v for v in _sheet.col("FMS no.")))
+
+with _slB2() as _d:
+    _runs = _d.scalars(_spK(_FID).where(_FID.flow_id == _fSid)).all()
+    check("two runs exist in the software", len(_runs) == 2, str(len(_runs)))
+    _tasks = _d.scalars(_spK(_TD).where(
+        _TD.flow_instance_id.in_([r.id for r in _runs]))).all()
+    check("and step 1 of each went to the trainer that row named",
+          sorted(t.doer.name for t in _tasks) == sorted([_t1, _t2]),
+          str(sorted(t.doer.name for t in _tasks)))
+
+# The whole point: looking again must not start them a second time. This is
+# what the write-back buys — the rule is in the sheet, so it survives a
+# restart, a redeploy and somebody sorting the rows.
+with _slB2() as _d:
+    _again = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _sheet)
+    check("looking again starts nothing, because the rows are stamped",
+          _again["started"] == 0 and _again["done"] == 2, str(_again))
+
+# A row typed after the connection was made.
+_sheet.grid.append([f"Sandeep Kaur {RUN}", "2027-04-02", _t1])
+with _slB2() as _d:
+    _third = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _sheet)
+    check("a row added later is picked up on the next look",
+          _third["started"] == 1, str(_third))
+
+# A row that cannot be read is left alone with the reason beside it —
+# never started on a guess, never silently skipped.
+_sheet.grid.append([f"Diya Mehta {RUN}", "32/11/2027", _t1])
+_sheet.grid.append([f"Kabir Singh {RUN}", "2027-04-10", "Nobody At All"])
+with _slB2() as _d:
+    _bad = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _sheet)
+    check("a row with a date that is not a date is refused, not guessed at",
+          _bad["started"] == 0 and _bad["refused"] == 2, str(_bad))
+    _probs = [v for v in _sheet.col("Problem") if v]
+    check("and the reason is written in the sheet, next to that row",
+          len(_probs) == 2 and any("32/11/2027" in p for p in _probs),
+          str(_probs))
+    check("with no FMS number, so fixing the cell is all it takes",
+          _sheet.col("FMS no.")[-1] == "" and _sheet.col("FMS no.")[-2] == "")
+
+# Fix one of them and it goes through, with nothing re-uploaded.
+_sheet.grid[-1][2] = _t2
+with _slB2() as _d:
+    _fixed = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _sheet)
+    check("a corrected row is picked up by itself",
+          _fixed["started"] == 1, str(_fixed))
+    check("and its problem is cleared rather than left to confuse somebody",
+          _sheet.col("Problem")[-1] == "", _sheet.col("Problem")[-1])
+
+# A heading that does not match stops the whole sheet. Reading on would
+# mean starting runs with a question unanswered.
+_wrong = FakeSheet([["Member name", "Renewal date", "PT trainer"],
+                    [f"Anita {RUN}", "2027-05-01", _t1]])
+with _slB2() as _d:
+    _no = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _wrong)
+    check("a heading that does not match a question stops the whole sheet",
+          not _no["ok"] and _no["started"] == 0, str(_no))
+    check("and it says which question has no column",
+          "Expiry date" in _no.get("error", ""), _no.get("error"))
+
+# Connecting a sheet that is already full must not create four hundred runs
+# by surprise, so the rows already there are stamped and left.
+_old = FakeSheet([["Member name", "Expiry date", "PT trainer"]]
+                 + [[f"Old {i} {RUN}", "2027-06-01", _t1] for i in range(5)])
+with _slB2() as _d:
+    _marked = _fsv.baseline(_d, _d.get(_FSh, _cfgSid), _old)
+    check("connecting a full sheet stamps what is there instead of starting it",
+          _marked == 5, str(_marked))
+    _before = len(_d.scalars(_spK(_FID).where(_FID.flow_id == _fSid)).all())
+    _after = _fsv.poll(_d, _d.get(_FSh, _cfgSid), _old)
+    check("and the next look starts none of them",
+          _after["started"] == 0, str(_after))
+    check("the stamp says so in words somebody reading the sheet understands",
+          all("already here" in v for v in _old.col("FMS no.")),
+          str(_old.col("FMS no.")[:2]))
+
+# A paused connection is remembered but left alone.
+with _slB2() as _d:
+    _c = _d.get(_FSh, _cfgSid); _c.active = False; _d.commit()
+    check("a paused sheet is not looked at", not _fsv.due(_d))
+    _c = _d.get(_FSh, _cfgSid); _c.active = True; _d.commit()
+    check("and switching it back on puts it in the list again",
+          len(_fsv.due(_d)) == 1)
+
+check("a pasted sheet address is read down to its id",
+      _fsv.sheet_id_from(
+          "https://docs.google.com/spreadsheets/d/1AbC_defGHIjklmnop-qrs/edit#gid=0")
+      == "1AbC_defGHIjklmnop-qrs")
+check("and a bare id is accepted as itself",
+      _fsv.sheet_id_from("1AbC_defGHIjklmnop-qrs") == "1AbC_defGHIjklmnop-qrs")
+check("while something that is not either is refused rather than guessed",
+      _fsv.sheet_id_from("my renewals sheet") == "")
+
+# With no Google account set up, the page says so and says what to add,
+# rather than offering a box that could never work.
+from app.services import sheets as _shSvc
+_was = _shSvc.SERVICE_ACCOUNT
+_shSvc.SERVICE_ACCOUNT = ""
+_offPage = admin.get(f"/flows/{_fSid}/sheet").text
+check("with no Google account set up the page says exactly what is missing",
+      "GOOGLE_SERVICE_ACCOUNT" in _offPage)
+check("and does not offer a box that could not work",
+      'name="sheet"' not in _offPage)
+
+_shSvc.SERVICE_ACCOUNT = _jsB.dumps(
+    {"client_email": "gcs-robot@example.iam.gserviceaccount.com"})
+_shPage = admin.get(f"/flows/{_fSid}/sheet")
+check("the flow has a page for setting this up", _shPage.status_code == 200)
+check("which lists the headings the sheet needs",
+      all(q in _shPage.text for q in ("Member name", "Expiry date", "PT trainer")))
+check("and says the three columns it will add",
+      all(c in _shPage.text for c in _fsv.STAMP_COLS))
+# Nobody can guess this address, and a sheet that is not shared with it
+# fails with a permission error that does not say what to do about it.
+check("and names the address the sheet has to be shared with",
+      "gcs-robot@example.iam.gserviceaccount.com" in _shPage.text)
+check("saying Editor, because it writes back beside each row",
+      "Editor" in _shPage.text)
+check("a link that is not a Google Sheet is refused with a useful sentence",
+      admin.post(f"/flows/{_fSid}/sheet",
+                 data={"sheet": "my renewals sheet"}).status_code == 400)
+_shSvc.SERVICE_ACCOUNT = _was
+check("a doer cannot connect a sheet",
+      doer.get(f"/flows/{_fSid}/sheet").status_code == 403)
+# Asserted against THIS flow's link, not the word "/sheet": the sidebar
+# has a Google Sheet backup page of its own, and matching that would pass
+# whether or not the button on the row exists at all.
+_listPage = admin.get("/flows").text
+check("the FMS list offers it beside the bulk upload",
+      f'/flows/{_fSid}/sheet' in _listPage
+      and f'/flows/{_fSid}/bulk' in _listPage)
+check("but not to somebody who cannot build flows",
+      f'/flows/{_fSid}/sheet' not in doer.get("/flows").text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

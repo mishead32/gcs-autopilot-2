@@ -893,6 +893,49 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
         target.tat_value = target.tat_value or 1
 
 
+class FlowSheet(Base):
+    """A Google Sheet wired to a flow: a new row there starts a run here.
+
+    The third way to start an FMS, after the start form and the spreadsheet
+    upload. The sheet's headings ARE the flow's questions — the same
+    headings the upload template prints — so there is nothing to map by
+    hand and nothing to re-map when a question is renamed: rename it on the
+    flow, rename the column, and it lines up again.
+
+    Which rows have been done is recorded IN THE SHEET, in columns the app
+    adds at the end, rather than in a private marker here. A marker is a
+    number that means nothing to the people using the sheet and goes wrong
+    the first time somebody sorts, inserts or deletes a row — silently
+    skipping or repeating members. Written into the sheet, every row says
+    for itself whether it went through, which FMS number it became, and
+    what was wrong with it if it did not. It survives a sort, it survives a
+    copy of the sheet, and the person who typed the row can see it.
+    """
+    __tablename__ = "flow_sheets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # One sheet per flow. More than one would be two lists of members with
+    # no way to say which is the real one.
+    flow_id: Mapped[int] = mapped_column(ForeignKey("flows.id"), unique=True)
+    sheet_id: Mapped[str] = mapped_column(String(80))
+    tab: Mapped[str] = mapped_column(String(120), default="")
+    # Off without deleting it: a sheet being reorganised should be paused,
+    # not disconnected and set up again from nothing.
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    connected_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=clock.now)
+    last_run_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    started_total: Mapped[int] = mapped_column(Integer, default=0)
+
+    flow: Mapped[Flow] = relationship()
+    connected_by: Mapped[User] = relationship()
+
+    @property
+    def url(self) -> str:
+        return f"https://docs.google.com/spreadsheets/d/{self.sheet_id}/edit"
+
+
 class FlowInstance(Base):
     """One live run of a flow, e.g. onboarding for member #1042."""
     __tablename__ = "flow_instances"

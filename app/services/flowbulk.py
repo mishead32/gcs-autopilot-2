@@ -211,16 +211,35 @@ def parse(db: Session, flow: Flow, blob: bytes) -> Parsed:
     except Exception:
         raise ValueError("That file is not a readable Excel workbook (.xlsx).")
     ws = wb[wb.sheetnames[0]]
+    heads = head_map(next(ws.iter_rows(min_row=1, max_row=1,
+                                       values_only=True), ()))
 
+    return read_rows(db, flow, heads,
+                     ws.iter_rows(min_row=3, values_only=True), 3)
+
+
+def head_map(values) -> dict:
+    """{heading in lower case: its 1-based column} for one row of headings."""
+    heads = {}
+    for i, raw in enumerate(values, start=1):
+        key = _cell(raw).lower()
+        if key and key not in heads:
+            heads[key] = i
+    return heads
+
+
+def read_rows(db: Session, flow: Flow, heads: dict, raw_rows, first: int
+              ) -> Parsed:
+    """Rows checked against this flow's questions, wherever they came from.
+
+    Shared by the spreadsheet upload and the live Google Sheet on purpose.
+    Two readers would be two sets of rules about what a valid answer is, and
+    the day they disagree a sheet quietly starts runs the file would have
+    refused — found weeks later by somebody holding work nobody meant to
+    create.
+    """
     cols = columns(flow, needs_company(flow))
     wanted = {f["label"].strip().lower(): f for f in cols}
-
-    heads = {}
-    for i, raw in enumerate(next(ws.iter_rows(min_row=1, max_row=1,
-                                              values_only=True), ()), start=1):
-        key = _cell(raw).lower()
-        if key:
-            heads[key] = i
 
     out = Parsed()
     out.missing = [f["label"] for f in cols
@@ -234,7 +253,7 @@ def parse(db: Session, flow: Flow, blob: bytes) -> Parsed:
     branches = {b.name.strip().lower(): b for b in db.scalars(
         select(Branch).where(Branch.org_id == flow.org_id)).all()}
 
-    for n, raw in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
+    for n, raw in enumerate(raw_rows, start=first):
         if not raw or all(_cell(v) == "" for v in raw):
             continue
         if len(out.rows) >= MAX_ROWS:

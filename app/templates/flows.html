@@ -77,6 +77,10 @@
       {% if f.active and f.steps and f.start_form_fields %}
       <a class="btn sm ghost" href="/flows/{{ f.id }}/bulk"
          title="One row, one run — for a list of members or bills">Bulk</a>
+      {% if can_manage %}
+      <a class="btn sm ghost" href="/flows/{{ f.id }}/sheet"
+         title="Watch a Google Sheet — a new row there starts a run here">Sheet</a>
+      {% endif %}
       {% endif %}
       <a class="btn sm ghost" href="/flows/{{ f.id }}/submissions"
          title="Everything submitted to this flow">Submissions</a>

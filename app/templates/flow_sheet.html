@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}{{ flow.name }} — from a Google Sheet · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Start from a Google Sheet</h1>
+    <p class="sub">A sheet you are already typing into. A new row there
+      becomes a run here, by itself, within about ten minutes.</p>
+  </div>
+  <a class="btn ghost" href="/flows/{{ flow.id }}/bulk">Upload a file instead</a>
+</div>
+
+{% if not flow.start_form_fields %}
+<div class="card warnbox">
+  <strong>This flow asks nothing to get going</strong>
+  <p class="m" style="margin:8px 0 0">
+    There is nothing for a sheet's columns to answer, so every row would
+    make an identical run nobody could tell apart. Add some questions to
+    the start form first under
+    <a href="/flows/{{ flow.id }}/edit">Edit steps &amp; questions</a>.
+  </p>
+</div>
+
+{% elif not enabled %}
+<div class="card warnbox">
+  <strong>No Google account is set up on this site yet</strong>
+  <p class="m" style="margin:8px 0 0">
+    Reading a sheet needs the same Google service account the backup
+    mirror uses. Add <code>GOOGLE_SERVICE_ACCOUNT</code> in Render's
+    Environment tab, restart, and this page will work.
+  </p>
+</div>
+
+{% else %}
+
+{# ----------------------------------------------------- what it needs -- #}
+<div class="grid g2 wide">
+  <div class="card">
+    <strong>1 · Set the sheet up</strong>
+    <p class="m" style="margin:8px 0 12px">
+      Row 1 holds the headings, and they have to match this flow's
+      questions <em>exactly</em>. Nothing is matched up by hand, so nothing
+      can be matched up wrongly — and renaming a question is just renaming
+      a column.
+    </p>
+    <table style="margin-bottom:14px">
+      <tr><th>Heading in row 1</th><th>What goes in it</th></tr>
+      {% for c in cols %}
+      <tr><td><strong>{{ c.label }}</strong>
+        {% if c.required %}<span class="m"> · required</span>{% endif %}</td>
+        <td class="m">{{ c.type|replace('company', 'one of your companies') }}
+          {%- if c.options %} — {{ c.options|join(', ') }}{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% if file_questions %}
+    <p class="m"><strong>Not carried:</strong>
+      {{ file_questions|join(', ') }} — a cell cannot hold a document.
+      Those are attached later, on the step that needs them.</p>
+    {% endif %}
+    <p class="m">The <a href="/flows/{{ flow.id }}/bulk">bulk upload page</a>
+      downloads a file with exactly these headings — open it, copy row 1
+      into your sheet, and they are guaranteed to match.</p>
+  </div>
+
+  <div class="card">
+    <strong>2 · Let this site read it</strong>
+    <p class="m" style="margin:8px 0 12px">
+      In your sheet: <strong>Share</strong>, then add this address as an
+      <strong>Editor</strong>:
+    </p>
+    <p><code style="word-break:break-all">{{ robot or 'not configured' }}</code></p>
+    <p class="m">Editor, not Viewer — it writes back beside each row to say
+      what became of it. It never changes anything you typed.</p>
+    <table style="margin-top:12px">
+      <tr><th>Column it adds at the end</th><th>What it means</th></tr>
+      <tr><td><strong>FMS no.</strong></td>
+        <td class="m">The run this row became. Empty means not done yet.</td></tr>
+      <tr><td><strong>Started on</strong></td>
+        <td class="m">When it was picked up.</td></tr>
+      <tr><td><strong>Problem</strong></td>
+        <td class="m">Why a row was left alone. Fix the cell and it is
+          picked up on the next look — nothing to re-upload.</td></tr>
+    </table>
+  </div>
+</div>
+
+{# -------------------------------------------------------- connect it -- #}
+<div class="card" style="margin-top:16px">
+  <strong>{{ '3 · Connected sheet' if cfg else '3 · Connect it' }}</strong>
+  {% if cfg %}
+  <div class="row" style="margin-top:10px;align-items:center">
+    <div style="flex:1 1 320px">
+      <p style="margin:0"><a href="{{ cfg.url }}" target="_blank" rel="noopener"
+        >Open the sheet</a>
+        {% if cfg.tab %}<span class="m"> · tab “{{ cfg.tab }}”</span>{% endif %}</p>
+      <p class="m" style="margin:6px 0 0">
+        <span class="chip {{ 'completed' if cfg.active else 'rejected' }}"
+          >{{ 'watching' if cfg.active else 'paused' }}</span>
+        · {{ cfg.started_total or 0 }} run(s) started from it
+        {% if cfg.last_run_at %} · last looked
+        {{ cfg.last_run_at|dt('%d %b, %I:%M %p') }}{% endif %}
+      </p>
+      {% if cfg.last_error %}
+      <p class="m" style="margin:6px 0 0;color:var(--bad)">{{ cfg.last_error }}</p>
+      {% endif %}
+    </div>
+    <div class="acts">
+      <form method="post" action="/flows/{{ flow.id }}/sheet/run" style="display:inline">
+        <button class="btn sm" title="Look at the sheet now instead of waiting"
+          >Check it now</button></form>
+      <form method="post" action="/flows/{{ flow.id }}/sheet/pause" style="display:inline">
+        <button class="btn sm ghost"
+          >{{ 'Pause' if cfg.active else 'Start watching again' }}</button></form>
+      <form method="post" action="/flows/{{ flow.id }}/sheet/forget" style="display:inline">
+        <button class="btn sm ghost"
+          title="Forget this sheet. Runs it already started are untouched"
+          >Disconnect</button></form>
+    </div>
+  </div>
+  <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+  <p class="m" style="margin:0 0 10px">Point it at a different sheet:</p>
+  {% endif %}
+
+  <form method="post" action="/flows/{{ flow.id }}/sheet" class="row">
+    <div style="flex:1 1 380px"><label>Sheet address</label>
+      <input name="sheet" placeholder="https://docs.google.com/spreadsheets/d/…"
+             value="{{ cfg.url if cfg else '' }}" required></div>
+    <div style="max-width:220px"><label>Tab name</label>
+      <input name="tab" placeholder="the first tab"
+             value="{{ cfg.tab if cfg else '' }}"></div>
+    <div style="max-width:300px"><label>The rows already in it</label>
+      <select name="existing">
+        <option value="skip">Leave them — only new rows start a run</option>
+        <option value="start">Start a run for every one of them now</option>
+      </select></div>
+    <div class="acts"><button class="btn">{{ 'Change it' if cfg else 'Connect' }}</button></div>
+  </form>
+  <p class="m" style="margin-top:10px">Connecting checks the sheet straight
+    away, so a heading that does not match, or a sheet that has not been
+    shared, is told to you now rather than discovered by nobody at two in
+    the morning.</p>
+</div>
+{% endif %}
+{% endblock %}
