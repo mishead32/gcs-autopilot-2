@@ -293,6 +293,32 @@ def sort_key(pair: tuple[Task, int]):
     return (name, task.due_at, task.id)
 
 
+def by_company(rows: list[tuple[Task, int]]) -> list[tuple[str, list]]:
+    """The rows split company by company, each block sorted doer A to Z.
+
+    Level 1 is a different person at each company, so their email is about
+    one company and needs none of this. Levels 2 and 3 are the SAME two
+    people for the whole group, so their email is every company at once —
+    and thirty rows from five companies, told apart only by a grey line
+    under each task, is a list nobody can act on. Blocked by company it
+    reads as five short lists, which is how the EA and the CMD actually
+    work: company by company.
+
+    Companies alphabetically, anything with no company last — it is the odd
+    case, and leading with it reads as though it were the main one.
+    """
+    blocks: dict[str, list] = {}
+    for pair in rows:
+        task = pair[0]
+        blocks.setdefault(task.branch.name if task.branch else "",
+                          []).append(pair)
+    named = sorted((k for k in blocks if k), key=str.lower)
+    out = [(k, sorted(blocks[k], key=sort_key)) for k in named]
+    if "" in blocks:
+        out.append(("No company", sorted(blocks[""], key=sort_key)))
+    return out
+
+
 def table(rows: list[tuple[Task, int]], with_doer: bool = True) -> str:
     """The task list, sorted by doer, as fixed-width plain text.
 
@@ -301,23 +327,37 @@ def table(rows: list[tuple[Task, int]], with_doer: bool = True) -> str:
     be instead.
     """
     cols = COLS if with_doer else [c for c in COLS if c[0] != "Doer"]
-    out = ["  ".join(_cell(h, w) for h, w in cols).rstrip(),
-           "  ".join("-" * w for _h, w in cols)]
-    for task, late in sorted(rows, key=sort_key):
-        values = {
-            # ref_label, not ref: an FMS step shares its submission's
-            # number with the other steps of that run, so the reference on
-            # its own does not say which row of this table is which — and
-            # an email is read where nobody can click to find out.
-            "Task ID": task.ref_label,
-            "Doer": task.doer.name if task.doer else "—",
-            "Planned": task.due_at.strftime("%d %b, %I:%M %p"),
-            "Priority": task.priority.value.upper(),
-            "Overdue": f"{late} day" + ("s" if late != 1 else ""),
-            "Task": task.title,
-        }
-        out.append("  ".join(_cell(values[h], w) for h, w in cols).rstrip())
+    rule = "  ".join("-" * w for _h, w in cols)
+    head = "  ".join(_cell(h, w) for h, w in cols).rstrip()
+    blocks = by_company(rows)
+    # A heading over a single block is furniture: the whole email is about
+    # that company, and saying so twice reads as though there were another.
+    banded = len(blocks) > 1
+    out = [] if banded else [head, rule]
+
+    for company, pairs in blocks:
+        if banded:
+            out += ["", f"{company.upper()} — {len(pairs)} task"
+                        + ("s" if len(pairs) != 1 else ""), head, rule]
+        out += [_text_row(task, late, cols) for task, late in pairs]
     return "\n".join(out)
+
+
+def _text_row(task: Task, late: int, cols) -> str:
+    """One line of the plain-text table."""
+    values = {
+        # ref_label, not ref: an FMS step shares its submission's number
+        # with the other steps of that run, so the reference on its own
+        # does not say which row of this table is which — and an email is
+        # read where nobody can click to find out.
+        "Task ID": task.ref_label,
+        "Doer": task.doer.name if task.doer else "—",
+        "Planned": task.due_at.strftime("%d %b, %I:%M %p"),
+        "Priority": task.priority.value.upper(),
+        "Overdue": f"{late} day" + ("s" if late != 1 else ""),
+        "Task": task.title,
+    }
+    return "  ".join(_cell(values[h], w) for h, w in cols).rstrip()
 
 
 # --------------------------------------------------------- the HTML table --
@@ -376,55 +416,89 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
         "</tr></thead><tbody>",
     ]
 
-    for i, (task, late) in enumerate(sorted(rows, key=sort_key)):
-        bg = STRIPE if i % 2 else PAPER
-        # Built as the style VALUE, so a cell that needs an extra rule adds
-        # to it rather than carrying a second style attribute — which is
-        # invalid, and which Outlook resolves by ignoring one of them.
-        cell = (f"padding:10px;border-bottom:1px solid {LINE};"
-                f"background:{bg};vertical-align:top")
-        td = f'style="{cell}"'
-        mono = ('style="' + cell + ";font-family:ui-monospace,SFMono-Regular,"
-                'Menlo,Consolas,monospace;white-space:nowrap"')
-        ref = _esc(task.ref or task.id)
-        step = task.step_label
-        # The reference links to the task when the site's address is known.
-        # It is the one link in the table, and it is the thing somebody
-        # clicks: "open DEL-341" is the whole action the email is asking for.
-        if site:
-            ref = (f'<a href="{_esc(site.rstrip("/"))}/tasks/{task.id}" '
-                   f'style="color:{BRAND};font-weight:700;'
-                   f'text-decoration:none">{ref}</a>')
-        else:
-            ref = f'<strong style="color:{BRAND}">{ref}</strong>'
-
-        bgc, fgc = PILL.get(task.priority.value, PILL["low"])
-        days = f"{late} day" + ("s" if late != 1 else "")
-        out += [
-            "<tr>",
-            f"<td {mono}>{ref}"
-            + (f'<div style="color:{MUTED};font-size:11px;margin-top:2px;'
-               f'font-family:{_FONT}">{_esc(step)}</div>' if step else "")
-            + "</td>",
-            (f'<td {td}>{_esc(task.doer.name if task.doer else "—")}</td>'
-             if with_doer else ""),
-            f'<td {td} nowrap>'
-            f'{_esc(task.due_at.strftime("%d %b %Y"))}'
-            f'<div style="color:{MUTED};font-size:11.5px;margin-top:2px">'
-            f'{_esc(task.due_at.strftime("%I:%M %p"))}</div></td>',
-            f'<td {td}>{_pill(task.priority.value.upper(), bgc, fgc)}</td>',
-            f'<td {td} align="right" nowrap>'
-            f'<span style="font-weight:700;color:'
-            f'{URGENT if late >= 3 else INK}">{_esc(days)}</span></td>',
-            f'<td {td}>{_esc(task.title)}'
-            + (f'<div style="color:{MUTED};font-size:11.5px;margin-top:2px">'
-               f'{_esc(task.branch.name)}</div>' if task.branch else "")
-            + "</td>",
-            "</tr>",
-        ]
+    blocks = by_company(rows)
+    # One company needs no band: the whole email is about it, and a heading
+    # over a single block reads as though a second one were coming.
+    banded = len(blocks) > 1
+    span = 6 if with_doer else 5
+    i = 0
+    for company, pairs in blocks:
+        if banded:
+            out.append(
+                f'<tr><td colspan="{span}" style="padding:14px 10px 7px;'
+                f'border-bottom:2px solid {BRAND};background:{PAPER};'
+                f'font-size:12px;font-weight:800;letter-spacing:.06em;'
+                f'text-transform:uppercase;color:{BRAND}">'
+                f'{_esc(company)}'
+                f'<span style="font-weight:600;color:{MUTED};'
+                f'letter-spacing:0;text-transform:none"> &middot; '
+                f'{len(pairs)} task{"s" if len(pairs) != 1 else ""}</span>'
+                "</td></tr>")
+            i = 0                       # stripes restart under each band
+        for task, late in pairs:
+            out += _html_row(task, late, i, with_doer, site, banded)
+            i += 1
 
     out.append("</tbody></table>")
     return "".join(out)
+
+
+def _html_row(task: Task, late: int, i: int, with_doer: bool, site: str,
+              banded: bool) -> list:
+    """One row of the HTML table.
+
+    `banded` drops the company caption under the task: it is already the
+    heading this row sits under, and printing it on every line is the noise
+    the bands were added to remove.
+    """
+    out: list = []
+    bg = STRIPE if i % 2 else PAPER
+    # Built as the style VALUE, so a cell that needs an extra rule adds
+    # to it rather than carrying a second style attribute — which is
+    # invalid, and which Outlook resolves by ignoring one of them.
+    cell = (f"padding:10px;border-bottom:1px solid {LINE};"
+            f"background:{bg};vertical-align:top")
+    td = f'style="{cell}"'
+    mono = ('style="' + cell + ";font-family:ui-monospace,SFMono-Regular,"
+            'Menlo,Consolas,monospace;white-space:nowrap"')
+    ref = _esc(task.ref or task.id)
+    step = task.step_label
+    # The reference links to the task when the site's address is known.
+    # It is the one link in the table, and it is the thing somebody
+    # clicks: "open DEL-341" is the whole action the email is asking for.
+    if site:
+        ref = (f'<a href="{_esc(site.rstrip("/"))}/tasks/{task.id}" '
+               f'style="color:{BRAND};font-weight:700;'
+               f'text-decoration:none">{ref}</a>')
+    else:
+        ref = f'<strong style="color:{BRAND}">{ref}</strong>'
+
+    bgc, fgc = PILL.get(task.priority.value, PILL["low"])
+    days = f"{late} day" + ("s" if late != 1 else "")
+    out += [
+        "<tr>",
+        f"<td {mono}>{ref}"
+        + (f'<div style="color:{MUTED};font-size:11px;margin-top:2px;'
+           f'font-family:{_FONT}">{_esc(step)}</div>' if step else "")
+        + "</td>",
+        (f'<td {td}>{_esc(task.doer.name if task.doer else "—")}</td>'
+         if with_doer else ""),
+        f'<td {td} nowrap>'
+        f'{_esc(task.due_at.strftime("%d %b %Y"))}'
+        f'<div style="color:{MUTED};font-size:11.5px;margin-top:2px">'
+        f'{_esc(task.due_at.strftime("%I:%M %p"))}</div></td>',
+        f'<td {td}>{_pill(task.priority.value.upper(), bgc, fgc)}</td>',
+        f'<td {td} align="right" nowrap>'
+        f'<span style="font-weight:700;color:'
+        f'{URGENT if late >= 3 else INK}">{_esc(days)}</span></td>',
+        f'<td {td}>{_esc(task.title)}'
+        + (f'<div style="color:{MUTED};font-size:11.5px;margin-top:2px">'
+           f'{_esc(task.branch.name)}</div>'
+           if task.branch and not banded else "")
+        + "</td>",
+        "</tr>",
+    ]
+    return out
 
 
 def html_message(rows: list[tuple[Task, int]], heading: str, greeting: str,

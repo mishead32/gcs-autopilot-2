@@ -12197,5 +12197,87 @@ check("the FMS list offers it beside the bulk upload",
 check("but not to somebody who cannot build flows",
       f'/flows/{_fSid}/sheet' not in doer.get("/flows").text)
 
+
+print("\n== levels 2 and 3 read company by company ==")
+# Level 1 is a different person at each company, so their email is about
+# one company. Levels 2 and 3 are the SAME two people for the whole group,
+# so their email is every company at once — and thirty rows from five
+# companies, told apart only by a grey line under each task, is a list
+# nobody can act on.
+from app.services import escalation as _ecZ
+
+
+class _FakeBranch:
+    def __init__(self, name): self.name = name
+
+
+class _FakeDoer:
+    def __init__(self, name): self.name = name
+
+
+class _FakeTask:
+    def __init__(self, n, company, doer):
+        self.id = n
+        self.ref = f"DEL-{n:03d}"
+        self.ref_label = self.ref
+        self.step_label = ""
+        self.title = f"Task {n}"
+        self.branch = _FakeBranch(company) if company else None
+        self.doer = _FakeDoer(doer)
+        self.due_at = _dtC(2026, 10, 20, 18, 0)
+        self.priority = _PrB.MEDIUM
+
+
+_mixed = [(_FakeTask(1, "Spa Kora", "Zoya"), 2),
+          (_FakeTask(2, "Bodyzone", "Amit"), 3),
+          (_FakeTask(3, "Spa Kora", "Amit"), 1),
+          (_FakeTask(4, "Bodyzone", "Kiran"), 2),
+          (_FakeTask(5, None, "Raj"), 4)]
+
+_blocks = _ecZ.by_company(_mixed)
+check("the rows are split company by company",
+      [b[0] for b in _blocks] == ["Bodyzone", "Spa Kora", "No company"],
+      str([b[0] for b in _blocks]))
+check("alphabetically, so the same company is in the same place every day",
+      _blocks[0][0] < _blocks[1][0])
+check("work with no company comes last, not first",
+      _blocks[-1][0] == "No company")
+check("and inside each company the doers are still A to Z",
+      [t.doer.name for t, _l in _blocks[0][1]] == ["Amit", "Kiran"],
+      str([t.doer.name for t, _l in _blocks[0][1]]))
+
+_htmlZ = _ecZ.html_table(_mixed)
+check("the HTML table carries a heading for each company",
+      _htmlZ.count("colspan") == 3, str(_htmlZ.count("colspan")))
+check("saying how many tasks are under it",
+      "2 tasks" in _htmlZ and "1 task<" in _htmlZ.replace("&middot;", ""),
+      "counts missing")
+check("in the order the blocks were worked out",
+      _htmlZ.index("BODYZONE".title()) < _htmlZ.index("Spa Kora"))
+# The company used to be printed under every task title. Under a heading
+# that already says it, that is the noise the headings were added to remove.
+check("and the company is not repeated under every single task",
+      _htmlZ.count("Bodyzone") == 1 and _htmlZ.count("Spa Kora") == 1,
+      f"{_htmlZ.count('Bodyzone')} / {_htmlZ.count('Spa Kora')}")
+
+_textZ = _ecZ.table(_mixed)
+check("the plain-text copy is blocked the same way",
+      "BODYZONE — 2 tasks" in _textZ and "SPA KORA — 2 tasks" in _textZ,
+      _textZ[:160])
+check("with its own column headings under each company",
+      _textZ.count("Task ID") == 3, str(_textZ.count("Task ID")))
+
+# A level-1 email is about one company. A heading over a single block is
+# furniture, and saying the company twice reads as though there were two.
+_oneCoZ = [(_FakeTask(6, "Bodyzone", "Amit"), 2),
+           (_FakeTask(7, "Bodyzone", "Kiran"), 2)]
+_oneHtmlZ = _ecZ.html_table(_oneCoZ)
+check("one company gets no heading band at all",
+      "colspan" not in _oneHtmlZ)
+check("but the company is still named on each row, as it always was",
+      _oneHtmlZ.count("Bodyzone") == 2, str(_oneHtmlZ.count("Bodyzone")))
+check("and the text copy keeps its single set of headings",
+      _ecZ.table(_oneCoZ).count("Task ID") == 1)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
