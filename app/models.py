@@ -296,6 +296,12 @@ class Organization(Base):
     esc_scope: Mapped[str] = mapped_column(String(10), default="chased")
     # The hour of the morning the check runs, 0-23, office time.
     esc_hour: Mapped[int] = mapped_column(Integer, default=9)
+    # How many days a task may be overdue before the FIRST level is told.
+    # 0 means the day it goes overdue, which is right for a daily checklist
+    # and far too quick for anything that takes a week — one late morning
+    # would reach a department head. A grace of 3 means the ladder starts
+    # on the fourth day, then climbs a level a day as before.
+    esc_grace: Mapped[int] = mapped_column(Integer, default=0)
     # The last day the check actually ran. The daily run is keyed off this
     # rather than a timer, so a restart, a second web process or somebody
     # pressing "Run the check now" cannot send the same morning twice.

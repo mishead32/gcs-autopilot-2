@@ -30,6 +30,19 @@
       outside, exactly like a system that is working.
     </div>
 
+    <label>Days overdue before the first level hears about it</label>
+    <input name="grace" type="number" min="0" max="60"
+           value="{{ org.esc_grace or 0 }}">
+    <div class="m" style="margin:6px 0 14px">
+      <strong>0</strong> tells Level 1 on the first day a task is late,
+      which suits a daily checklist and is far too quick for work that
+      takes a week — one late morning reaches a department head.
+      <strong>3</strong> means the ladder starts on the <strong>fourth</strong>
+      day: Level 1 on day 4, Level 2 on day 5, Level 3 on day 6. The climb
+      is unchanged, a level a day — it just starts later. Work closed
+      before then is never escalated at all, which is the point.
+    </div>
+
     <label>What counts as a day overdue</label>
     <select name="working_days">
       <option value="1" {{ 'selected' if org.esc_working_days }}>
@@ -269,7 +282,12 @@
   <form method="post" action="/escalation/rungs/{{ r.id }}" class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;
                 gap:10px;margin:0 0 12px">
-      <strong>Level {{ r.level }} — day {{ r.level }} overdue</strong>
+      {# The day a level fires is its number PLUS the grace. Printing the
+         level number alone was right only while the grace was nought, and
+         a caption that is wrong for everybody who changed a setting is
+         worse than no caption. #}
+      <strong>Level {{ r.level }} — day {{ r.level + (org.esc_grace or 0) }}
+        overdue</strong>
       <span class="chip {{ 'bad' if r.urgent else 'normal' }}">{{ r.name }}</span>
     </div>
     {{ rung_fields(r, staff, 'r' ~ r.id) }}
@@ -294,8 +312,10 @@
   <strong>Add a level to
     {{ branch.name if branch else 'the every-other-company ladder' }}</strong>
   <input type="hidden" name="scope" value="{{ branch_id or '' }}">
-  <label style="margin-top:10px">Level — and the number of days overdue that
-    triggers it</label>
+  <label style="margin-top:10px">Level
+    {%- if org.esc_grace %} — level 1 fires on day {{ 1 + org.esc_grace }},
+    level 2 on day {{ 2 + org.esc_grace }}, and so on
+    {%- else %} — and the number of days overdue that triggers it{% endif %}</label>
   <input name="level" type="number" min="1" max="20" value="{{ next_level }}" required>
   {{ rung_fields(None, staff, 'new') }}
   <div style="margin-top:14px"><button class="btn">Add this level</button></div>

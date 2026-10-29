@@ -72,6 +72,9 @@ ADDITIONS = {
         ("esc_after_top", "VARCHAR(10) DEFAULT 'stop'"),
         ("esc_scope", "VARCHAR(10) DEFAULT 'chased'"),
         ("esc_hour", "INTEGER DEFAULT 9"),
+        # Days overdue before the first level is told. 0 keeps what every
+        # existing site already does, so nothing changes under anybody.
+        ("esc_grace", "INTEGER DEFAULT 0"),
         ("esc_last_run", "DATE"),
         # This site's address, for the links inside an escalation email.
         # Filled in the first time the Escalation page is opened.

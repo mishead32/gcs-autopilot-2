@@ -209,10 +209,16 @@ def already(db: Session, task_id: int) -> list[Escalation]:
 
 
 def next_step(sent: list[Escalation], late: int, rungs: dict[int, EscalationRule],
-              after_top: str, today: date) -> tuple[int, int] | None:
+              after_top: str, today: date, grace: int = 0
+              ) -> tuple[int, int] | None:
     """Which (level, repeat) is owed right now, or None.
 
-    `sent` is what has already gone out for this task.
+    `sent` is what has already gone out for this task. `grace` is how many
+    days a task may be overdue before the FIRST level hears about it: with
+    3, a task four days late is a level 1, five days a level 2, six a
+    level 3. The climb is unchanged — a level a day — it just starts
+    later, which is the difference between chasing a missed morning and
+    chasing something that has actually gone wrong.
     """
     if not rungs:
         return None
@@ -222,7 +228,8 @@ def next_step(sent: list[Escalation], late: int, rungs: dict[int, EscalationRule
     if any(e.day == today for e in sent):
         return None
 
-    level = min(late, top)
+    # Days overdue, less the grace: the number the ladder is read with.
+    level = min(late - max(0, grace or 0), top)
     if level < min(rungs):
         return None
     # The nearest rung at or below the days overdue. A ladder of 1, 2, 5
@@ -843,7 +850,8 @@ def plan(db: Session, org: Organization, today: date) -> tuple[list, list, int]:
             skipped.append((task, late, "No level is set for that company."))
             continue
         sent = already(db, task.id)
-        step = next_step(sent, late, rungs, org.esc_after_top, today)
+        step = next_step(sent, late, rungs, org.esc_after_top, today,
+                         org.esc_grace or 0)
         if step is None:
             if any(e.day == today for e in sent):
                 why = "Already escalated today."
@@ -1007,6 +1015,22 @@ def run(db: Session, org: Organization, on: date | None = None,
 
     if not org.esc_on and not force:
         out["why"] = "Escalation is switched off."
+        return out
+
+    # No mail server at all is not a reason to escalate quietly. The rung
+    # is RECORDED when a task is escalated, and nothing retries a recorded
+    # one — so a run with nowhere to send would mark level 1 as done, climb
+    # to level 2 tomorrow and reach the CMD on day three about work nobody
+    # was ever warned of. The ladder would have run perfectly and told
+    # nobody, which is the one failure that looks exactly like success.
+    #
+    # A single address that bounces is different: that was a real attempt
+    # at a real server, it is recorded as failed, and it is visible in the
+    # log. This is about having no server to attempt.
+    if send and not mail.enabled():
+        out["why"] = ("No mail server is set up, so nothing could be sent "
+                      "— and a rung recorded with nothing sent would be "
+                      "skipped silently. Set MAIL_HOST and MAIL_FROM first.")
         return out
 
     groups, skipped, no_ladder = plan(db, org, today)

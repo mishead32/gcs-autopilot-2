@@ -10376,7 +10376,15 @@ with _slQ() as _d:
     _orgQ.esc_hour = 0
     _d.commit()
     _beforeQ = {m.id for m in _d.scalars(_SEL(_EmQ)).all()}
+    # A stand-in mail server. The run refuses to escalate with nowhere to
+    # send — a rung recorded and nothing sent would be a level skipped in
+    # silence — so this test has to give it somewhere, without a network.
+    from app.services import mail as _mlQ
+    _mlHostQ, _mlFromQ, _mlSendQ = _mlQ.HOST, _mlQ.FROM, _mlQ.send
+    _mlQ.HOST, _mlQ.FROM = "smtp.test", "gcs@test"
+    _mlQ.send = lambda *a, **k: (True, "")
     _escQ.run_daily(_d)
+    _mlQ.HOST, _mlQ.FROM, _mlQ.send = _mlHostQ, _mlFromQ, _mlSendQ
     _freshQ = [m for m in _d.scalars(_SEL(_EmQ)).all()
                if m.id not in _beforeQ]
     check("the daily run uses the recorded address for its links",
@@ -12352,6 +12360,98 @@ check("and its text copy is just the table",
 check("though the counts still say which kind it was",
       _ecZ.counts_by_kind(_oneZ) == [("Delegation", 0), ("Checklist", 0),
                                      ("FMS", 1)])
+
+print("\n== nowhere to send is not a reason to escalate quietly ==")
+# The rung is RECORDED when a task is escalated, and nothing retries a
+# recorded one. So a run with no mail server would mark level 1 as done,
+# climb to level 2 tomorrow and reach the CMD on day three about work
+# nobody was ever warned of — a ladder that ran perfectly and told nobody,
+# which is the one failure that looks exactly like success.
+from app.services import mail as _mlY
+_hostY, _fromY = _mlY.HOST, _mlY.FROM
+_mlY.HOST, _mlY.FROM = "", ""
+with _slQ() as _d:
+    _orgY = _d.scalar(_SEL(_OgQ))
+    _orgY.esc_on = True
+    _orgY.esc_last_run = None
+    _d.commit()
+    _beforeY = len(_d.scalars(_SEL(_EsQ)).all())
+    _outY = _escQ.run(_d, _orgY, send=True)
+    check("a run with no mail server escalates nothing",
+          _outY["raised"] == 0 and not _outY["ran"], str(_outY)[:140])
+    check("and says so, naming what to set",
+          "MAIL_HOST" in _outY["why"], _outY["why"])
+    check("nothing is recorded, so tomorrow still owes level 1",
+          len(_d.scalars(_SEL(_EsQ)).all()) == _beforeY)
+    # The preview is the same check with the sending switched off, so it
+    # must still work with no server — that is where somebody looks to
+    # find out what would happen once there is one.
+    _prevY = _escQ.run(_d, _orgY, send=False)
+    check("but the preview still shows what would be sent",
+          _prevY["ran"], str(_prevY)[:140])
+_mlY.HOST, _mlY.FROM = _hostY, _fromY
+
+print("\n== a grace period before the first level ==")
+# "Overdue more than 3 days" is a different system from "overdue today".
+# One late morning reaching a department head is how a ladder teaches
+# everybody to ignore it; the climb afterwards is unchanged.
+from datetime import date as _dG
+_todayG = _dG(2026, 10, 29)
+_rungsG = {1: _ErQ(level=1, to_name="HOD", to_email="hod@x"),
+           2: _ErQ(level=2, to_name="EA", to_email="ea@x"),
+           3: _ErQ(level=3, to_name="CMD", to_email="cmd@x")}
+
+def _lvl(late, grace, sent=()):
+    got = _escQ.next_step(list(sent), late, _rungsG, "stop", _todayG, grace)
+    return got[0] if got else None
+
+check("with a grace of 3, nothing goes out on day 1, 2 or 3",
+      [_lvl(n, 3) for n in (1, 2, 3)] == [None, None, None],
+      str([_lvl(n, 3) for n in (1, 2, 3)]))
+check("level 1 goes on day 4",  _lvl(4, 3) == 1, str(_lvl(4, 3)))
+check("level 2 on day 5",       _lvl(5, 3) == 2, str(_lvl(5, 3)))
+check("level 3 on day 6",       _lvl(6, 3) == 3, str(_lvl(6, 3)))
+check("and it stops at the top rather than inventing a level 4",
+      _lvl(9, 3) == 3, str(_lvl(9, 3)))
+
+# The old behaviour has to survive untouched: every site that has not
+# changed the setting must escalate exactly as it did yesterday.
+check("a grace of 0 is the day-a-level ladder as it always was",
+      [_lvl(n, 0) for n in (1, 2, 3, 7)] == [1, 2, 3, 3],
+      str([_lvl(n, 0) for n in (1, 2, 3, 7)]))
+
+# A task picked up late — 9 days overdue, nothing sent — starts at the
+# level its lateness has earned, not at 1. It is already a CMD matter.
+check("work found long after the fact starts where it belongs, not at 1",
+      _lvl(20, 3) == 3)
+
+# And once it has been escalated, the climb is one a day from there.
+_sentG = [_EsQ(level=1, repeat_n=0, day=_dG(2026, 10, 28))]
+check("the next day it is the next level, not the same one again",
+      _lvl(5, 3, _sentG) == 2, str(_lvl(5, 3, _sentG)))
+check("and never twice in one morning",
+      _lvl(5, 3, [_EsQ(level=1, repeat_n=0, day=_todayG)]) is None)
+
+_rGraceQ = adminQ.post("/escalation/settings",
+                       data={"esc_on": "", "working_days": "1",
+                             "after_top": "stop", "scope": "chased",
+                             "hour": "9", "grace": "3"})
+check("the setting saves from the page", _rGraceQ.status_code in (200, 303),
+      _rGraceQ.status_code)
+with _slQ() as _d:
+    check("and sticks", _d.scalar(_SEL(_OgQ)).esc_grace == 3,
+          str(_d.scalar(_SEL(_OgQ)).esc_grace))
+_pageG = adminQ.get("/escalation").text
+check("the page says which day each level now fires on",
+      "day 4" in _pageG and "day 5" in _pageG, "captions not updated")
+check("a grace that is not a number is refused rather than read as nought",
+      adminQ.post("/escalation/settings",
+                  data={"esc_on": "", "working_days": "1",
+                        "after_top": "stop", "scope": "chased",
+                        "hour": "9", "grace": "three"}).status_code == 400)
+with _slQ() as _d:
+    _d.scalar(_SEL(_OgQ)).esc_grace = 0
+    _d.commit()
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

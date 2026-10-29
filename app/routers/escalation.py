@@ -132,7 +132,7 @@ def page(request: Request, scope: str = "",
 def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),
                   scope: str = Form("chased"), hour: str = Form("9"),
-                  site_url: str = Form(""),
+                  site_url: str = Form(""), grace: str = Form("0"),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
@@ -158,6 +158,16 @@ def save_settings(request: Request, esc_on: str = Form(""),
                        "Add at least Level 1 under the “Every other company” "
                        "tab (the first one), then switch escalation on. Any "
                        "company with its own levels keeps using those.")
+
+    try:
+        # Clamped rather than refused: a number out of range is a typo, and
+        # losing the rest of the form to it helps nobody.
+        org.esc_grace = max(0, min(60, int(str(grace).strip() or 0)))
+    except ValueError:
+        raise HTTPException(
+            400, "Days overdue before the first level has to be a whole "
+                 "number — 0 for the first day a task is late, 3 to start "
+                 "on the fourth day.")
 
     if after_top not in AFTER_TOP:
         raise HTTPException(400, "Choose what happens after the top level.")
