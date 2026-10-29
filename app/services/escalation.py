@@ -293,6 +293,45 @@ def sort_key(pair: tuple[Task, int]):
     return (name, task.due_at, task.id)
 
 
+# The three kinds of work, in the order the office thinks about them:
+# what somebody was told to do, what comes round every day, and what a
+# process is waiting on. Fixed, not alphabetical — a reader who learns the
+# order once should find the same thing in the same place tomorrow.
+KINDS = (("delegation", "Delegation"),
+         ("recurring", "Checklist"),
+         ("flow", "FMS"))
+
+
+def by_kind(rows: list[tuple[Task, int]]) -> list[tuple[str, list]]:
+    """[(Delegation|Checklist|FMS, its rows)], in that order, empties left out.
+
+    Mixed together, a digest reads as one long undifferentiated list and
+    the reader has to sort it in their head before they can act: a missed
+    daily checklist and a stalled FMS step are not the same problem and do
+    not go to the same conversation. Split, the email is three short lists
+    somebody can take one at a time.
+    """
+    out = []
+    for key, label in KINDS:
+        got = [p for p in rows
+               if getattr(p[0].source, "value", p[0].source) == key]
+        if got:
+            out.append((label, got))
+    return out
+
+
+def counts_by_kind(rows: list[tuple[Task, int]]) -> list[tuple[str, int]]:
+    """Every kind with its number, INCLUDING the ones at nought.
+
+    A zero is information — "no checklist work is overdue" is the thing
+    somebody most wants to see — and a card that disappears when it is
+    nought makes the row a different shape every morning, which is how a
+    reader stops reading it.
+    """
+    found = dict(by_kind(rows))
+    return [(label, len(found.get(label, []))) for _key, label in KINDS]
+
+
 def by_company(rows: list[tuple[Task, int]]) -> list[tuple[str, list]]:
     """The rows split company by company, each block sorted doer A to Z.
 
@@ -329,17 +368,31 @@ def table(rows: list[tuple[Task, int]], with_doer: bool = True) -> str:
     cols = COLS if with_doer else [c for c in COLS if c[0] != "Doer"]
     rule = "  ".join("-" * w for _h, w in cols)
     head = "  ".join(_cell(h, w) for h, w in cols).rstrip()
-    blocks = by_company(rows)
+    kinds = by_kind(rows)
+    companies = by_company(rows)
+    tally = "   ".join(f"{label}: {n}" for label, n in counts_by_kind(rows))
     # A heading over a single block is furniture: the whole email is about
-    # that company, and saying so twice reads as though there were another.
-    banded = len(blocks) > 1
-    out = [] if banded else [head, rule]
+    # that one thing, and saying so twice reads as though there were
+    # another coming.
+    plain = len(kinds) <= 1 and len(companies) <= 1
+    # The same three numbers the HTML shows on cards. Somebody reading the
+    # plain-text copy — a phone that will not load images, a forwarded
+    # quote — gets the same answer before the first row.
+    out = [tally, ""] if not plain else []
+    out += [head, rule] if plain else []
 
-    for company, pairs in blocks:
-        if banded:
-            out += ["", f"{company.upper()} — {len(pairs)} task"
-                        + ("s" if len(pairs) != 1 else ""), head, rule]
-        out += [_text_row(task, late, cols) for task, late in pairs]
+    for kind, kind_rows in kinds:
+        if len(kinds) > 1:
+            out += ["", f"== {kind.upper()} — {len(kind_rows)} task"
+                        + ("s" if len(kind_rows) != 1 else "") + " =="]
+        blocks = by_company(kind_rows)
+        for company, pairs in blocks:
+            if len(blocks) > 1:
+                out += ["", f"{company.upper()} — {len(pairs)} task"
+                            + ("s" if len(pairs) != 1 else "")]
+            if not plain:
+                out += [head, rule]
+            out += [_text_row(task, late, cols) for task, late in pairs]
     return "\n".join(out)
 
 
@@ -416,31 +469,47 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
         "</tr></thead><tbody>",
     ]
 
-    blocks = by_company(rows)
-    # One company needs no band: the whole email is about it, and a heading
-    # over a single block reads as though a second one were coming.
-    banded = len(blocks) > 1
     span = 6 if with_doer else 5
-    i = 0
-    for company, pairs in blocks:
-        if banded:
-            out.append(
-                f'<tr><td colspan="{span}" style="padding:14px 10px 7px;'
-                f'border-bottom:2px solid {BRAND};background:{PAPER};'
-                f'font-size:12px;font-weight:800;letter-spacing:.06em;'
-                f'text-transform:uppercase;color:{BRAND}">'
-                f'{_esc(company)}'
-                f'<span style="font-weight:600;color:{MUTED};'
-                f'letter-spacing:0;text-transform:none"> &middot; '
-                f'{len(pairs)} task{"s" if len(pairs) != 1 else ""}</span>'
-                "</td></tr>")
-            i = 0                       # stripes restart under each band
-        for task, late in pairs:
-            out += _html_row(task, late, i, with_doer, site, banded)
-            i += 1
+    kinds = by_kind(rows)
+    # Delegation, Checklist and FMS are three different conversations, so
+    # they are the outer split. Company is the inner one, and only when
+    # there is more than one — a level-1 email is about one company and a
+    # band repeating its name on every block is furniture.
+    for kind, kind_rows in kinds:
+        if len(kinds) > 1:
+            out.append(_band(kind, len(kind_rows), span, top=True))
+        companies = by_company(kind_rows)
+        banded = len(companies) > 1
+        i = 0
+        for company, pairs in companies:
+            if banded:
+                out.append(_band(company, len(pairs), span, top=False))
+                i = 0               # stripes restart under each band
+            for task, late in pairs:
+                out += _html_row(task, late, i, with_doer, site, banded)
+                i += 1
 
     out.append("</tbody></table>")
     return "".join(out)
+
+
+def _band(label: str, n: int, span: int, top: bool) -> str:
+    """A heading row across the table: the work type, or the company.
+
+    Two weights, so a reader can see at a glance which split they are
+    looking at. One weight for both and the table reads as a flat list of
+    headings with no idea what contains what.
+    """
+    size, colour, pad = ("13px", BRAND, "18px 10px 8px") if top \
+        else ("12px", MUTED, "13px 10px 6px")
+    rule = f"2px solid {BRAND}" if top else f"1px solid {LINE}"
+    return (f'<tr><td colspan="{span}" style="padding:{pad};'
+            f'border-bottom:{rule};background:{PAPER};font-size:{size};'
+            f'font-weight:800;letter-spacing:.06em;text-transform:uppercase;'
+            f'color:{colour}">{_esc(label)}'
+            f'<span style="font-weight:600;color:{MUTED};letter-spacing:0;'
+            f'text-transform:none"> &middot; {n} task'
+            f'{"s" if n != 1 else ""}</span></td></tr>')
 
 
 def _html_row(task: Task, late: int, i: int, with_doer: bool, site: str,
@@ -501,6 +570,41 @@ def _html_row(task: Task, late: int, i: int, with_doer: bool, site: str,
     return out
 
 
+def html_cards(rows: list[tuple[Task, int]]) -> str:
+    """The three counts across the top, the way the dashboard shows them.
+
+    A digest that opens with a table makes somebody count rows to find out
+    how bad the morning is. Three numbers answer that before the first row
+    is read, and they answer the question people actually ask — is it the
+    delegation work, the checklist, or an FMS that has stalled.
+
+    Built as a TABLE with fixed widths, not a flex row: Outlook ignores
+    flex entirely and would stack three cards into one tall column.
+    """
+    cells = []
+    for label, n in counts_by_kind(rows):
+        # Nought is a RESULT, not an absence, so it is shown and shown
+        # quietly — grey rather than the warning colour, which is for
+        # something that needs doing.
+        colour = URGENT if n else MUTED
+        cells.append(
+            f'<td width="33%" valign="top" style="width:33.33%;padding:0 5px">'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" '
+            f'border="0" width="100%" style="width:100%;background:{PAPER};'
+            f'border:1px solid {LINE};border-radius:8px">'
+            f'<tr><td style="padding:12px 14px;font-family:{_FONT}">'
+            f'<div style="font-size:26px;line-height:1.1;font-weight:800;'
+            f'color:{colour}">{n}</div>'
+            f'<div style="margin-top:4px;font-size:11px;font-weight:700;'
+            f'letter-spacing:.06em;text-transform:uppercase;color:{MUTED}">'
+            f'{_esc(label)}</div>'
+            f'</td></tr></table></td>')
+    return ('<table role="presentation" cellpadding="0" cellspacing="0" '
+            'border="0" width="100%" style="width:100%;border-collapse:'
+            'separate;border-spacing:0"><tr>' + "".join(cells)
+            + "</tr></table>")
+
+
 def html_message(rows: list[tuple[Task, int]], heading: str, greeting: str,
                  said: str, level: int, urgent: bool, site: str = "",
                  footnote: str = "", with_doer: bool = True) -> str:
@@ -541,6 +645,11 @@ def html_message(rows: list[tuple[Task, int]], heading: str, greeting: str,
         f'font-size:13.5px;line-height:1.6;color:{INK}">'
         f'<p style="margin:0 0 10px"><strong>{_esc(greeting)}</strong></p>'
         f'<p style="margin:0">{_esc(said)}</p></td></tr>',
+
+        # The three counts, before the list. What is overdue, split the
+        # way the office splits its work.
+        f'<tr><td style="padding:14px 13px 2px;background:{SHELL}">'
+        + html_cards(rows) + "</td></tr>",
 
         # The list.
         '<tr><td style="padding:14px 18px 6px">'

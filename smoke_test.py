@@ -12215,8 +12215,11 @@ class _FakeDoer:
     def __init__(self, name): self.name = name
 
 
+from app.models import TaskSource as _TsZ
+
+
 class _FakeTask:
-    def __init__(self, n, company, doer):
+    def __init__(self, n, company, doer, src="delegation"):
         self.id = n
         self.ref = f"DEL-{n:03d}"
         self.ref_label = self.ref
@@ -12226,6 +12229,7 @@ class _FakeTask:
         self.doer = _FakeDoer(doer)
         self.due_at = _dtC(2026, 10, 20, 18, 0)
         self.priority = _PrB.MEDIUM
+        self.source = _TsZ(src)
 
 
 _mixed = [(_FakeTask(1, "Spa Kora", "Zoya"), 2),
@@ -12278,6 +12282,76 @@ check("but the company is still named on each row, as it always was",
       _oneHtmlZ.count("Bodyzone") == 2, str(_oneHtmlZ.count("Bodyzone")))
 check("and the text copy keeps its single set of headings",
       _ecZ.table(_oneCoZ).count("Task ID") == 1)
+
+print("\n== and split Delegation, Checklist, FMS ==")
+# Mixed together, a digest reads as one undifferentiated list and the
+# reader has to sort it in their head before acting: a missed daily
+# checklist and a stalled FMS step are not the same problem and do not go
+# to the same conversation.
+_mixZ = [(_FakeTask(11, "Bodyzone", "Zoya", "delegation"), 2),
+         (_FakeTask(12, "Spa Kora", "Amit", "recurring"), 3),
+         (_FakeTask(13, "Bodyzone", "Amit", "flow"), 1),
+         (_FakeTask(14, "Spa Kora", "Kiran", "delegation"), 2)]
+
+check("the rows are split by kind of work",
+      [k for k, _r in _ecZ.by_kind(_mixZ)] == ["Delegation", "Checklist", "FMS"],
+      str([k for k, _r in _ecZ.by_kind(_mixZ)]))
+check("in that order — delegation, then checklist, then FMS",
+      [lbl for _k, lbl in _ecZ.KINDS] == ["Delegation", "Checklist", "FMS"])
+check("a kind with nothing overdue is left out of the list",
+      [k for k, _r in _ecZ.by_kind([_mixZ[0]])] == ["Delegation"])
+# But NOT out of the counts: "no checklist work is overdue" is the thing
+# somebody most wants to see, and a row of cards that changes shape every
+# morning is a row people stop reading.
+check("but still shown in the counts, at nought",
+      _ecZ.counts_by_kind([_mixZ[0]]) == [("Delegation", 1), ("Checklist", 0),
+                                          ("FMS", 0)],
+      str(_ecZ.counts_by_kind([_mixZ[0]])))
+check("and the counts add up to the email's own total",
+      sum(n for _l, n in _ecZ.counts_by_kind(_mixZ)) == len(_mixZ))
+
+_cardsZ = _ecZ.html_cards(_mixZ)
+check("the three counts are drawn as cards above the list",
+      all(w in _cardsZ for w in ("Delegation", "Checklist", "FMS")))
+check("built as a table, because Outlook ignores flex and would stack them",
+      "<table" in _cardsZ and "display:flex" not in _cardsZ)
+
+_bodyZ = _ecZ.html_message(_mixZ, "Overdue work", "Respected Sir", "Please see.",
+                           2, False)
+check("the cards come before the first task row",
+      _bodyZ.index("Delegation") < _bodyZ.index("Task&nbsp;ID"))
+
+_htmlMixZ = _ecZ.html_table(_mixZ)
+check("the table is blocked by kind first",
+      _htmlMixZ.index("DELEGATION".title()) < _htmlMixZ.index("Checklist")
+      < _htmlMixZ.index("FMS"))
+# Three kind bands, plus a company band only where a kind actually spans
+# more than one company: Delegation does (Bodyzone and Spa Kora), the
+# other two do not. A band over a single block is furniture.
+check("and by company inside a kind that spans more than one",
+      _htmlMixZ.count("colspan") == 3 + 2, str(_htmlMixZ.count("colspan")))
+check("but not inside a kind that is all one company",
+      _htmlMixZ.count("Spa Kora") == 2, str(_htmlMixZ.count("Spa Kora")))
+
+_textMixZ = _ecZ.table(_mixZ)
+check("the plain-text copy carries the same counts on its first line",
+      _textMixZ.splitlines()[0] == "Delegation: 2   Checklist: 1   FMS: 1",
+      _textMixZ.splitlines()[0])
+check("and the same three sections, in the same order",
+      _textMixZ.index("== DELEGATION") < _textMixZ.index("== CHECKLIST")
+      < _textMixZ.index("== FMS"))
+
+# One kind, one company — a level-1 email about a single flow — must not
+# grow headings for splits that are not there.
+_oneZ = [(_FakeTask(15, "Bodyzone", "Amit", "flow"), 2)]
+check("one kind at one company gets no headings at all",
+      "colspan" not in _ecZ.html_table(_oneZ))
+check("and its text copy is just the table",
+      _ecZ.table(_oneZ).splitlines()[0].startswith("Task ID"),
+      _ecZ.table(_oneZ).splitlines()[0])
+check("though the counts still say which kind it was",
+      _ecZ.counts_by_kind(_oneZ) == [("Delegation", 0), ("Checklist", 0),
+                                     ("FMS", 1)])
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
