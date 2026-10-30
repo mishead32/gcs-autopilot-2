@@ -156,6 +156,19 @@
 {% endif %}
 
 <main>
+  {# A few days of festival colour, from the holiday list the office
+     already keeps. Nothing moves, nothing covers anything, nothing has to
+     be dismissed — a strip, and then the page as usual. #}
+  {% set fest = festive(user if user is defined else None) %}
+  {% if fest %}
+  <div class="festive f-{{ fest.theme.key }}"
+       style="--f-ink:{{ fest.theme.ink }};--f-a:{{ fest.theme.start }};--f-b:{{ fest.theme.end }}">
+    <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"
+      >{{ fest.theme.motif|safe }}</svg>
+    <span><strong>{{ fest.greeting }}</strong>
+      <span class="w">{{ fest.name }} {{ fest.when }}</span></span>
+  </div>
+  {% endif %}
   {% if BANNER %}<div class="banner">{{ BANNER }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>

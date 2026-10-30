@@ -80,6 +80,33 @@ from . import flash as _flash                       # noqa: E402
 templates.env.globals["pop_flash"] = _flash.pop
 
 
+def _festive(user):
+    """The festival strip for whoever is looking, or None.
+
+    Takes the person the page already has rather than looking one up:
+    every page that extends the base template is given `user`, and a
+    second lookup per request to decorate the page would be a query
+    nobody asked for.
+
+    The holiday itself is cached by day inside the service, so this is a
+    dictionary lookup after the first page of the morning — and it is
+    wrapped, because decoration must never be the reason a page fails to
+    load.
+    """
+    try:
+        if user is None or not getattr(user, "org_id", None):
+            return None
+        from .db import SessionLocal
+        from .services import festive as _f
+        with SessionLocal() as db:
+            return _f.coming(db, user.org_id, getattr(user, "branch_id", None))
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+templates.env.globals["festive"] = _festive
+
+
 class _Counter:
     """1, 2, 3 … handed out as a page renders.
 

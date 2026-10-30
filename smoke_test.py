@@ -13126,5 +13126,106 @@ check("the page carries the button and what is missing",
 
 _waV.URL, _waV.API_KEY, _waV.PHONE_ID, _waV.TEMPLATE = _wasV
 
+print("\n== a few days of festival colour ==")
+# The office already writes Diwali on the holidays page so the software
+# stops making work that day. That one line is enough to know the building
+# will be decorated the week before.
+from app.services import festive as _feF
+from app.models import Holiday as _HolF
+
+check("a festival is recognised from the name already typed",
+      _feF.theme_for("Diwali").key == "diwali"
+      and _feF.theme_for("Deepavali 2026").key == "diwali",
+      _feF.theme_for("Diwali").key)
+check("and matched however it is capitalised or spaced",
+      _feF.theme_for("  HOLI  ").key == "holi")
+check("several festivals have their own look",
+      len({_feF.theme_for(n).key for n in
+           ("Diwali", "Holi", "Christmas Day", "Eid", "New Year")}) == 5)
+# Inventing a greeting for a name nobody recognised is how software ends
+# up wishing somebody a happy strike.
+check("one it does not know still gets a day, with no invented greeting",
+      _feF.theme_for("Annual Stocktake").key == "day"
+      and _feF.theme_for("Annual Stocktake").greeting == "")
+check("nothing is loaded from the network, so a proxy cannot break it",
+      all("http" not in t.motif for _w, t in _feF.THEMES)
+      and "http" not in _feF.DEFAULT.motif)
+
+with _slQ() as _d:
+    _orgF = _d.scalar(_SEL(_OgQ))
+    _todayF = _escQ.clock.today()
+    for _old in _d.scalars(_SEL(_HolF).where(
+            _HolF.name.in_(("SMOKE Diwali", "SMOKE Faraway")))).all():
+        _d.delete(_old)
+    _d.commit()
+    _feF.forget()
+
+    # Just outside the ten days, then just inside.
+    _d.add(_HolF(org_id=_orgF.id, branch_id=None, name="SMOKE Faraway",
+                 day=_todayF + _tdT(days=_feF.LEAD_DAYS + 5)))
+    _d.commit()
+    _feF.forget()
+    _farF = _feF.coming(_d, _orgF.id, None, _todayF)
+    check("a festival further off than the lead time is not announced yet",
+          _farF is None or _farF.name != "SMOKE Faraway",
+          _farF.name if _farF else "none")
+
+    _d.add(_HolF(org_id=_orgF.id, branch_id=None, name="SMOKE Diwali",
+                 day=_todayF + _tdT(days=8)))
+    _d.commit()
+    _feF.forget()
+    _comF = _feF.coming(_d, _orgF.id, None, _todayF)
+    check("eight days out it is", _comF is not None and _comF.days == 8,
+          str(_comF.days if _comF else None))
+    check("and it knows how to say it",
+          _comF.when == "in 8 days" and _comF.greeting == "Happy Diwali",
+          f"{_comF.when} / {_comF.greeting}")
+    check("the nearest one wins, not the first one added",
+          _comF.name == "SMOKE Diwali", _comF.name)
+
+    # The last two days read as words rather than numbers.
+    for _n, _word in ((0, "today"), (1, "tomorrow")):
+        _d.scalar(_SEL(_HolF).where(_HolF.name == "SMOKE Diwali")
+                  ).day = _todayF + _tdT(days=_n)
+        _d.commit()
+        _feF.forget()
+        check(f"{_n} days out reads as that word, not a number",
+              _feF.coming(_d, _orgF.id, None, _todayF).when == _word,
+              _feF.coming(_d, _orgF.id, None, _todayF).when)
+
+    # One query a day. A decoration that costs a query on every click is a
+    # decoration that should not exist.
+    _d.scalar(_SEL(_HolF).where(_HolF.name == "SMOKE Diwali")
+              ).day = _todayF + _tdT(days=3)
+    _d.commit()
+    _feF.forget()
+    _firstF = _feF.coming(_d, _orgF.id, None, _todayF)
+    check("asked again the same day, it answers from memory",
+          _feF.coming(_d, _orgF.id, None, _todayF) is _firstF)
+    # And the memory does not grow for ever on a server that runs for
+    # months — yesterday's answers go when today is asked for.
+    _feF.coming(_d, _orgF.id, None, _todayF - _tdT(days=1))
+    _feF.coming(_d, _orgF.id, None, _todayF)
+    check("and yesterday's answers are thrown away",
+          all(k[2] == _todayF for k in _feF._SEEN),
+          str(list(_feF._SEEN)[:3]))
+
+_pageF = admin.get("/").text
+check("the strip is on the page",
+      "festive" in _pageF and "Happy Diwali" in _pageF)
+check("drawn, not fetched — no image tag, nothing from a server",
+      "<img" not in _pageF.split("festive")[1][:400])
+# Somebody who has asked their computer for less motion gets none.
+_cssF = open("app/static/app.css", encoding="utf-8").read()
+check("and it respects a request for less motion",
+      "prefers-reduced-motion" in _cssF and ".festive{animation:none}" in _cssF)
+
+with _slQ() as _d:
+    for _old in _d.scalars(_SEL(_HolF).where(
+            _HolF.name.in_(("SMOKE Diwali", "SMOKE Faraway")))).all():
+        _d.delete(_old)
+    _d.commit()
+    _feF.forget()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

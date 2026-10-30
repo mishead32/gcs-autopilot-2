@@ -1262,3 +1262,20 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
 .cogroup{margin:18px 0 6px;font-size:14px;font-weight:600;
          letter-spacing:.02em;color:var(--muted)}
 .cogroup .m{font-weight:400}
+
+/* ---------------------------------------------------------- festive ----
+   A few days of colour before a festival on the holiday list. One strip,
+   drawn with a gradient and a dozen characters of inline SVG: no image to
+   fetch, nothing to load from the network, nothing that moves except one
+   slow fade on arrival — and not even that for somebody who has asked
+   their computer for less motion. */
+.festive{display:flex;align-items:center;gap:10px;margin:0 0 16px;
+         padding:10px 14px;border-radius:10px;font-size:13.5px;
+         color:var(--f-ink);border:1px solid rgba(0,0,0,.06);
+         background:linear-gradient(90deg,var(--f-a),var(--f-b));
+         animation:festin .5s ease-out}
+.festive svg{flex:0 0 auto}
+.festive .w{opacity:.75;margin-left:6px}
+@keyframes festin{from{opacity:0;transform:translateY(-4px)}
+                  to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.festive{animation:none}}
