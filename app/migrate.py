@@ -75,6 +75,9 @@ ADDITIONS = {
         # Days overdue before the first level is told. 0 keeps what every
         # existing site already does, so nothing changes under anybody.
         ("esc_grace", "INTEGER DEFAULT 0"),
+        # Off by default: an email to every doer every morning is a real
+        # change in what the software does to people, not a tidy-up.
+        ("esc_doer_daily", "BOOLEAN DEFAULT 0"),
         ("esc_last_run", "DATE"),
         # This site's address, for the links inside an escalation email.
         # Filled in the first time the Escalation page is opened.

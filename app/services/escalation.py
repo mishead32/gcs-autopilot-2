@@ -477,6 +477,12 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
     ]
 
     span = 6 if with_doer else 5
+    # One running stripe index for the whole table, not one per block.
+    # Restarting it at each band left every block of a single row white,
+    # so a table of five one-row blocks had no stripes at all — and the
+    # striping is there precisely so a long row stays on its own line as
+    # the eye crosses it.
+    i = 0
     kinds = by_kind(rows)
     # Delegation, Checklist and FMS are three different conversations, so
     # they are the outer split. Company is the inner one, and only when
@@ -487,11 +493,9 @@ def html_table(rows: list[tuple[Task, int]], site: str = "",
             out.append(_band(kind, len(kind_rows), span, top=True))
         companies = by_company(kind_rows)
         banded = len(companies) > 1
-        i = 0
         for company, pairs in companies:
             if banded:
                 out.append(_band(company, len(pairs), span, top=False))
-                i = 0               # stripes restart under each band
             for task, late in pairs:
                 out += _html_row(task, late, i, with_doer, site, banded)
                 i += 1
@@ -872,6 +876,7 @@ def plan(db: Session, org: Organization, today: date) -> tuple[list, list, int]:
         g = groups.setdefault(key, {
             "rule": rule, "rungs": rungs, "level": level,
             "repeat_n": repeat_n, "rows": [], "below_sent": False,
+            "digest_on": bool(org.esc_doer_daily),
         })
         g["rows"].append((task, late))
         if any(e.level < level for e in sent):
@@ -891,6 +896,12 @@ def _doer_copies(group: dict) -> list[tuple[User, list]]:
     over their head without seeing it. So each doer gets a copy containing
     only their own rows.
     """
+    # With the morning list switched on, this copy would be a second email
+    # about the same work, arriving in the same minute. The morning list is
+    # the better of the two — it is everything they owe, not only what was
+    # escalated — so this one gives way to it.
+    if group.get("digest_on"):
+        return []
     by_doer: dict[int, list] = {}
     people: dict[int, User] = {}
     for task, late in group["rows"]:
@@ -901,6 +912,89 @@ def _doer_copies(group: dict) -> list[tuple[User, list]]:
     return sorted(
         ((people[i], rows) for i, rows in by_doer.items()),
         key=lambda p: (p[0].name or "").strip().lower())
+
+
+# --------------------------------------------- each doer's own morning list --
+# The ladder tells somebody's MANAGER. This tells the person who can
+# actually close the work, which is the cheapest way to make the ladder
+# unnecessary — and the thing every one of these systems is missing when
+# people say "nobody told me".
+#
+# Deliberately not on the ladder: no grace, no levels, no record against
+# the task. It is a list of what somebody owes, sent to them, every
+# morning they owe anything. Nothing about it can escalate, and it cannot
+# use up a rung.
+DIGEST_LEVEL = 0
+
+
+def doer_digests(db: Session, org: Organization, today: date
+                 ) -> list[tuple[User, list]]:
+    """[(doer, their overdue rows)] — everybody who owes anything today."""
+    rows = overdue_tasks(db, org.id, today, org.esc_working_days,
+                         org.esc_scope)
+    by_doer: dict[int, list] = {}
+    people: dict[int, User] = {}
+    for task, late in rows:
+        if task.doer is None or not (task.doer.email or "").strip():
+            continue
+        by_doer.setdefault(task.doer_id, []).append((task, late))
+        people[task.doer_id] = task.doer
+    return sorted(((people[i], sorted(r, key=sort_key))
+                   for i, r in by_doer.items()),
+                  key=lambda p: (p[0].name or "").strip().lower())
+
+
+def send_digests(db: Session, org: Organization, today: date,
+                 send: bool = True, site: str = "") -> dict:
+    """One morning list to each doer who has overdue work."""
+    out = {"people": 0, "tasks": 0, "sent": 0, "failed": 0}
+    if not org.esc_doer_daily:
+        return out
+    for person, rows in doer_digests(db, org, today):
+        # Once a day, like everything else here. A second run, or somebody
+        # pressing the button by hand, must not send it twice.
+        already = db.scalar(
+            select(EscalationMail).where(
+                EscalationMail.org_id == org.id, EscalationMail.day == today,
+                EscalationMail.level == DIGEST_LEVEL,
+                EscalationMail.to_email == person.email))
+        if already is not None:
+            continue
+        subject, body, body_html = compose_digest(person, rows, site)
+        m = EscalationMail(
+            org_id=org.id, day=today, level=DIGEST_LEVEL, repeat_n=0,
+            to_name=person.name, to_email=person.email, to_doer=True,
+            subject=subject, body=body, body_html=body_html,
+            task_count=len(rows))
+        db.add(m)
+        db.commit()
+        _deliver(db, m, send)
+        out["people"] += 1
+        out["tasks"] += len(rows)
+        out["sent" if m.status == "sent" else "failed"] += 1
+    return out
+
+
+def compose_digest(person: User, rows: list[tuple[Task, int]], site: str = ""
+                   ) -> tuple[str, str, str]:
+    """A doer's own morning list. Their work only, split the usual three ways."""
+    count = len(rows)
+    worst = max((late for _t, late in rows), default=0)
+    subject = (f"Your {count} overdue task{'' if count == 1 else 's'}"
+               + (f" — up to {worst} day{'' if worst == 1 else 's'} late"
+                  if worst else ""))
+    opening = f"Dear {(person.name or '').strip()},"
+    said = ("This is your own list of work that is past its planned date. "
+            "Nobody else has been sent it. Closing a task here is what "
+            "stops it being escalated to your head of department.")
+    # with_doer=False: every row would carry the same name, which is a
+    # column of noise where the task's own words could be instead.
+    body = "\n".join([opening, "", said, "", table(rows, with_doer=False)])
+    body_html = html_message(
+        rows, "Your overdue work", opening, said, DIGEST_LEVEL, False, site,
+        footnote="Sent to you only. It has not gone to anybody else.",
+        with_doer=False)
+    return subject, body, body_html
 
 
 def _deliver(db: Session, m: EscalationMail, send: bool) -> None:
@@ -1011,7 +1105,7 @@ def run(db: Session, org: Organization, on: date | None = None,
     today = on or clock.today()
     out = {"day": today, "looked": 0, "raised": 0, "emails": 0, "sent": 0,
            "failed": 0, "queued": 0, "skipped_no_ladder": 0, "ran": False,
-           "why": ""}
+           "why": "", "digest_people": 0, "digest_tasks": 0}
 
     if not org.esc_on and not force:
         out["why"] = "Escalation is switched off."
@@ -1045,6 +1139,12 @@ def run(db: Session, org: Organization, on: date | None = None,
         out["raised"] += m.task_count
         out["emails"] += 1
         out[{"sent": "sent", "failed": "failed"}.get(m.status, "queued")] += 1
+
+    # Each doer's own list, after the ladder — so a task escalated this
+    # morning is on the list they get this morning rather than tomorrow's.
+    digest = send_digests(db, org, today, send, site)
+    out["digest_people"] = digest["people"]
+    out["digest_tasks"] = digest["tasks"]
 
     org.esc_last_run = today
     db.commit()

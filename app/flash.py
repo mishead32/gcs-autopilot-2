@@ -27,6 +27,12 @@ KINDS = {
     "held":      ("warn", "FMS run put on hold"),
     "resumed":   ("ok", "FMS run resumed"),
     "stopped":   ("bad", "FMS run stopped"),
+    # Anything that was tried and did not work: a sheet that could not be
+    # read, an email that would not send. A kind that is not in this map
+    # is dropped in silence, so five callers were already writing "error"
+    # and showing the person nothing at all — the exact failure they were
+    # trying to report.
+    "error":     ("bad", "That did not work"),
 }
 
 

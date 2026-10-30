@@ -128,11 +128,49 @@ def page(request: Request, scope: str = "",
     })
 
 
+@router.post("/test")
+def send_test(request: Request, user: User = Depends(manage)):
+    """One short email to whoever asked for it, and the plain truth back.
+
+    Mail either works or it does not, and the only other way to find out
+    was to force a real escalation run — which spends a rung on every
+    overdue task to answer the question, and cannot be undone. This costs
+    one email to the person pressing the button.
+    """
+    if not (user.email or "").strip():
+        flash.set(request, "error",
+                  "Your own account has no email address, so there is "
+                  "nowhere to send the test.")
+        return RedirectResponse("/escalation", status_code=303)
+    if not mail.enabled():
+        flash.set(request, "error", mail.status())
+        return RedirectResponse("/escalation", status_code=303)
+
+    ok, why = mail.send(
+        [user.email], "GCS Autopilot — test email",
+        "This is a test from GCS Autopilot's escalation settings.\n\n"
+        "If you are reading it, escalation emails will reach people too.",
+        html="<p style=\"font-family:system-ui,sans-serif\">This is a test "
+             "from GCS Autopilot's escalation settings.</p><p "
+             "style=\"font-family:system-ui,sans-serif\">If you are reading "
+             "it, escalation emails will reach people too.</p>")
+    if ok:
+        flash.set(request, "saved",
+                  f"Sent to {user.email}. If it is not there in a minute, "
+                  "look in the spam folder — the first one often lands "
+                  "there until somebody marks it as not spam.")
+    else:
+        flash.set(request, "error",
+                  f"It did not send: {why}{mail.advice(why)}")
+    return RedirectResponse("/escalation", status_code=303)
+
+
 @router.post("/settings")
 def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),
                   scope: str = Form("chased"), hour: str = Form("9"),
                   site_url: str = Form(""), grace: str = Form("0"),
+                  doer_daily: str = Form(""),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
@@ -168,6 +206,8 @@ def save_settings(request: Request, esc_on: str = Form(""),
             400, "Days overdue before the first level has to be a whole "
                  "number — 0 for the first day a task is late, 3 to start "
                  "on the fourth day.")
+
+    org.esc_doer_daily = bool(doer_daily)
 
     if after_top not in AFTER_TOP:
         raise HTTPException(400, "Choose what happens after the top level.")

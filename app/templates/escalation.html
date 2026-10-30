@@ -43,6 +43,21 @@
       before then is never escalated at all, which is the point.
     </div>
 
+    <label class="check" style="margin-top:4px">
+      <input type="checkbox" name="doer_daily" value="1"
+             {{ 'checked' if org.esc_doer_daily }}>
+      <span>Send <strong>every doer their own overdue list</strong> each
+        morning</span></label>
+    <div class="m" style="margin:4px 0 14px">
+      Their work only — delegation, checklist and FMS, counted and split
+      the same three ways. Nobody else is sent it, and it goes from the
+      first day something is late, whatever the grace above: the ladder
+      tells somebody's manager, this tells the person who can actually
+      close the work. With this on, the separate "your work was reported"
+      copy is not sent as well — one email in the morning, not two in the
+      same minute.
+    </div>
+
     <label>What counts as a day overdue</label>
     <select name="working_days">
       <option value="1" {{ 'selected' if org.esc_working_days }}>
@@ -123,7 +138,24 @@
         sent, so switching the mailbox on later shows exactly what the
         morning would have sent.
       </p>
+      <p class="m" style="margin:8px 0 0">
+        If sending fails with <strong>Network is unreachable</strong>, the
+        mailbox is fine — this host blocks the SMTP ports. Send over
+        HTTPS instead: set <code>MAIL_API</code> to <code>brevo</code> or
+        <code>resend</code>, and <code>MAIL_API_KEY</code> to that
+        provider's key.
+      </p>
       {% endif %}
+      {# The only honest way to know whether mail works. Forcing a real
+         escalation run would answer it too, and would spend a rung on
+         every overdue task to do so — an answer that costs the thing it
+         was testing. #}
+      <form method="post" action="/escalation/test" style="margin-top:12px">
+        <button class="btn sm ghost"
+          title="One short email to your own address, right now">
+          Send me a test email</button>
+        <span class="m"> to {{ user.email }}</span>
+      </form>
     </div>
 
     {% if gaps %}

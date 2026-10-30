@@ -302,6 +302,11 @@ class Organization(Base):
     # would reach a department head. A grace of 3 means the ladder starts
     # on the fourth day, then climbs a level a day as before.
     esc_grace: Mapped[int] = mapped_column(Integer, default=0)
+    # A list of their OWN overdue work to every doer who has any, each
+    # morning, whether or not it has been escalated. The ladder tells
+    # somebody's manager; this tells the person who can actually close it,
+    # which is the cheapest way to make the ladder unnecessary.
+    esc_doer_daily: Mapped[bool] = mapped_column(Boolean, default=False)
     # The last day the check actually ran. The daily run is keyed off this
     # rather than a timer, so a restart, a second web process or somebody
     # pressing "Run the check now" cannot send the same morning twice.

@@ -2175,12 +2175,17 @@ with _SLP() as _d:
 _t, _pos = _open_step(_i2id)
 with _SLP() as _d:
     _due1 = _d.get(_TKT, _t).due_at
-# In HOURS, not .days. A two-day deadline that lands on a Sunday is pulled
-# back to the Saturday, which leaves a gap of one day minus a few
-# microseconds — and .days floors that to 0, so the check failed on the one
-# day of the week the shift actually happens.
-check("step 1 is due a day or two out",
-      23 <= (_due1 - _ck.now()).total_seconds() / 3600 <= 49, str(_due1))
+# In HOURS, not .days, and a floor with a generous ceiling.
+#
+# This comment used to say a Sunday deadline was pulled BACK to the
+# Saturday. It is not any more — an FMS chain cannot be dragged backwards
+# without stacking later steps on top of the work they wait for, so a
+# closed day now moves a deadline FORWARD. That makes two days sometimes
+# three, or four over a holiday weekend. An exact ceiling passed all week
+# and failed on a Friday, which is a test that only works on the days
+# nothing is wrong.
+check("step 1 is due a day or two out, or the next working day after that",
+      23 <= (_due1 - _ck.now()).total_seconds() / 3600 <= 24 * 5, str(_due1))
 amit.post(f"/tasks/{_t}/submit", data={})
 _t, _pos = _open_step(_i2id)
 with _SLP() as _d:
@@ -10197,12 +10202,26 @@ with _slQ() as _d:
           _mQ.body)
 
     # Sorted by doer name A to Z — the thing that makes it readable.
+    #
+    # Within each SECTION, not across the whole table: the list is split
+    # Delegation, Checklist, FMS and then by company, so one global A-to-Z
+    # would mean the sections were not split at all. The promise is that
+    # one person's work sits together wherever you are reading.
     _bodyQ = _mQ.body.splitlines()
     _dataQ = [l for l in _bodyQ
               if l[:4] in ("DEL-", "CL-0", "FMS-") or l.startswith("CL-")]
-    _namesQ = [l[18:40].strip() for l in _dataQ]
-    check("the rows are sorted by doer name, A to Z",
-          _namesQ == sorted(_namesQ, key=str.lower), _namesQ)
+    _runsQ, _cur = [], []
+    for _l in _bodyQ:
+        if _l[:4] in ("DEL-", "CL-0", "FMS-") or _l.startswith("CL-"):
+            _cur.append(_l[18:40].strip())
+        elif _cur:
+            _runsQ.append(_cur)
+            _cur = []
+    if _cur:
+        _runsQ.append(_cur)
+    check("the rows are sorted by doer name, A to Z inside each section",
+          all(r == sorted(r, key=str.lower) for r in _runsQ), str(_runsQ))
+    _namesQ = [n for r in _runsQ for n in r]
     check("so one person's tasks sit together",
           len(_dataQ) == _mQ.task_count, (len(_dataQ), _mQ.task_count))
 
@@ -10276,9 +10295,15 @@ with _slQ() as _d:
 # and people's names are typed by hand by twenty staff.
 with _slQ() as _d:
     _orgQ = _d.scalar(_SEL(_OgQ))
+    # One with SEVERAL tasks in it. Striping only exists to keep a long
+    # row on its own line as the eye crosses it, so a one-row email has
+    # nothing to stripe and proves nothing about whether striping works.
     _mQ = _d.scalar(_SEL(_EmQ).where(_EmQ.org_id == _orgQ.id,
-                                     _EmQ.to_doer.is_(False))
-                    .order_by(_EmQ.id.desc()))
+                                     _EmQ.to_doer.is_(False),
+                                     _EmQ.task_count > 1)
+                    .order_by(_EmQ.id.desc())) or _d.scalar(
+        _SEL(_EmQ).where(_EmQ.org_id == _orgQ.id, _EmQ.to_doer.is_(False))
+        .order_by(_EmQ.id.desc()))
     check("the email has an HTML version", (_mQ.body_html or "").strip(),
           _mQ.id)
     check("and a plain-text version alongside it", _mQ.body.strip())
@@ -12452,6 +12477,165 @@ check("a grace that is not a number is refused rather than read as nought",
 with _slQ() as _d:
     _d.scalar(_SEL(_OgQ)).esc_grace = 0
     _d.commit()
+
+print("\n== every doer gets their own morning list ==")
+# The ladder tells somebody's MANAGER. This tells the person who can
+# actually close the work, which is the cheapest way to make the ladder
+# unnecessary — and the thing people mean when they say nobody told them.
+from app.services import mail as _mlD
+_hD, _fD, _sD = _mlD.HOST, _mlD.FROM, _mlD.send
+_mlD.HOST, _mlD.FROM = "smtp.test", "gcs@test"
+_mlD.send = lambda *a, **k: (True, "")
+
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ))
+    _orgD.esc_on = True
+    _orgD.esc_doer_daily = False
+    _orgD.esc_last_run = None
+    _d.commit()
+    _dayD = _escQ.clock.today()
+    _beforeD = len(_d.scalars(_SEL(_EmQ).where(
+        _EmQ.level == _escQ.DIGEST_LEVEL)).all())
+    _outOffD = _escQ.run(_d, _orgD, send=True)
+    check("with the setting off, no morning lists are sent",
+          _outOffD["digest_people"] == 0, str(_outOffD["digest_people"]))
+
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ))
+    _orgD.esc_doer_daily = True
+    _orgD.esc_last_run = None
+    _d.commit()
+    _whoD = _escQ.doer_digests(_d, _orgD, _dayD)
+    check("every doer with overdue work is on the list",
+          len(_whoD) >= 1, str(len(_whoD)))
+    check("and nobody without an email address is",
+          all((p.email or "").strip() for p, _r in _whoD))
+    check("people in name order, so the log reads the same way every day",
+          [p.name.lower() for p, _r in _whoD]
+          == sorted(p.name.lower() for p, _r in _whoD))
+
+    _person, _rowsD = _whoD[0]
+    _subD, _txtD, _htmlD = _escQ.compose_digest(_person, _rowsD)
+    check("the subject is their own count, not a level",
+          "overdue task" in _subD and "Escalation" not in _subD, _subD)
+    check("the email says it went to nobody else",
+          "Nobody else has been sent it" in _txtD)
+    check("it carries the three counts, like the ladder's own email",
+          all(w in _htmlD for w in ("Delegation", "Checklist", "FMS")))
+    check("their own rows only",
+          all(t.doer_id == _person.id for t, _l in _rowsD))
+    # Their name on every row would be a column of noise where the task's
+    # own words could be instead.
+    check("and no Doer column, because every row would be them",
+          "Doer" not in _htmlD.split("</thead>")[0])
+
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ))
+    _orgD.esc_last_run = None
+    _d.commit()
+    _outD = _escQ.run(_d, _orgD, send=True)
+    check("the morning run sends them", _outD["digest_people"] >= 1,
+          str(_outD["digest_people"]))
+    _madeD = _d.scalars(_SEL(_EmQ).where(
+        _EmQ.level == _escQ.DIGEST_LEVEL, _EmQ.day == _dayD)).all()
+    check("each one is written down, so the log shows what was sent",
+          len(_madeD) == _outD["digest_people"], str(len(_madeD)))
+    check("marked as the doer's own, not as an escalation",
+          all(m.to_doer for m in _madeD))
+    # Running twice must not send it twice — a second run, or somebody
+    # pressing the button by hand, is not a second morning.
+    _againD = _escQ.run(_d, _orgD, send=True, force=True)
+    check("running again sends nobody a second copy",
+          _againD["digest_people"] == 0, str(_againD["digest_people"]))
+
+# With the morning list on, the "your work was reported" copy stops: one
+# email in the morning, not two in the same minute about the same work.
+check("the per-escalation doer copy gives way to it",
+      _escQ._doer_copies({"rows": [], "digest_on": True}) == [])
+
+_pageD = adminQ.get("/escalation").text
+check("the page offers the setting", 'name="doer_daily"' in _pageD)
+check("and says it is their work only",
+      "Their work only" in _pageD or "their own overdue list" in _pageD)
+
+_mlD.HOST, _mlD.FROM, _mlD.send = _hD, _fD, _sD
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ))
+    _orgD.esc_doer_daily = False
+    _orgD.esc_on = False
+    _d.commit()
+
+print("\n== sending over HTTPS, because the SMTP ports are blocked ==")
+# Render's free web services block outbound traffic to ports 25, 465 and
+# 587, so smtplib cannot open the connection at all: every send comes back
+# "[Errno 101] Network is unreachable" with nothing wrong with the mailbox
+# or the password.
+check("with no provider and no host, there is nowhere to send",
+      not _mlD.enabled() or bool(_mlD.HOST))
+_apiWas, _keyWas, _fromWas = _mlD.API, _mlD.API_KEY, _mlD.FROM
+_mlD.API, _mlD.API_KEY, _mlD.FROM = "brevo", "key-123", "gcs@test"
+check("a provider and a key are enough on their own, with no SMTP host",
+      _mlD.api_ready() and _mlD.enabled())
+check("and the status line says which way it will go",
+      "brevo" in _mlD.status() and "HTTPS" in _mlD.status(), _mlD.status())
+_mlD.API = "pigeon"
+check("a provider this app does not know is named, not ignored",
+      not _mlD.api_ready() and "pigeon" in _mlD.status(), _mlD.status())
+_mlD.API, _mlD.API_KEY = "resend", ""
+check("a provider with no key says that, rather than failing at nine am",
+      not _mlD.api_ready() and "MAIL_API_KEY" in _mlD.status(), _mlD.status())
+_mlD.API, _mlD.API_KEY, _mlD.FROM = _apiWas, _keyWas, _fromWas
+
+print("\n== proving mail works without spending a rung ==")
+# The only other way to find out whether email is set up was to force a
+# real escalation run, which spends a level on every overdue task to
+# answer the question and cannot be undone.
+from app.services import mail as _mlT
+_hT, _fT, _sT = _mlT.HOST, _mlT.FROM, _mlT.send
+_sentT = []
+
+_mlT.HOST, _mlT.FROM = "", ""
+_rOffT = adminQ.post("/escalation/test")
+check("with no mail set up the test says so rather than pretending",
+      _rOffT.status_code in (200, 303))
+check("and sends nothing", not _sentT)
+
+_mlT.HOST, _mlT.FROM = "smtp.test", "gcs@test"
+_mlT.send = lambda to, subject, body, cc=None, html="": (
+    _sentT.append((to, subject)) or (True, ""))
+_rOnT = adminQ.post("/escalation/test", follow_redirects=True)
+check("with mail set up it sends exactly one email", len(_sentT) == 1,
+      str(_sentT))
+with _slQ() as _d:
+    _meT = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+check("to the address of whoever pressed the button, and nobody else",
+      _sentT and _sentT[0][0] == [_meT.email], str(_sentT))
+check("the page says where it went",
+      _meT.email in _rOnT.text, "address not shown")
+# Nothing about a test may touch the ladder: no Escalation rows, no
+# EscalationMail, nothing that could make tomorrow skip a level.
+with _slQ() as _d:
+    _escCountT = len(_d.scalars(_SEL(_EsQ)).all())
+adminQ.post("/escalation/test")
+with _slQ() as _d:
+    check("and a test never records an escalation against any task",
+          len(_d.scalars(_SEL(_EsQ)).all()) == _escCountT)
+
+_mlT.send = lambda *a, **k: (False, "OSError: [Errno 101] Network is unreachable")
+_rFailT = adminQ.post("/escalation/test", follow_redirects=True)
+check("a failure is reported in the provider's own words",
+      "Errno 101" in _rFailT.text or "did not send" in _rFailT.text)
+check("a doer cannot send test emails from the system's account",
+      doer.post("/escalation/test").status_code == 403)
+# The hint lives with the failure, not only on the not-configured card:
+# somebody whose MAIL_HOST is set and failing is exactly who needs it.
+check("the failure itself explains what Errno 101 means",
+      "blocks the SMTP ports" in _rFailT.text, "hint missing")
+_mlT.HOST, _mlT.FROM = "", ""
+check("and the card says it too while nothing is configured",
+      "blocks the SMTP ports" in adminQ.get("/escalation").text)
+
+_mlT.HOST, _mlT.FROM, _mlT.send = _hT, _fT, _sT
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -52,19 +52,54 @@ FROM_NAME = os.getenv("MAIL_FROM_NAME", "").strip() or "GCS Autopilot"
 REPLY_TO = os.getenv("MAIL_REPLY_TO", "").strip()
 TIMEOUT = float(os.getenv("MAIL_TIMEOUT", "20") or 20)
 
+# ----------------------------------------------- sending over HTTPS instead --
+# Render's free web services block outbound traffic to the SMTP ports — 25,
+# 465 and 587 — so smtplib cannot open the connection at all and every send
+# comes back "[Errno 101] Network is unreachable". Nothing about the mailbox
+# or the password is wrong; the port is simply not reachable from there.
+#
+# The way out that does not cost anything is to hand the message to a mail
+# provider over ordinary HTTPS, which is not blocked. One extra environment
+# variable each, and the rest of this module does not change:
+#
+#     MAIL_API       brevo | resend
+#     MAIL_API_KEY   that provider's key
+#     MAIL_FROM      still the address it comes from
+#
+# Set, it is used instead of SMTP. Unset, nothing changes for anybody.
+API = os.getenv("MAIL_API", "").strip().lower()
+API_KEY = os.getenv("MAIL_API_KEY", "").strip()
+
+APIS = {
+    "brevo": ("https://api.brevo.com/v3/smtp/email", "api-key"),
+    "resend": ("https://api.resend.com/emails", "bearer"),
+}
+
 # Good enough to catch a typo and a blank, and nothing more. A stricter
 # pattern rejects addresses that are perfectly valid and the person on the
 # other end of it cannot tell why.
 ADDRESS = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
 
 
+def api_ready() -> bool:
+    """True when a provider's HTTPS interface is set up and usable."""
+    return bool(API in APIS and API_KEY and FROM)
+
+
 def enabled() -> bool:
-    """True when there is somewhere to send from."""
-    return bool(HOST and FROM)
+    """True when there is somewhere to send from — either way."""
+    return bool(FROM and (api_ready() or HOST))
 
 
 def status() -> str:
     """One line for the Setup page — never the password, not even its length."""
+    if api_ready():
+        return f"{FROM} via {API} over HTTPS"
+    if API and not API_KEY:
+        return f"MAIL_API is {API}, but MAIL_API_KEY is empty."
+    if API and API not in APIS:
+        return (f"MAIL_API is “{API}”, which is not one this app knows. "
+                f"Use one of: {', '.join(sorted(APIS))}.")
     if not HOST:
         return "No mail server set. Escalations will be written down but not sent."
     if not FROM:
@@ -100,6 +135,21 @@ def _safe(text: str) -> str:
     return msg[:400]
 
 
+def advice(why: str) -> str:
+    """What to do about a failure whose own words do not say.
+
+    One case so far, and it is the one that wastes the most time: nothing
+    is wrong with the mailbox or the password, the SMTP port is simply not
+    reachable from this host. Separate from send() so that whoever SHOWS a
+    failure can add it too — a message stored before this existed, or one
+    handed back by something other than smtplib, still gets the hint.
+    """
+    if "Network is unreachable" in (why or "") or "Errno 101" in (why or ""):
+        return (" — this host blocks the SMTP ports. Send over HTTPS "
+                "instead: set MAIL_API and MAIL_API_KEY.")
+    return ""
+
+
 def send(to: list[str], subject: str, body: str,
          cc: list[str] | None = None, html: str = "") -> tuple[bool, str]:
     """Send one message. Returns (sent, reason-when-not).
@@ -124,6 +174,13 @@ def send(to: list[str], subject: str, body: str,
         return False, "No valid address to send to."
     if not enabled():
         return False, "No mail server is set up yet."
+
+    # Over HTTPS when a provider is configured, because the SMTP ports are
+    # blocked wherever this is likely to be hosted. Tried first rather than
+    # as a fallback: falling back would mean every send waiting out an SMTP
+    # timeout before doing the thing that works.
+    if api_ready():
+        return _send_api(to, subject, body, cc, html)
 
     msg = EmailMessage()
     msg["From"] = formataddr((FROM_NAME, FROM))
@@ -163,4 +220,64 @@ def send(to: list[str], subject: str, body: str,
             server.send_message(msg, to_addrs=to + cc)
         return True, ""
     except Exception as exc:                      # noqa: BLE001 — see docstring
+        why = _safe(f"{type(exc).__name__}: {exc}")
+        return False, why + advice(why)
+
+
+def _send_api(to: list[str], subject: str, body: str,
+              cc: list[str], html: str) -> tuple[bool, str]:
+    """Hand the message to a provider over HTTPS. Never raises.
+
+    Two providers, because two is enough to not be stuck with one and few
+    enough to keep this readable. Both take the same five things; only the
+    shape of the request differs.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    url, auth = APIS[API]
+    if API == "brevo":
+        payload = {
+            "sender": {"email": FROM, "name": FROM_NAME},
+            "to": [{"email": a} for a in to],
+            "subject": subject,
+            "textContent": body,
+        }
+        if html:
+            payload["htmlContent"] = html
+        if cc:
+            payload["cc"] = [{"email": a} for a in cc]
+        if REPLY_TO:
+            payload["replyTo"] = {"email": REPLY_TO}
+        headers = {"api-key": API_KEY}
+    else:                                                     # resend
+        payload = {"from": f"{FROM_NAME} <{FROM}>", "to": to,
+                   "subject": subject, "text": body}
+        if html:
+            payload["html"] = html
+        if cc:
+            payload["cc"] = cc
+        if REPLY_TO:
+            payload["reply_to"] = REPLY_TO
+        headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as answer:
+            if 200 <= answer.status < 300:
+                return True, ""
+            return False, _safe(f"{API} answered {answer.status}")
+    except urllib.error.HTTPError as exc:
+        # The provider's own words, which say what is wrong far better than
+        # a status code: an unverified sender, a key that has been revoked.
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:200]
+        except Exception:                                     # noqa: BLE001
+            pass
+        return False, _safe(f"{API} refused it ({exc.code}): {detail}")
+    except Exception as exc:                                  # noqa: BLE001
         return False, _safe(f"{type(exc).__name__}: {exc}")
