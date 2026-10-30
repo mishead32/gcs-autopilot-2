@@ -67,9 +67,13 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..models import (
     Branch, Escalation, EscalationMail, EscalationRule, Organization,
-    Priority, Task, TaskStatus, User, PARKED_STATES,
+    OutboundMessage, Priority, Task, TaskStatus, User, PARKED_STATES,
 )
-from . import chasing, holidays, mail
+
+# The name this morning's WhatsApp goes out under, so a second run can see
+# that today's has already gone without opening the provider's log.
+WA_DIGEST = "overdue_digest"
+from . import cardimg, chasing, holidays, mail, whatsapp
 
 # The states in which the work is still owed by the doer.
 OPEN = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
@@ -991,6 +995,73 @@ def send_digests(db: Session, org: Organization, today: date,
     return out
 
 
+def send_whatsapp_digests(db: Session, org: Organization, today: date,
+                          send: bool = True, site: str = "") -> dict:
+    """Each doer's morning list again, as a picture, on WhatsApp.
+
+    The same people and the same rows as the email — read from the same
+    place, so the two can never disagree about what somebody owes.
+
+    A message that fails is recorded and left: nothing about WhatsApp
+    touches the ladder, so a provider that is down costs a picture and
+    not a rung.
+    """
+    out = {"people": 0, "sent": 0, "failed": 0, "no_number": 0}
+    if not org.esc_doer_whatsapp or not whatsapp.enabled():
+        return out
+    base = (org.site_url or site or "").strip()
+    for person, rows in doer_digests(db, org, today):
+        if not whatsapp.number(person.phone or ""):
+            out["no_number"] += 1
+            continue
+        already = db.scalar(select(OutboundMessage).where(
+            OutboundMessage.org_id == org.id,
+            OutboundMessage.template == WA_DIGEST,
+            OutboundMessage.to_phone == whatsapp.number(person.phone),
+            OutboundMessage.created_at >= datetime.combine(
+                today, datetime.min.time())))
+        if already is not None:
+            continue                       # once a day, like everything here
+
+        counts = counts_by_kind(rows)
+        png = cardimg.report_png(
+            person.name,
+            f"{len(rows)} overdue task{'' if len(rows) == 1 else 's'}"
+            f" · {today.strftime('%d %b %Y')}",
+            counts, by_kind(rows),
+            "Close a task in GCS Autopilot and it stops being chased.")
+        _path, url = cardimg.publish(db, org.id, png, about=person.name,
+                                     base_url=base)
+
+        msg = OutboundMessage(
+            org_id=org.id, template=WA_DIGEST,
+            to_phone=whatsapp.number(person.phone),
+            body=whatsapp.preview(person.name, counts))
+        db.add(msg)
+        db.commit()
+        out["people"] += 1
+
+        if not send:
+            continue
+        if not url:
+            msg.status = "failed"
+            msg.error = ("This site's web address is not known yet, so the "
+                         "picture has no link the provider could fetch. "
+                         "Open any page here once, or set it on the "
+                         "escalation page.")
+            db.commit()
+            out["failed"] += 1
+            continue
+        ok, why = whatsapp.send(person.phone,
+                                whatsapp.variables(person.name, counts), url)
+        msg.status = "sent" if ok else "failed"
+        msg.error = None if ok else why
+        msg.sent_at = clock.now() if ok else None
+        db.commit()
+        out["sent" if ok else "failed"] += 1
+    return out
+
+
 def compose_digest(person: User, rows: list[tuple[Task, int]], site: str = ""
                    ) -> tuple[str, str, str]:
     """A doer's own morning list. Their work only, split the usual three ways."""
@@ -1121,7 +1192,8 @@ def run(db: Session, org: Organization, on: date | None = None,
     today = on or clock.today()
     out = {"day": today, "looked": 0, "raised": 0, "emails": 0, "sent": 0,
            "failed": 0, "queued": 0, "skipped_no_ladder": 0, "ran": False,
-           "why": "", "digest_people": 0, "digest_tasks": 0}
+           "why": "", "digest_people": 0, "digest_tasks": 0,
+           "whatsapp_sent": 0, "whatsapp_failed": 0, "whatsapp_no_number": 0}
 
     if not org.esc_on and not force:
         out["why"] = "Escalation is switched off."
@@ -1171,6 +1243,20 @@ def run(db: Session, org: Organization, on: date | None = None,
     digest = send_digests(db, org, today, send, site)
     out["digest_people"] = digest["people"]
     out["digest_tasks"] = digest["tasks"]
+
+    # And the same list on WhatsApp, for the people who read that and not
+    # their email. Last, and in its own try: a provider that is down must
+    # not cost the emails that already went.
+    try:
+        wa = send_whatsapp_digests(db, org, today, send, site)
+        out["whatsapp_sent"] = wa["sent"]
+        out["whatsapp_failed"] = wa["failed"]
+        out["whatsapp_no_number"] = wa["no_number"]
+        cardimg.sweep(db, org.id)
+    except Exception as exc:                              # noqa: BLE001
+        db.rollback()
+        out["whatsapp_failed"] = -1
+        print(f"WhatsApp digests failed: {exc}")
 
     org.esc_last_run = today
     db.commit()

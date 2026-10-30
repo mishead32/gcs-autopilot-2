@@ -313,6 +313,10 @@ class Organization(Base):
     # or not at all. Blank means every day, which is what every site did
     # before this existed.
     esc_days: Mapped[str] = mapped_column(String(20), default="")
+    # The same morning list, on WhatsApp, as a picture. Separate from the
+    # email switch: a doer with no email address may still have a phone,
+    # and an office may want one channel and not the other.
+    esc_doer_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False)
 
     @property
     def esc_day_list(self) -> list[int]:
@@ -915,6 +919,43 @@ def _step_tat_defaults(mapper, connection, target: "FlowStep") -> None:
         # A span of nothing is not a turnaround, so a blank or a zero means
         # the smallest real answer.
         target.tat_value = target.tat_value or 1
+
+
+class PublicImage(Base):
+    """A picture the app serves at a public link, for a few days.
+
+    WhatsApp's provider does not accept a file; it accepts a URL and fetches
+    it itself, from its own servers, with none of this office's cookies. So
+    the picture has to be reachable without signing in — which is exactly
+    the thing the rest of this software refuses to do, and the reason this
+    is a table of its own rather than a flag on something else.
+
+    What makes that safe enough is the name. The link carries 32 random
+    hex characters and nothing else: no task number, no person's name, no
+    date, nothing to count up or guess at. Somebody who has the link sees
+    one person's overdue list; somebody who does not cannot find it by
+    trying.
+
+    Kept in the database rather than a bucket. It is one small PNG per
+    person per morning — forty of them a day is three megabytes a week —
+    and a bucket is another account, another key and another thing to be
+    expired or misconfigured on the morning it is needed. Old rows are
+    deleted, so this does not grow for ever.
+    """
+    __tablename__ = "public_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="image/png")
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(default=clock.now, index=True)
+    # Who it is about, so the log can say so without opening the picture.
+    about: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+    @property
+    def path(self) -> str:
+        return f"/m/{self.token}.png"
 
 
 class FlowSheet(Base):
@@ -1846,11 +1887,15 @@ class Followup(Base):
 
 
 class OutboundMessage(Base):
-    """Queue for WhatsApp/SMS notifications.
+    """Every WhatsApp/SMS message, queued or sent, with what happened to it.
 
-    Nothing is sent yet - rows are written by the app and a provider adapter
-    (Gupshup / WATI / Meta Cloud API) drains the queue. Keeps the notification
-    channel swappable.
+    Most rows are still only queued: the app writes them and a provider
+    adapter drains the queue, which keeps the channel swappable. The
+    morning overdue list is the first thing that sends for itself, through
+    the office's own provider — so this now records the outcome too, and
+    `error` is the provider's own words about a message that did not
+    arrive. A queue that cannot say why something failed is a queue
+    somebody has to guess at.
     """
     __tablename__ = "outbound_messages"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1860,6 +1905,7 @@ class OutboundMessage(Base):
     body: Mapped[str] = mapped_column(Text)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")
+    error: Mapped[str | None] = mapped_column(String(400), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

@@ -12887,5 +12887,177 @@ with _slQ() as _d:
     _orgH.esc_on = False
     _d.commit()
 
+print("\n== the same report as a picture, for WhatsApp ==")
+# WhatsApp will not show a table. It shows a photo, read on a phone in the
+# three seconds somebody gives it between two other messages.
+from app.services import cardimg as _ciW
+from io import BytesIO as _BIO
+from PIL import Image as _ImW
+
+_rowsW = [(_FakeTask(21, "Bodyzone", "Muskan", "delegation"), 4),
+          (_FakeTask(22, "Bodyzone", "Muskan", "recurring"), 1),
+          (_FakeTask(23, "Bodyzone", "Muskan", "flow"), 2)]
+_pngW = _ciW.report_png("Muskan Khan", "3 overdue tasks",
+                        _ecZ.counts_by_kind(_rowsW), _ecZ.by_kind(_rowsW),
+                        "Close a task and it stops being chased.")
+check("it produces a real PNG", _pngW[:8] == b"\x89PNG\r\n\x1a\n")
+_imgW = _ImW.open(_BIO(_pngW))
+check("the right way up and wide enough to read on a phone",
+      _imgW.width == _ciW.WIDTH and _imgW.height > 300,
+      f"{_imgW.width}x{_imgW.height}")
+
+# Everything is measured rather than guessed, so a long title makes the
+# row taller instead of spilling off the bottom of the picture.
+_longW = [(_FakeTask(24, "Bodyzone", "Muskan", "delegation"), 1)]
+_longW[0][0].title = ("Ensure the AC temperature at Bodyzone is consistently "
+                      "maintained at 23 degrees and the temperature should be "
+                      "checked three times a day by the floor supervisor and "
+                      "recorded in the register kept at reception") * 2
+_tallW = _ImW.open(_BIO(_ciW.report_png("X", "1", [], _ecZ.by_kind(_longW))))
+_shortW = _ImW.open(_BIO(_ciW.report_png(
+    "X", "1", [], [("Delegation", [(_FakeTask(25, "B", "M", "delegation"), 1)])])))
+check("a long title makes the picture taller, not narrower",
+      _tallW.height > _shortW.height, f"{_tallW.height} vs {_shortW.height}")
+
+# A kind with nothing in it must not leave an empty heading behind.
+_oneKindW = _ImW.open(_BIO(_ciW.report_png(
+    "X", "1", [], [("Delegation", [(_FakeTask(26, "B", "M", "delegation"), 1)]),
+                   ("Checklist", [])])))
+_bareW = _ImW.open(_BIO(_ciW.report_png(
+    "X", "1", [], [("Delegation", [(_FakeTask(27, "B", "M", "delegation"), 1)])])))
+check("so a section with no rows costs no height",
+      _oneKindW.height == _bareW.height,
+      f"{_oneKindW.height} vs {_bareW.height}")
+check("and the counts are drawn even when a kind is at nought",
+      _ImW.open(_BIO(_ciW.report_png(
+          "X", "1", [("Delegation", 1), ("Checklist", 0), ("FMS", 0)],
+          []))).height > 150)
+
+print("\n== the morning list on WhatsApp ==")
+from app.services import whatsapp as _waV
+from app.models import OutboundMessage as _OmV, PublicImage as _PiV
+
+# Six ways people write the same number, and one that is not a number.
+check("a plain ten-digit number gets the country code",
+      _waV.number("9876543210") == "919876543210")
+check("spaces, pluses and hyphens are just how people type",
+      _waV.number(" +91 98765-43210 ") == "919876543210")
+check("a leading zero is dropped, not kept",
+      _waV.number("09876543210") == "919876543210")
+check("one already in full is left alone",
+      _waV.number("919876543210") == "919876543210")
+check("and something that is not a mobile is refused, not sent anyway",
+      _waV.number("12345") == "" and _waV.number("") == ""
+      and _waV.number(None) == "")
+
+_wasV = (_waV.URL, _waV.API_KEY, _waV.PHONE_ID, _waV.TEMPLATE)
+_waV.URL, _waV.API_KEY = "https://wa.test/send", "KEY-abcdef123456"
+_waV.PHONE_ID, _waV.TEMPLATE = "PID-9999", "overdue_followup"
+check("with all four set it is ready", _waV.enabled())
+check("and the status line never prints the key",
+      "KEY-abcdef123456" not in _waV.status(), _waV.status())
+# A gateway that echoes the request back in an error would otherwise write
+# the key into a log everybody with the escalation page can read.
+check("nor does an error that quotes the request back",
+      "KEY-abcdef123456" not in _waV._safe(
+          '{"error":"bad","sent":{"x-api-key":"KEY-abcdef123456"}}'))
+
+_countsV = [("Delegation", 5), ("Checklist", 10), ("FMS", 2)]
+_msgV = _waV.preview("Muskan Khan", _countsV)
+check("the message reads the way the office asked for it",
+      "Delegation - 5 tasks" in _msgV and "Checklist - 10 tasks" in _msgV
+      and "FMS - 2 tasks" in _msgV, _msgV)
+check("one task is not called 1 tasks",
+      "FMS - 1 task" in _waV.preview("X", [("FMS", 1)]))
+check("and it signs off the way they wrote it",
+      "Thanks & Regards," in _msgV and "GCS Core Team" in _msgV)
+check("the blanks go in the template's order: name, then each count",
+      _waV.variables("Muskan Khan", _countsV)
+      == ["Muskan Khan", "5", "10", "2"],
+      str(_waV.variables("Muskan Khan", _countsV)))
+
+# The picture has to be reachable by the provider's own servers, which
+# carry none of this office's cookies.
+with _slQ() as _d:
+    _orgV = _d.scalar(_SEL(_OgQ))
+    _pngV = _ciW.report_png("X", "1 overdue task", _countsV, [])
+    _pathV, _urlV = _ciW.publish(_d, _orgV.id, _pngV, about="X",
+                                 base_url="https://gcs.example.test")
+    check("a published picture gets an unguessable name",
+          len(_pathV) > 30 and _pathV.startswith("/m/"), _pathV)
+    check("and a full address for the provider to fetch",
+          _urlV.endswith(_pathV), _urlV)
+
+_rImgV = admin.get(_pathV)
+check("the link serves the picture to anybody holding it",
+      _rImgV.status_code == 200 and _rImgV.content[:4] == b"\x89PNG")
+check("it is served as an image, not as a download",
+      "image/png" in _rImgV.headers.get("content-type", ""))
+check("signed out works too — the provider has no login",
+      TestClient(app).get(_pathV).status_code == 200)
+# "Expired" and "never existed" must answer the same, or somebody probing
+# learns that they got the first half right.
+check("a name that is not ours is a plain 404",
+      admin.get("/m/" + "0" * 32 + ".png").status_code == 404)
+check("and one that is not even the right shape is the same 404",
+      admin.get("/m/not-a-token.png").status_code == 404)
+
+# Old pictures go, so this does not grow for ever.
+with _slQ() as _d:
+    _oldV = _d.scalar(_SEL(_PiV).where(_PiV.token == _pathV[3:-4]))
+    _oldV.created_at = _escQ.clock.now() - _tdT(days=_ciW.KEEP_DAYS + 1)
+    _d.commit()
+    check("a picture older than the keep-days is swept",
+          _ciW.sweep(_d, _orgV.id) >= 1)
+check("and its link stops working", admin.get(_pathV).status_code == 404)
+
+# End to end, with the provider stubbed: the same people the email goes to.
+_sentV = []
+_waV.send = lambda to, variables, file_url="": (
+    _sentV.append((to, variables, file_url)) or (True, ""))
+with _slQ() as _d:
+    _orgV = _d.scalar(_SEL(_OgQ))
+    _orgV.esc_on = True
+    _orgV.esc_doer_whatsapp = True
+    _orgV.esc_hour = 0
+    _orgV.esc_days = ""
+    _orgV.site_url = "https://gcs.example.test"
+    _d.commit()
+    _whoV = _escQ.doer_digests(_d, _orgV, _escQ.clock.today())
+    for _p, _r in _whoV:
+        _p.phone = "9876543210"
+    # One deliberately without a number, because the seed gives everybody
+    # one and a skip that is never exercised is a skip nobody has tested.
+    _noneV = _whoV[0][0]
+    _noneV.phone = ""
+    _d.commit()
+    _outV = _escQ.send_whatsapp_digests(_d, _orgV, _escQ.clock.today(),
+                                        send=True)
+    check("it goes to the people with a number saved",
+          _outV["sent"] >= 1, str(_outV))
+    check("and counts the ones without, rather than guessing at a number",
+          _outV["no_number"] == 1, str(_outV))
+    check("nothing at all is written for somebody with no number",
+          not _d.scalars(_SEL(_OmV).where(
+              _OmV.template == _escQ.WA_DIGEST,
+              _OmV.body.like(f"Hi {_noneV.name}%"))).all())
+    check("each message carries a link to that person's own picture",
+          all(u.startswith("https://gcs.example.test/m/") for _t, _v, u in _sentV),
+          str([u for _t, _v, u in _sentV]))
+    check("every message is written down with what happened to it",
+          _d.scalars(_SEL(_OmV).where(_OmV.template == _escQ.WA_DIGEST)).all())
+    # Once a day, like everything else in this file.
+    _before = len(_sentV)
+    _escQ.send_whatsapp_digests(_d, _orgV, _escQ.clock.today(), send=True)
+    check("running again sends nobody a second message",
+          len(_sentV) == _before, f"{len(_sentV)} vs {_before}")
+    _orgV.esc_doer_whatsapp = False
+    _orgV.esc_on = False
+    _d.commit()
+
+check("the page offers the switch", 'name="doer_whatsapp"' in
+      adminQ.get("/escalation").text)
+_waV.URL, _waV.API_KEY, _waV.PHONE_ID, _waV.TEMPLATE = _wasV
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -31,6 +31,7 @@ from ..models import (
 )
 from ..services import escalation as esc_svc
 from ..services import mail
+from ..services import whatsapp
 from ..templating import templates
 
 router = APIRouter(prefix="/escalation")
@@ -123,6 +124,7 @@ def page(request: Request, scope: str = "",
         "effective": esc_svc.ladder(db, org.id, branch_id),
         "gaps": esc_svc.missing_ladders(db, org.id),
         "mail_on": mail.enabled(), "mail_status": mail.status(),
+        "wa_status": whatsapp.status(),
         "after_top": AFTER_TOP, "scopes": SCOPES,
         "next_level": (max((r.level for r in rows), default=0) + 1),
     })
@@ -258,7 +260,7 @@ async def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),
                   scope: str = Form("chased"), hour: str = Form("9"),
                   site_url: str = Form(""), grace: str = Form("0"),
-                  doer_daily: str = Form(""),
+                  doer_daily: str = Form(""), doer_whatsapp: str = Form(""),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
@@ -304,6 +306,7 @@ async def save_settings(request: Request, esc_on: str = Form(""),
                  "on the fourth day.")
 
     org.esc_doer_daily = bool(doer_daily)
+    org.esc_doer_whatsapp = bool(doer_whatsapp)
 
     if after_top not in AFTER_TOP:
         raise HTTPException(400, "Choose what happens after the top level.")

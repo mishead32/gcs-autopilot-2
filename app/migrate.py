@@ -81,6 +81,7 @@ ADDITIONS = {
         # Blank = every day, so nothing changes for a site that had no
         # such setting until it is asked for.
         ("esc_days", "VARCHAR(20) DEFAULT ''"),
+        ("esc_doer_whatsapp", "BOOLEAN DEFAULT 0"),
         ("esc_last_run", "DATE"),
         # This site's address, for the links inside an escalation email.
         # Filled in the first time the Escalation page is opened.
@@ -122,6 +123,10 @@ ADDITIONS = {
     "flows": [
         ("start_fields", "TEXT"),
         ("start_form", "TEXT"),
+    ],
+    "outbound_messages": [
+        # Why a message did not arrive, in the provider's own words.
+        ("error", "VARCHAR(400)"),
     ],
     "flow_steps": [
         ("requires_attachment", "BOOLEAN DEFAULT 1"),

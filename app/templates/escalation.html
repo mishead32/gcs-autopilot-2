@@ -30,6 +30,18 @@
       outside, exactly like a system that is working.
     </div>
 
+    <label class="check" style="margin-top:4px">
+      <input type="checkbox" name="doer_whatsapp" value="1"
+             {{ 'checked' if org.esc_doer_whatsapp }}>
+      <span>…and the same list on <strong>WhatsApp</strong>, as a
+        picture</span></label>
+    <div class="m" style="margin:4px 0 14px">
+      {{ wa_status }}. Only to people with a mobile number saved on their
+      account — anybody without one is counted and skipped, never guessed
+      at. WhatsApp will not show a table, so the list goes as an image with
+      the counts on it.
+    </div>
+
     <label>Days the morning check runs</label>
     <div class="row" style="gap:10px;margin:6px 0 4px">
       {% for n, name in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),

@@ -1,10 +1,12 @@
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from fastapi import FastAPI, Request, HTTPException, Header
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (RedirectResponse, HTMLResponse, JSONResponse,
+                               Response)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
@@ -424,6 +426,41 @@ app.include_router(reports_router.router)
 app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
 app.include_router(escalation_router.router)
+
+
+@app.get("/m/{token}.png")
+def public_image(token: str):
+    """One published picture, to anybody holding its link.
+
+    Public on purpose and by necessity: WhatsApp's provider fetches the
+    picture from its own servers, with none of this office's cookies, so a
+    page behind the login is a page it gets a sign-in form from instead of
+    an image.
+
+    What stands in for a login is the name. Thirty-two random hex
+    characters, nothing else in the path — no task number, no person, no
+    date — so there is nothing to guess at or count up. A token that is
+    not ours, or has been swept, is a plain 404 that says no more than
+    that: a different answer for "expired" than for "never existed" tells
+    somebody probing that they got the first half right.
+    """
+    from .models import PublicImage
+
+    if not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        raise HTTPException(404, "No such image.")
+    with SessionLocal() as db:
+        row = db.scalar(select(PublicImage).where(PublicImage.token == token))
+        if row is None:
+            raise HTTPException(404, "No such image.")
+        return Response(
+            content=row.data, media_type=row.kind or "image/png",
+            headers={
+                # Cached hard: the picture never changes, and the provider
+                # may fetch it more than once. no-store on an image nobody
+                # can guess buys nothing and costs a wake-up each time.
+                "Cache-Control": "public, max-age=86400",
+                "Content-Disposition": 'inline; filename="overdue.png"',
+            })
 
 
 @app.get("/healthz")
