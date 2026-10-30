@@ -104,7 +104,28 @@ def _festive(user):
         return None
 
 
+def _festive_public():
+    """The festival for the login page, where nobody is signed in yet.
+
+    The company's own holidays rather than a branch's: there is no person
+    to ask which branch they are at, and a festival the whole group keeps
+    is the one worth greeting a stranger with.
+    """
+    try:
+        from sqlalchemy import select
+
+        from .db import SessionLocal
+        from .models import Organization
+        from .services import festive as _f
+        with SessionLocal() as db:
+            org = db.scalar(select(Organization))
+            return _f.coming(db, org.id, None) if org else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 templates.env.globals["festive"] = _festive
+templates.env.globals["festive_public"] = _festive_public
 
 
 class _Counter:

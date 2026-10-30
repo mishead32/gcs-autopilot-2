@@ -26,6 +26,12 @@
       <span class="plate p3"></span>
     </div>
 
+    {# The same scene as the strip inside, given the room to be a scene.
+       Signed out there is no person to ask, so this reads the company's
+       own holidays — which is what a festival is anyway. #}
+    {% set fest = festive_public() %}
+    {% if fest %}{{ festive_scene(fest, big=true) }}{% endif %}
+
     <div class="lp-art-in">
       <div class="mark"><span>GA</span></div>
       <h2>{{ APP_NAME }}</h2>

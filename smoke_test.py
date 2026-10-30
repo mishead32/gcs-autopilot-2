@@ -13219,6 +13219,44 @@ check("drawn, not fetched — no image tag, nothing from a server",
 _cssF = open("app/static/app.css", encoding="utf-8").read()
 check("and it respects a request for less motion",
       "prefers-reduced-motion" in _cssF and ".festive{animation:none}" in _cssF)
+# The scene itself: diyas on a shelf, flames that move, sparks that rise.
+# Built the way the login page's cube is built — CSS 3D transforms and a
+# little SVG — so it has depth without a canvas, a library or an image.
+_sceneF = open("app/templates/_festive.html", encoding="utf-8").read()
+check("the scene is drawn, not fetched",
+      "<svg" in _sceneF and "<img" not in _sceneF
+      and "http" not in _sceneF.replace("http-equiv", ""))
+check("a diya is a bowl with a gradient, so it reads as round",
+      "linearGradient" in _sceneF and "radialGradient" in _sceneF)
+check("and it is hidden from a screen reader, which wants the words",
+      'aria-hidden="true"' in _sceneF)
+
+_cssF2 = open("app/static/app.css", encoding="utf-8").read()
+check("the row has real depth, not a line of stickers",
+      "perspective" in _cssF2 and "translateZ" in _cssF2)
+# A flicker that changes brightness reads as a fault; one that changes
+# SHAPE reads as a flame.
+check("the flame changes shape rather than brightness",
+      "@keyframes flick" in _cssF2 and "scale(.94,1.08)" in _cssF2)
+check("each flame runs on its own clock, so the row never pulses together",
+      _cssF2.count("animation-duration") >= 6)
+check("sparks rise and fade", "@keyframes rise" in _cssF2)
+check("no library and no canvas — it is all CSS and inline SVG",
+      "three.js" not in _cssF2 and "<canvas" not in _sceneF)
+check("a phone drops the far end of the row rather than cramming it",
+      "max-width:640px" in _cssF2)
+check("and everything stands still for less-motion",
+      ".fscene .flame,.fscene .spark,.fscene .fglow{animation:none}" in _cssF2)
+
+# The login page has nobody signed in, so it asks the company rather than
+# a person — which is what a festival is anyway.
+_loginF = TestClient(app).get("/login").text
+check("the login page carries the scene too",
+      "fscene" in _loginF and "big" in _loginF)
+check("with more of it, because there is room",
+      _loginF.count('class="diya') > _pageF.count('class="diya'),
+      f'{_loginF.count(chr(34) + "diya")} vs {_pageF.count(chr(34) + "diya")}')
+
 
 with _slQ() as _d:
     for _old in _d.scalars(_SEL(_HolF).where(
