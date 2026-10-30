@@ -848,6 +848,22 @@ def plan(db: Session, org: Organization, today: date) -> tuple[list, list, int]:
     no_ladder = 0
 
     for task, late in rows:
+        # Not on a day that company is shut. A holiday on the calendar is
+        # a day nobody is in to do the work OR to be chased about it, and
+        # an escalation sent into an empty office is read the next working
+        # morning alongside the one that follows it — two emails about the
+        # same task, one of which nobody could have acted on.
+        #
+        # The task's OWN company decides, so Diwali at head office does
+        # not stop the gym being chased, and the gym being open on Sunday
+        # does not drag the office in. Nothing is lost: the work is still
+        # overdue the next day, and with working days switched on it is
+        # not even a day later for it.
+        shut = holidays.closed_reason(db, org.id, today, task.branch_id)
+        if shut:
+            skipped.append((task, late,
+                            f"That company was closed today — {shut}."))
+            continue
         rungs = ladder(db, org.id, task.branch_id)
         if not rungs:
             no_ladder += 1
@@ -1111,6 +1127,16 @@ def run(db: Session, org: Organization, on: date | None = None,
         out["why"] = "Escalation is switched off."
         return out
 
+    # A day it does not run on. Checked HERE as well as in due_today,
+    # because due_today only guards the background loop — anything else
+    # calling run() directly would have escalated on a Sunday regardless
+    # of the setting. `force` is a person pressing Send now, which is an
+    # instruction and not a schedule.
+    if not force and today.weekday() not in org.esc_day_list:
+        out["why"] = ("Escalation does not run on a "
+                      + clock.WEEKDAY_NAMES[today.weekday()] + ".")
+        return out
+
     # No mail server at all is not a reason to escalate quietly. The rung
     # is RECORDED when a task is escalated, and nothing retries a recorded
     # one — so a run with nowhere to send would mark level 1 as done, climb
@@ -1162,6 +1188,11 @@ def due_today(db: Session, org: Organization, on: date | None = None) -> bool:
     if not org.esc_on:
         return False
     if org.esc_last_run == today:
+        return False
+    # Not on a day it does not run. Nothing is carried over to the next
+    # one: the work is still overdue tomorrow and will be counted then, a
+    # day later, which is exactly what it is.
+    if today.weekday() not in org.esc_day_list:
         return False
     return clock.now().hour >= max(0, min(23, org.esc_hour or 0))
 

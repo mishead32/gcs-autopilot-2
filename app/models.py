@@ -307,6 +307,19 @@ class Organization(Base):
     # somebody's manager; this tells the person who can actually close it,
     # which is the cheapest way to make the ladder unnecessary.
     esc_doer_daily: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which weekdays the morning check runs on, as 0=Monday … 6=Sunday.
+    # The offices keep Sunday off, and an escalation to a head of
+    # department on their day off is one read on Monday with the rest —
+    # or not at all. Blank means every day, which is what every site did
+    # before this existed.
+    esc_days: Mapped[str] = mapped_column(String(20), default="")
+
+    @property
+    def esc_day_list(self) -> list[int]:
+        """The weekdays it runs on. Empty setting means all seven."""
+        out = [int(p) for p in str(self.esc_days or "").split(",")
+               if p.strip().isdigit() and 0 <= int(p) <= 6]
+        return sorted(set(out)) if out else list(range(7))
     # The last day the check actually ran. The daily run is keyed off this
     # rather than a timer, so a restart, a second web process or somebody
     # pressing "Run the check now" cannot send the same morning twice.

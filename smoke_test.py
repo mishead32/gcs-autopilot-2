@@ -12736,5 +12736,156 @@ check("a day that is not a date is refused rather than read as today",
                   data={"day": "yesterday"}).status_code == 400)
 _mlR.HOST, _mlR.FROM, _mlR.send = _hR, _fR, _sR
 
+print("\n== not on a Sunday ==")
+# An escalation landing on a head of department's day off is one read on
+# Monday with everything else, or not at all.
+from datetime import date as _dW
+_sunW, _monW = _dW(2026, 11, 1), _dW(2026, 11, 2)   # a Sunday and a Monday
+check("the calendar says so, so the test is not asserting its own guess",
+      _sunW.weekday() == 6 and _monW.weekday() == 0)
+
+with _slQ() as _d:
+    _orgW = _d.scalar(_SEL(_OgQ))
+    _orgW.esc_on = True
+    _orgW.esc_hour = 0
+    _orgW.esc_days = ""
+    _orgW.esc_last_run = None
+    _d.commit()
+    check("with nothing set it runs every day, Sunday included",
+          _escQ.due_today(_d, _orgW, _sunW))
+
+    _orgW.esc_days = "0,1,2,3,4,5"
+    _d.commit()
+    check("with Sunday unticked it does not run on a Sunday",
+          not _escQ.due_today(_d, _orgW, _sunW))
+    check("and does on the Monday after it",
+          _escQ.due_today(_d, _orgW, _monW))
+    # Nothing is carried over: the work is still overdue on Monday and
+    # counts a day more, which is exactly what it is.
+    check("a skipped Sunday raises nothing at all",
+          _escQ.run(_d, _orgW, on=_sunW, send=False)["raised"] == 0)
+
+    # Every box unticked must not be read as "never run" — that is a
+    # setting that silently switches the whole thing off, which is a trap.
+    _orgW.esc_days = ""
+    _d.commit()
+    check("no days chosen is read as every day, not as never",
+          _orgW.esc_day_list == list(range(7)))
+
+_rDaysQ = adminQ.post("/escalation/settings",
+                      data={"esc_on": "", "working_days": "1",
+                            "after_top": "stop", "scope": "chased",
+                            "hour": "9", "grace": "3",
+                            "esc_days": ["0", "1", "2", "3", "4", "5"]})
+check("the tickboxes save", _rDaysQ.status_code in (200, 303), _rDaysQ.status_code)
+with _slQ() as _d:
+    check("and Sunday stays out of the list",
+          6 not in _d.scalar(_SEL(_OgQ)).esc_day_list,
+          str(_d.scalar(_SEL(_OgQ)).esc_day_list))
+check("the page shows which days are ticked",
+      'name="esc_days"' in adminQ.get("/escalation").text)
+# "Send now" is a person giving an instruction, not a schedule, so it
+# still works on a day the schedule skips. Anything automatic does not.
+with _slQ() as _d:
+    _orgW = _d.scalar(_SEL(_OgQ))
+    _orgW.esc_on = True
+    _orgW.esc_days = "0,1,2,3,4,5"
+    _d.commit()
+    check("but pressing Send now on a Sunday still works",
+          _escQ.run(_d, _orgW, on=_sunW, send=False, force=True)["ran"])
+    check("and the skipped run says which day it was",
+          "Sunday" in _escQ.run(_d, _orgW, on=_sunW, send=False)["why"],
+          _escQ.run(_d, _orgW, on=_sunW, send=False)["why"])
+with _slQ() as _d:
+    _d.scalar(_SEL(_OgQ)).esc_days = ""
+    _d.scalar(_SEL(_OgQ)).esc_on = False
+    _d.commit()
+
+print("\n== and not on a holiday the calendar already knows about ==")
+# An escalation sent into an empty office is read the next working morning
+# beside the one that follows it: two emails about the same task, one of
+# which nobody could have acted on.
+from app.services import holidays as _holH
+from app.models import Holiday as _HolH
+
+with _slQ() as _d:
+    _orgH = _d.scalar(_SEL(_OgQ))
+    _orgH.esc_on = True
+    _orgH.esc_hour = 0
+    _orgH.esc_days = ""
+    _orgH.esc_grace = 0
+    _d.commit()
+    # A task that WOULD escalate, at a company of its own.
+    # Ordered. An unordered pick hands PostgreSQL and SQLite different
+    # rows, and a test that chooses its own subject differently on each
+    # database is a test that passes on one and fails on the other for
+    # reasons that have nothing to do with what it is checking.
+    _tH = _d.scalars(_SEL(_TkQ).where(_TkQ.branch_id.isnot(None),
+                                      _TkQ.closed_at.is_(None))
+                     .order_by(_TkQ.id)).first()
+    _brH = _tH.branch_id
+    _dayH = _escQ.clock.today()
+    # Make sure that company is open today, so the test is about the
+    # holiday and not about a weekly day off.
+    if _holH.is_closed(_d, _orgH.id, _dayH, _brH):
+        _dayH = _holH.next_working_day(_d, _orgH.id, _dayH, _brH)
+    _tH.due_at = _escQ.clock.now() - _tdT(days=5)
+    # Earlier blocks in this suite escalate half the database, and a task
+    # already told about today is skipped for that reason — which would
+    # make this test pass whether or not the holiday did anything.
+    for _e in _d.scalars(_SEL(_EsQ).where(_EsQ.task_id == _tH.id)).all():
+        _d.delete(_e)
+    _d.commit()
+    _tHid = _tH.id
+
+    _before = _escQ.plan(_d, _orgH, _dayH)[0]
+    check("before the holiday is added, that task is in a group",
+          any(_tHid in [t.id for t, _l in g["rows"]] for g in _before))
+
+    _d.add(_HolH(org_id=_orgH.id, branch_id=_brH, day=_dayH,
+                 name="SMOKE festival"))
+    _d.commit()
+    _groups, _skipped, _ = _escQ.plan(_d, _orgH, _dayH)
+    check("once it is a holiday for that company, nothing is sent for it",
+          not any(_tHid in [t.id for t, _l in g["rows"]] for g in _groups))
+    check("and it is listed as skipped, naming the holiday",
+          any(t.id == _tHid and "SMOKE festival" in why
+              for t, _l, why in _skipped),
+          str([w for t, _l, w in _skipped if t.id == _tHid]))
+    # The point of the per-company calendar: one company's holiday is not
+    # another's, and the gym is open when the office is shut. Proved with
+    # a second task at a different company, rather than with whatever the
+    # database happened to contain.
+    _tH2 = _d.scalars(_SEL(_TkQ).where(_TkQ.branch_id.isnot(None),
+                                       _TkQ.branch_id != _brH,
+                                       _TkQ.closed_at.is_(None))
+                      .order_by(_TkQ.id)).first()
+    if _tH2 is not None:
+        _tH2.due_at = _escQ.clock.now() - _tdT(days=5)
+        for _e in _d.scalars(_SEL(_EsQ).where(_EsQ.task_id == _tH2.id)).all():
+            _d.delete(_e)
+        _d.commit()
+        _g2, _s2, _ = _escQ.plan(_d, _orgH, _dayH)
+        check("another company is chased as usual that day",
+              any(_tH2.id in [t.id for t, _l in g["rows"]] for g in _g2)
+              or not _holH.is_closed(_d, _orgH.id, _dayH, _tH2.branch_id),
+              str([w for t, _l, w in _s2 if t.id == _tH2.id]))
+    check("the task itself is untouched — it is still overdue",
+          _d.get(_TkQ, _tHid).closed_at is None)
+
+    # And the next working day it is chased, a day later, which is what
+    # it is. Nothing is lost by waiting.
+    _d.execute(__import__("sqlalchemy").delete(_HolH).where(
+        _HolH.name == "SMOKE festival"))
+    _d.commit()
+    for _e in _d.scalars(_SEL(_EsQ).where(_EsQ.task_id == _tHid)).all():
+        _d.delete(_e)
+    _d.commit()
+    _after, _, _ = _escQ.plan(_d, _orgH, _dayH)
+    check("with the holiday gone it is chased again",
+          any(_tHid in [t.id for t, _l in g["rows"]] for g in _after))
+    _orgH.esc_on = False
+    _d.commit()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

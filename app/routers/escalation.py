@@ -254,7 +254,7 @@ def discard_mail(mail_id: int, request: Request, user: User = Depends(manage),
 
 
 @router.post("/settings")
-def save_settings(request: Request, esc_on: str = Form(""),
+async def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),
                   scope: str = Form("chased"), hour: str = Form("9"),
                   site_url: str = Form(""), grace: str = Form("0"),
@@ -262,6 +262,14 @@ def save_settings(request: Request, esc_on: str = Form(""),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
+
+    # Seven tickboxes posting one name, so they are read as a list. None
+    # ticked is taken as every day rather than as "never run": a setting
+    # that silently switches the whole thing off is not a setting, it is a
+    # trap — and the tickbox above is where switching it off belongs.
+    picked = sorted({int(d) for d in (await request.form()).getlist("esc_days")
+                     if str(d).isdigit() and 0 <= int(d) <= 6})
+    org.esc_days = ",".join(str(d) for d in picked) if picked else ""
 
     if want_on:
         # Switching it on with nobody on the first rung sends every overdue

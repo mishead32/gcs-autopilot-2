@@ -78,6 +78,9 @@ ADDITIONS = {
         # Off by default: an email to every doer every morning is a real
         # change in what the software does to people, not a tidy-up.
         ("esc_doer_daily", "BOOLEAN DEFAULT 0"),
+        # Blank = every day, so nothing changes for a site that had no
+        # such setting until it is asked for.
+        ("esc_days", "VARCHAR(20) DEFAULT ''"),
         ("esc_last_run", "DATE"),
         # This site's address, for the links inside an escalation email.
         # Filled in the first time the Escalation page is opened.

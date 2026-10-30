@@ -30,6 +30,24 @@
       outside, exactly like a system that is working.
     </div>
 
+    <label>Days the morning check runs</label>
+    <div class="row" style="gap:10px;margin:6px 0 4px">
+      {% for n, name in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),
+                         (5,'Sat'),(6,'Sun')] %}
+      <label class="check" style="margin:0">
+        <input type="checkbox" name="esc_days" value="{{ n }}"
+               {{ 'checked' if n in org.esc_day_list }}>
+        <span>{{ name }}</span></label>
+      {% endfor %}
+    </div>
+    <div class="m" style="margin:4px 0 14px">
+      Nothing is sent on a day that is unticked, and nothing is carried
+      over to the next one — the work is still overdue tomorrow and counts
+      a day more, which is exactly what it is. Untick Sunday and an
+      escalation never lands on a head of department's day off, to be read
+      on Monday with everything else or not at all.
+    </div>
+
     <label>Days overdue before the first level hears about it</label>
     <input name="grace" type="number" min="0" max="60"
            value="{{ org.esc_grace or 0 }}">
