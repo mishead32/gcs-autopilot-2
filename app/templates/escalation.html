@@ -188,6 +188,32 @@
       </form>
     </div>
 
+    <div class="card {{ '' if wa_on else 'warnbox' }}" style="margin-top:16px">
+      <strong>WhatsApp</strong>
+      <p class="m" style="margin:8px 0 0">{{ wa_status }}</p>
+      {% if not wa_on %}
+      <p class="m" style="margin:8px 0 0">
+        Set <code>WA_URL</code>, <code>WA_API_KEY</code>,
+        <code>WA_PHONE_ID</code> and <code>WA_TEMPLATE</code> in Render's
+        <strong>Environment</strong> tab. The key belongs there and nowhere
+        else. The template has to be approved by the provider first —
+        WhatsApp does not let a business send arbitrary text to somebody
+        who has not messaged it.
+      </p>
+      {% endif %}
+      {# The same reasoning as the test email: without this, the only way
+         to find out whether the provider, the template and the picture
+         link work together is to let the morning run tell forty people
+         at once that they do not. #}
+      <form method="post" action="/escalation/test-whatsapp"
+            style="margin-top:12px">
+        <button class="btn sm ghost"
+          title="One WhatsApp to your own number, right now">
+          Send me a test WhatsApp</button>
+        <span class="m"> to {{ user.phone or 'no number saved' }}</span>
+      </form>
+    </div>
+
     {% if gaps %}
     <div class="card warnbox">
       <strong>These companies would escalate to nobody</strong>

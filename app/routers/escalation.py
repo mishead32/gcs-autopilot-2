@@ -29,6 +29,7 @@ from ..models import (
     Branch, Escalation, EscalationMail, EscalationRule, Organization, Right,
     Task, User,
 )
+from ..services import cardimg
 from ..services import escalation as esc_svc
 from ..services import mail
 from ..services import whatsapp
@@ -124,7 +125,7 @@ def page(request: Request, scope: str = "",
         "effective": esc_svc.ladder(db, org.id, branch_id),
         "gaps": esc_svc.missing_ladders(db, org.id),
         "mail_on": mail.enabled(), "mail_status": mail.status(),
-        "wa_status": whatsapp.status(),
+        "wa_status": whatsapp.status(), "wa_on": whatsapp.enabled(),
         "after_top": AFTER_TOP, "scopes": SCOPES,
         "next_level": (max((r.level for r in rows), default=0) + 1),
     })
@@ -164,6 +165,67 @@ def send_test(request: Request, user: User = Depends(manage)):
     else:
         flash.set(request, "error",
                   f"It did not send: {why}{mail.advice(why)}")
+    return RedirectResponse("/escalation", status_code=303)
+
+
+@router.post("/test-whatsapp")
+def send_test_whatsapp(request: Request, user: User = Depends(manage),
+                       db: Session = Depends(get_db)):
+    """One WhatsApp to whoever pressed the button, and the truth back.
+
+    The same reasoning as the test email. Without this the only way to
+    find out whether the provider, the template and the picture link all
+    work together is to let the morning run do it — which tells forty
+    people at once that it did not.
+
+    Their OWN overdue work is used when they have some, because a test
+    that sends made-up rows proves the provider works and not that this
+    office's data comes out right. With nothing overdue it falls back to
+    a sample rather than refusing: somebody with a clean list still needs
+    to know the plumbing works.
+    """
+    if not whatsapp.enabled():
+        flash.set(request, "error", whatsapp.status())
+        return RedirectResponse("/escalation", status_code=303)
+    if not whatsapp.number(user.phone or ""):
+        flash.set(request, "error",
+                  "Your own account has no mobile number saved, so there "
+                  "is nowhere to send the test. Add one under Users.")
+        return RedirectResponse("/escalation", status_code=303)
+
+    org = _org(db, user)
+    site = (org.site_url or "").strip()
+    if not site:
+        flash.set(request, "error",
+                  "This site's web address is not known yet, so the "
+                  "picture would have no link the provider could fetch. "
+                  "Set it further down this page, then try again.")
+        return RedirectResponse("/escalation", status_code=303)
+
+    today = clock.today()
+    mine = next((rows for person, rows in esc_svc.doer_digests(db, org, today)
+                 if person.id == user.id), [])
+    counts = esc_svc.counts_by_kind(mine)
+    sections = esc_svc.by_kind(mine)
+    subtitle = (f"{len(mine)} overdue task{'' if len(mine) == 1 else 's'}"
+                f" · {today.strftime('%d %b %Y')}")
+    if not mine:
+        subtitle = f"Test message · {today.strftime('%d %b %Y')}"
+
+    png = cardimg.report_png(
+        user.name, subtitle, counts, sections,
+        "This is a test from GCS Autopilot's escalation settings.")
+    _path, url = cardimg.publish(db, org.id, png, about=f"test · {user.name}",
+                                 base_url=site)
+    ok, why = whatsapp.send(user.phone,
+                            whatsapp.variables(user.name, counts), url)
+    if ok:
+        flash.set(request, "saved",
+                  f"Sent to {whatsapp.number(user.phone)}. If it does not "
+                  "arrive, the template is usually the reason — check it "
+                  "is approved and that its name matches WA_TEMPLATE.")
+    else:
+        flash.set(request, "error", f"It did not send: {why}")
     return RedirectResponse("/escalation", status_code=303)
 
 

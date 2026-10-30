@@ -13059,5 +13059,72 @@ check("the page offers the switch", 'name="doer_whatsapp"' in
       adminQ.get("/escalation").text)
 _waV.URL, _waV.API_KEY, _waV.PHONE_ID, _waV.TEMPLATE = _wasV
 
+print("\n== proving WhatsApp works without telling forty people ==")
+# Without this the only way to find out whether the provider, the template
+# and the picture link work together is to let the morning run do it —
+# which tells everybody at once that they do not.
+_sentX = []
+_waV.URL, _waV.API_KEY = "https://wa.test/send", "KEY-abcdef123456"
+_waV.PHONE_ID, _waV.TEMPLATE = "PID-9999", "overdue_followup"
+_waV.send = lambda to, variables, file_url="": (
+    _sentX.append((to, variables, file_url)) or (True, ""))
+
+with _slQ() as _d:
+    _meX = _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local"))
+    _meX.phone = ""
+    _d.scalar(_SEL(_OgQ)).site_url = "https://gcs.example.test"
+    _d.commit()
+_rNoNumX = adminQ.post("/escalation/test-whatsapp", follow_redirects=True)
+check("with no number on the account it says so and sends nothing",
+      "no mobile number" in _rNoNumX.text and not _sentX)
+
+with _slQ() as _d:
+    _d.scalar(_SEL(_UsQ).where(_UsQ.email == "mis@gcs.local")
+              ).phone = "9876543210"
+    _d.scalar(_SEL(_OgQ)).site_url = ""
+    _d.commit()
+_rNoSiteX = adminQ.post("/escalation/test-whatsapp", follow_redirects=True)
+check("with no web address it says the picture would have no link",
+      "web address" in _rNoSiteX.text and not _sentX)
+
+with _slQ() as _d:
+    _d.scalar(_SEL(_OgQ)).site_url = "https://gcs.example.test"
+    _d.commit()
+    # Counted BEFORE: an earlier block in this suite already ran a real
+    # morning, so asserting "none exist" would be asserting that block
+    # did nothing rather than that this one is clean.
+    _digestsX = len(_d.scalars(_SEL(_OmV).where(
+        _OmV.template == _escQ.WA_DIGEST)).all())
+_rGoX = adminQ.post("/escalation/test-whatsapp", follow_redirects=True)
+check("with everything set it sends exactly one message",
+      len(_sentX) == 1, str(len(_sentX)))
+check("to the number on the account of whoever pressed it",
+      _sentX and _sentX[0][0] == "9876543210", str(_sentX[:1]))
+check("carrying a link the provider can fetch",
+      _sentX and _sentX[0][2].startswith("https://gcs.example.test/m/"),
+      str(_sentX[:1]))
+check("and the picture at that link really is there",
+      admin.get(_sentX[0][2].replace("https://gcs.example.test", "")
+                ).status_code == 200)
+# A test must not look like a morning to the thing that stops the morning
+# happening twice.
+with _slQ() as _d:
+    check("a test is not mistaken for the day's message",
+          len(_d.scalars(_SEL(_OmV).where(
+              _OmV.template == _escQ.WA_DIGEST)).all()) == _digestsX,
+          f"{len(_d.scalars(_SEL(_OmV).where(_OmV.template == _escQ.WA_DIGEST)).all())}"
+          f" vs {_digestsX}")
+
+_waV.send = lambda *a, **k: (False, "403: template not approved")
+_rFailX = adminQ.post("/escalation/test-whatsapp", follow_redirects=True)
+check("a refusal is reported in the provider's own words",
+      "template not approved" in _rFailX.text)
+check("a doer cannot send WhatsApp from the system's account",
+      doer.post("/escalation/test-whatsapp").status_code == 403)
+check("the page carries the button and what is missing",
+      "Send me a test WhatsApp" in adminQ.get("/escalation").text)
+
+_waV.URL, _waV.API_KEY, _waV.PHONE_ID, _waV.TEMPLATE = _wasV
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
