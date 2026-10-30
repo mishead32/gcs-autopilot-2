@@ -112,10 +112,44 @@
       {% if m.to_doer %}<div class="m rowsub">their own work only</div>{% endif %}</td>
     <td><span class="chip {{ m.status }}">{{ m.status }}</span>
       {% if m.error %}<div class="m rowsub">{{ m.error }}</div>{% endif %}</td>
-    <td><a class="btn sm ghost" href="/escalation/mail/{{ m.id }}">The email</a></td>
+    <td class="rowacts">
+      <a class="btn sm ghost" href="/escalation/mail/{{ m.id }}">The email</a>
+      {# Only for one that never left. A delivered email is history, and
+         history is not edited here. #}
+      {% if m.status != 'sent' %}
+      <form method="post" action="/escalation/mail/{{ m.id }}/retry"
+            style="display:inline">
+        <button class="btn sm"
+          title="Send this same email again, to the same person">
+          Send again</button></form>
+      <form method="post" action="/escalation/mail/{{ m.id }}/discard"
+            style="display:inline"
+            onclick="return confirm('Throw this email away? The {{ m.task_count }} task(s) it covered will be owed that level again, so the next run tells somebody properly.')">
+        <button class="btn sm ghost"
+          title="Throw it away and give those tasks their level back">
+          Discard</button></form>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table></div>
+{% set stuck = mails | rejectattr('status', 'equalto', 'sent') | list %}
+{% if stuck %}
+<div class="card warnbox" style="margin-top:12px">
+  <strong>{{ stuck|length }} email(s) here never left</strong>
+  <p class="m" style="margin:8px 0 10px">
+    The tasks they covered are recorded as escalated, so tomorrow they climb
+    from there — having told nobody. Send them now that the mail is working,
+    or discard them and let the next run do it properly.
+  </p>
+  <form method="post" action="/escalation/mail/retry-day" class="row">
+    <div style="max-width:200px"><label>Send again, everything from</label>
+      <input type="date" name="day" value="{{ stuck[0].day }}" required></div>
+    <div class="acts"><button class="btn">Send that day again</button></div>
+  </form>
+</div>
+{% endif %}
+
 {# Counted off the ladder emails alone. A doer's copy covers the same tasks
    a second time, so adding every row's count says a morning escalated twice
    as much work as it did. #}

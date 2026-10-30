@@ -165,6 +165,94 @@ def send_test(request: Request, user: User = Depends(manage)):
     return RedirectResponse("/escalation", status_code=303)
 
 
+@router.post("/mail/{mail_id}/retry")
+def retry_mail(mail_id: int, request: Request, user: User = Depends(manage),
+               db: Session = Depends(get_db)):
+    """Send a written-down email again, after the reason it failed is fixed.
+
+    Nothing is re-decided and nothing new is recorded: the message is the
+    one that was composed that morning, going to the person it was
+    addressed to, covering the tasks it covered. A mail server that was
+    unreachable for two days should not mean two days of escalations that
+    nobody was ever told about — the record says they were escalated, and
+    the record should be true.
+    """
+    m = db.get(EscalationMail, mail_id)
+    if m is None or m.org_id != user.org_id:
+        raise HTTPException(404, "No such email.")
+    if m.status == "sent":
+        flash.set(request, "error",
+                  "That one was already delivered. Sending it again would "
+                  "be a second copy of the same morning.")
+        return RedirectResponse("/escalation/log", status_code=303)
+    esc_svc._deliver(db, m, send=True)
+    if m.status == "sent":
+        flash.set(request, "saved", f"Sent to {m.to_email}.")
+    else:
+        flash.set(request, "error",
+                  f"Still did not send: {m.error}{mail.advice(m.error or '')}")
+    return RedirectResponse("/escalation/log", status_code=303)
+
+
+@router.post("/mail/retry-day")
+def retry_day(request: Request, day: str = Form(""),
+              user: User = Depends(manage), db: Session = Depends(get_db)):
+    """Every email of one day that did not get out, tried again."""
+    try:
+        want = date.fromisoformat(day.strip())
+    except ValueError:
+        raise HTTPException(400, "Pick a day first, as YYYY-MM-DD.")
+    rows = db.scalars(
+        select(EscalationMail).where(
+            EscalationMail.org_id == user.org_id,
+            EscalationMail.day == want,
+            EscalationMail.status != "sent").order_by(EscalationMail.id)).all()
+    sent = 0
+    for m in rows:
+        esc_svc._deliver(db, m, send=True)
+        sent += 1 if m.status == "sent" else 0
+    flash.set(request, "saved" if sent else "error",
+              f"{sent} of {len(rows)} sent"
+              + (f" — {rows[-1].error}" if rows and sent < len(rows) else ""))
+    return RedirectResponse("/escalation/log", status_code=303)
+
+
+@router.post("/mail/{mail_id}/discard")
+def discard_mail(mail_id: int, request: Request, user: User = Depends(manage),
+                 db: Session = Depends(get_db)):
+    """Throw away an email that never left, and the rungs it claimed.
+
+    Deleting the record alone would be the worst of both worlds: the log
+    would go quiet while the escalations stayed, so every task it covered
+    would still be marked as told at that level and would climb from there
+    tomorrow — having told nobody anything. So the escalation rows go with
+    it, and those tasks are owed their level again.
+
+    Only ever for an email that was NOT delivered. One that was sent is
+    history, and history is not edited here.
+    """
+    m = db.get(EscalationMail, mail_id)
+    if m is None or m.org_id != user.org_id:
+        raise HTTPException(404, "No such email.")
+    if m.status == "sent":
+        flash.set(request, "error",
+                  "That one was delivered. The log is the record of what "
+                  "people were actually told, so a sent email is not "
+                  "removed from it.")
+        return RedirectResponse("/escalation/log", status_code=303)
+    freed = 0
+    for row in db.scalars(select(Escalation).where(
+            Escalation.mail_id == m.id)).all():
+        db.delete(row)
+        freed += 1
+    db.delete(m)
+    db.commit()
+    flash.set(request, "saved",
+              f"Discarded. {freed} task(s) are owed that level again, so "
+              "the next run will tell somebody properly.")
+    return RedirectResponse("/escalation/log", status_code=303)
+
+
 @router.post("/settings")
 def save_settings(request: Request, esc_on: str = Form(""),
                   working_days: str = Form(""), after_top: str = Form("stop"),

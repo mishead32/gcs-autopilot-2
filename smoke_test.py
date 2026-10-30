@@ -12637,5 +12637,104 @@ check("and the card says it too while nothing is configured",
 
 _mlT.HOST, _mlT.FROM, _mlT.send = _hT, _fT, _sT
 
+print("\n== an email that never left can be sent, or thrown away ==")
+# A mail server unreachable for two mornings must not mean two mornings of
+# escalations nobody was ever told about. The record says they were told;
+# the record has to be true.
+from app.services import mail as _mlR
+_hR, _fR, _sR = _mlR.HOST, _mlR.FROM, _mlR.send
+_mlR.HOST, _mlR.FROM = "smtp.test", "gcs@test"
+
+with _slQ() as _d:
+    _orgR = _d.scalar(_SEL(_OgQ))
+    _tR = _d.scalar(_SEL(_TkQ).where(_TkQ.org_id == _orgR.id))
+    _dayR = _escQ.clock.today()
+    _mR = _EmQ(org_id=_orgR.id, day=_dayR, level=1, repeat_n=0,
+               to_name="HOD", to_email="hod@gcs.local", subject="s",
+               body="b", body_html="<p>b</p>", task_count=1,
+               status="failed", error="OSError: [Errno 101] Network is unreachable")
+    _d.add(_mR); _d.flush()
+    _d.add(_EsQ(org_id=_orgR.id, task_id=_tR.id, level=1, repeat_n=0,
+                day=_dayR, days_overdue=1, to_email="hod@gcs.local",
+                mail_id=_mR.id, subject="s"))
+    _d.commit()
+    _mRid, _tRid = _mR.id, _tR.id
+
+_mlR.send = lambda *a, **k: (False, "OSError: [Errno 101] Network is unreachable")
+_rStillQ = adminQ.post(f"/escalation/mail/{_mRid}/retry", follow_redirects=True)
+check("a retry that fails again says so, in the provider's words",
+      "Errno 101" in _rStillQ.text or "did not send" in _rStillQ.text)
+check("and explains what that error actually means",
+      "blocks the SMTP ports" in _rStillQ.text)
+with _slQ() as _d:
+    check("nothing new is recorded by a retry",
+          len(_d.scalars(_SEL(_EsQ).where(_EsQ.mail_id == _mRid)).all()) == 1)
+
+_mlR.send = lambda *a, **k: (True, "")
+_rGoneQ = adminQ.post(f"/escalation/mail/{_mRid}/retry", follow_redirects=True)
+with _slQ() as _d:
+    _mR2 = _d.get(_EmQ, _mRid)
+    check("once the mail works, the same email goes out",
+          _mR2.status == "sent", _mR2.status)
+    check("and it is the message that was written that morning, unchanged",
+          _mR2.subject == "s" and _mR2.body == "b")
+    check("with the escalation rows left exactly as they were",
+          len(_d.scalars(_SEL(_EsQ).where(_EsQ.mail_id == _mRid)).all()) == 1)
+
+# A delivered email is history, and history is not edited here.
+check("a sent email cannot be sent twice",
+      "already delivered" in adminQ.post(
+          f"/escalation/mail/{_mRid}/retry", follow_redirects=True).text)
+check("nor discarded",
+      "not removed from it" in adminQ.post(
+          f"/escalation/mail/{_mRid}/discard", follow_redirects=True).text)
+
+# Discarding one that never left has to take its rungs with it. Deleting
+# the record alone would leave every task marked as told at that level,
+# climbing from there tomorrow having told nobody anything.
+with _slQ() as _d:
+    _orgR = _d.scalar(_SEL(_OgQ))
+    _mD = _EmQ(org_id=_orgR.id, day=_dayR, level=2, repeat_n=0,
+               to_name="EA", to_email="ea@gcs.local", subject="s2",
+               body="b2", task_count=1, status="failed", error="nope")
+    _d.add(_mD); _d.flush()
+    _d.add(_EsQ(org_id=_orgR.id, task_id=_tRid, level=2, repeat_n=0,
+                day=_dayR, days_overdue=2, to_email="ea@gcs.local",
+                mail_id=_mD.id, subject="s2"))
+    _d.commit()
+    _mDid = _mD.id
+adminQ.post(f"/escalation/mail/{_mDid}/discard")
+with _slQ() as _d:
+    check("discarding removes the email", _d.get(_EmQ, _mDid) is None)
+    check("and the rungs it claimed, so the level is owed again",
+          not _d.scalars(_SEL(_EsQ).where(_EsQ.mail_id == _mDid)).all())
+    check("leaving the task itself alone", _d.get(_TkQ, _tRid) is not None)
+
+check("a doer cannot send or discard escalation email",
+      doer.post(f"/escalation/mail/{_mRid}/retry").status_code == 403
+      and doer.post(f"/escalation/mail/{_mRid}/discard").status_code == 403)
+# The whole day in one go, for the common case: a mail server that was
+# down for a morning, not one email that bounced.
+with _slQ() as _d:
+    _orgR = _d.scalar(_SEL(_OgQ))
+    for _n in range(3):
+        _d.add(_EmQ(org_id=_orgR.id, day=_dayR, level=1, repeat_n=_n,
+                    to_name=f"P{_n}", to_email=f"p{_n}@gcs.local",
+                    subject=f"s{_n}", body="b", task_count=1,
+                    status="failed", error="nope"))
+    _d.commit()
+_rDayQ = adminQ.post("/escalation/mail/retry-day",
+                     data={"day": _dayR.isoformat()}, follow_redirects=True)
+with _slQ() as _d:
+    _leftQ = _d.scalars(_SEL(_EmQ).where(_EmQ.day == _dayR,
+                                         _EmQ.status != "sent")).all()
+    check("one button sends every stuck email of that day",
+          not _leftQ, str([(m.to_email, m.status) for m in _leftQ]))
+check("and says how many went", "sent" in _rDayQ.text)
+check("a day that is not a date is refused rather than read as today",
+      adminQ.post("/escalation/mail/retry-day",
+                  data={"day": "yesterday"}).status_code == 400)
+_mlR.HOST, _mlR.FROM, _mlR.send = _hR, _fR, _sR
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
