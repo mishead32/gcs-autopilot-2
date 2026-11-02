@@ -66,6 +66,26 @@
          else 'are file questions and are' }} left out — a cell cannot hold
       a document. Runs started this way have no file against them; attach
       it on the step that needs it, or start those runs one at a time.
+      The file's second sheet says the same thing beside the question, for
+      whoever opens it next week.
+    </p>
+    {% endif %}
+    {# A required file question is a promise this route cannot keep: the
+       start form refuses to create a run without it, and these rows will
+       be created without it. Said here rather than discovered later by
+       somebody holding a Dak entry with no Dak attached. #}
+    {% if required_files %}
+    <p class="m warnline" style="margin:10px 0 0">
+      <strong>{{ required_files|join(', ') }}</strong>
+      {{ 'is marked required on the start form' if required_files|length == 1
+         else 'are marked required on the start form' }}, and a spreadsheet
+      cannot carry {{ 'it' if required_files|length == 1 else 'them' }}.
+      Starting runs from a file creates them anyway, without
+      {{ 'that document' if required_files|length == 1 else 'those documents' }} —
+      the one thing the start form would not let you do. Upload in bulk only
+      if somebody will attach
+      {{ 'it' if required_files|length == 1 else 'them' }} to the step
+      afterwards.
     </p>
     {% endif %}
   </div>

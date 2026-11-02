@@ -136,9 +136,58 @@ def template(db: Session, flow: Flow) -> bytes:
         elif f["type"] == "company":
             _dropdown(ws, letter, branches)
 
+    _readme(wb, flow, cols)
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _readme(wb, flow: Flow, cols: list[dict]) -> None:
+    """A sheet listing every start-form question and whether this file has it.
+
+    Somebody who compares the file to the form finds a question missing
+    and reasonably concludes the file is wrong. One of them genuinely
+    cannot be a column — a cell will not hold a document — and the place
+    to say so is in the file, next to the question, not on a web page they
+    were on ten minutes ago.
+    """
+    ws = wb.create_sheet("What this file carries")
+    for i, head in enumerate(("Question on the start form", "In this file?",
+                              "How it is answered"), start=1):
+        c = ws.cell(row=1, column=i, value=head)
+        c.fill, c.font = HEAD, HEAD_FONT
+        c.alignment = Alignment(vertical="center", wrap_text=True)
+    for letter, width in (("A", 46), ("B", 16), ("C", 58)):
+        ws.column_dimensions[letter].width = width
+    ws.row_dimensions[1].height = 24
+    ws.freeze_panes = "A2"
+
+    here = {f["label"] for f in cols}
+    row = 2
+    if needs_company(flow):
+        ws.cell(row=row, column=1, value=COMPANY)
+        ws.cell(row=row, column=2, value="Yes")
+        ws.cell(row=row, column=3,
+                value="Which company the run is filed under.")
+        row += 1
+    for f in flow.start_form_fields:
+        ws.cell(row=row, column=1, value=f["label"])
+        if f["type"] == "file":
+            ws.cell(row=row, column=2, value="No")
+            ws.cell(row=row, column=3, value=(
+                "A spreadsheet cell cannot hold a document. Every run "
+                "started from this file is created without it — attach it "
+                "on the step that needs it, where whoever is doing the work "
+                "can open it."))
+        else:
+            ws.cell(row=row, column=2,
+                    value="Yes" if f["label"] in here else "No")
+            ws.cell(row=row, column=3, value=_note(f))
+        ws.cell(row=row, column=3).alignment = Alignment(wrap_text=True,
+                                                         vertical="top")
+        ws.row_dimensions[row].height = 30
+        row += 1
 
 
 def _dropdown(ws, letter: str, values: list[str]) -> None:

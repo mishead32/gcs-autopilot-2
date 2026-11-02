@@ -653,6 +653,8 @@ def bulk_form(flow_id: int, request: Request, user: User = Depends(current_user)
         "uploads_on": storage.uploads_available(),
         "file_questions": [f["label"] for f in flow.start_form_fields
                            if f["type"] == "file"],
+        "required_files": [f["label"] for f in flow.start_form_fields
+                           if f["type"] == "file" and f["required"]],
     })
 
 
@@ -1340,12 +1342,41 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
         select(Task).where(Task.flow_instance_id == inst.id).order_by(Task.created_at)
     ).all()
     try:
-        started_with = context_answers(json.loads(inst.context or "{}"))
+        answered = context_answers(json.loads(inst.context or "{}"))
     except json.JSONDecodeError:
-        started_with = {}
+        answered = {}
     run_files = db.scalars(
         select(Attachment).where(Attachment.flow_instance_id == inst.id)
         .order_by(Attachment.id)).all()
+
+    # Every question the start form asks, in the order it asks them —
+    # including the ones nobody answered.
+    #
+    # Only the answered ones used to be listed, which reads as a form that
+    # does not ask the rest: somebody comparing this table to the form
+    # finds a question missing and cannot tell whether it was skipped or
+    # never there. An optional question left blank is a fact about the run
+    # and belongs on the page.
+    started_with = {}
+    for field in inst.flow.start_form_fields:
+        label = field["label"]
+        if field["type"] == "file":
+            # start_field is the question each uploaded file answers — set
+            # when the run was started, which is what makes "which of the
+            # three uploads is the Dak" answerable at all.
+            got = [a for a in run_files if (a.start_field or "") == label]
+            started_with[label] = (
+                f"{len(got)} file(s) — see above" if got
+                else ("— nothing uploaded" if not field["required"]
+                      else "— no file against this run"))
+            continue
+        started_with[label] = answered.get(label) or "—"
+    # Anything in the run's own answers that the form no longer asks: a
+    # question renamed or removed since. Dropping it would quietly rewrite
+    # what this run was actually started with.
+    for label, value in answered.items():
+        if label not in started_with:
+            started_with[f"{label} (no longer asked)"] = value
     return templates.TemplateResponse(request, "flow_instance.html", {
         "user": user, "inst": inst, "tasks": tasks, "run_files": run_files,
         "progress": flow_svc.flow_progress(inst),

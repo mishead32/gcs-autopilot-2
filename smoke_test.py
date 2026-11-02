@@ -13303,5 +13303,101 @@ with _slQ() as _d:
     _d.commit()
     _feF.forget()
 
+print("\n== the file says which questions it cannot carry ==")
+# Somebody compared the downloaded template to the start form, found a
+# question missing and reasonably concluded the file was wrong. One of
+# them genuinely cannot be a column — a cell will not hold a document —
+# and the place to say so is IN the file, beside the question, not on a
+# web page they were on ten minutes ago.
+import io as _ioD
+from openpyxl import load_workbook as _lwD
+
+from app.models import Flow as _FlD2, FlowStep as _FsD2
+from app.services import flowbulk as _fbD
+
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ)).id
+    _fD = _FlD2(org_id=_orgD, name=f"SMOKE DAK {RUN}", active=True)
+    _fD.start_form = _jsB.dumps([
+        {"label": "Receiving date", "type": "date", "options": [],
+         "required": True},
+        {"label": "Document number", "type": "text", "options": [],
+         "required": True},
+        {"label": "Upload received document", "type": "file", "options": [],
+         "required": True},
+        {"label": "Sender name", "type": "text", "options": [],
+         "required": False},
+    ])
+    _d.add(_fD); _d.flush()
+    _d.add(_FsD2(flow_id=_fD.id, position=1, title="Hand it over",
+                 default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                 tat_unit="days", tat_value=1, requires_attachment=False))
+    _d.commit()
+    _fDid2 = _fD.id
+    _blobD = _fbD.template(_d, _d.get(_FlD2, _fDid2))
+
+_wbD = _lwD(_ioD.BytesIO(_blobD))
+check("the file explains itself on a sheet of its own",
+      "What this file carries" in _wbD.sheetnames, str(_wbD.sheetnames))
+_readD = {r[0]: (r[1], r[2]) for r in
+          _wbD["What this file carries"].iter_rows(min_row=2, values_only=True)}
+check("every question on the form is listed, carried or not",
+      all(q in _readD for q in ("Receiving date", "Document number",
+                                "Upload received document", "Sender name")),
+      str(list(_readD)))
+check("the ones it carries say yes",
+      _readD["Document number"][0] == "Yes")
+check("the document says no, and why",
+      _readD["Upload received document"][0] == "No"
+      and "cannot hold a document" in _readD["Upload received document"][1],
+      str(_readD["Upload received document"]))
+# The sheet is an explanation, not a second place to type answers.
+check("and the rows sheet still has only the columns to fill in",
+      [c.value for c in _wbD["Rows"][1]].count("Upload received document") == 0)
+
+# A required file question is a promise this route cannot keep: the start
+# form refuses to create a run without it, and these rows are created
+# without it.
+_bulkPageD = admin.get(f"/flows/{_fDid2}/bulk").text
+check("the bulk page says which questions are left out",
+      "Upload received document" in _bulkPageD)
+check("and warns when one of them was marked required",
+      "marked required on the start form" in _bulkPageD)
+
+print("\n== a run lists every question, answered or not ==")
+# Only the answered ones used to be listed, which reads as a form that
+# does not ask the rest: somebody comparing the run to the form finds a
+# question missing and cannot tell whether it was skipped or never there.
+admin.post(f"/flows/{_fDid2}/edit", data={
+    "name": f"SMOKE DAK {RUN}", "description": "", "branch_id": "",
+    "sf_label": ["Receiving date", "Document number", "Sender name"],
+    "sf_type": ["date", "text", "text"],
+    # "0", not "": the builder sends 0 or 1 per question, and anything
+    # that is not "0" is read as required — which is what the page's own
+    # tickboxes post.
+    "sf_required": ["1", "1", "0"], "sf_options": ["", "", ""],
+    "step_id": [""], "step_title": ["Hand it over"],
+    "step_doer": [str(_staffB[0].id)], "step_tat_unit": ["days"],
+    "step_tat": ["1"], "step_priority": ["medium"], "step_instructions": [""],
+    "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
+    "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
+    "step_no": [""], "step_fail": [""], "step_due_from": [""]})
+_startD = admin.post(f"/flows/{_fDid2}/start", data={
+    "reference": "", "sf0": "2026-11-20", "sf1": f"ep-{RUN}", "sf2": ""})
+check("the run starts", _startD.status_code in (200, 303),
+      f"{_startD.status_code}: " + " ".join(
+          _startD.text.split("<p")[-1].split())[:220])
+with _slQ() as _d:
+    _iD2 = _d.scalars(_SEL(_FiF).where(_FiF.flow_id == _fDid2)
+                      .order_by(_FiF.id.desc())).first()
+    _iD2id = _iD2.id
+_runPageD = admin.get(f"/flows/instance/{_iD2id}").text
+check("a question that was answered is shown",
+      f"ep-{RUN}" in _runPageD)
+# The thing that was missing: an optional question left blank vanished
+# entirely, so the table no longer matched the form.
+check("and one left blank is shown as blank, not dropped",
+      "Sender name" in _runPageD, "the blank question is missing")
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

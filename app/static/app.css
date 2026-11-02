@@ -1378,3 +1378,10 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
   .festive{animation:none}
   .fscene .flame,.fscene .spark,.fscene .fglow{animation:none}
   .fscene .spark{opacity:.7}}
+
+/* A line that has to be read before a button is pressed, inside a card
+   that is otherwise explanatory. Not a whole warning box: the card around
+   it is already the explanation, and a box inside a box reads as two
+   problems. */
+.warnline{border-left:3px solid var(--warn,#d97706);padding-left:10px;
+          color:#7c2d12}
