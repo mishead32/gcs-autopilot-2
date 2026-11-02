@@ -76,7 +76,13 @@ def status() -> str:
                         ("WA_TEMPLATE", TEMPLATE)):
         if not value:
             return f"{URL} is set, but {name} is empty."
-    return f"{TEMPLATE} via {URL}"
+    # The LENGTH of the key, never the key. "Invalid API key" is almost
+    # always a key that was pasted with a space or a line break on the end,
+    # or half a key from a box that scrolled — and the only way to see that
+    # without reading the key out loud is to count it and compare with the
+    # one in the provider's console.
+    return (f"{TEMPLATE} via {URL} · key is {len(API_KEY)} characters, "
+            f"phone id {len(PHONE_ID)}")
 
 
 def number(raw) -> str:

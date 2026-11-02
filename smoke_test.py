@@ -10195,8 +10195,15 @@ with _slQ() as _d:
           _mQ.task_count >= 6, _mQ.task_count)
     check("the subject says how many, so it can be triaged before opening",
           f"{_mQ.task_count} overdue task" in _mQ.subject, _mQ.subject)
-    check("and it covers the six without sending six emails",
-          _mQ.task_count < 6 * 2, _mQ.task_count)
+    # The count on the email has to equal what is actually in it. The
+    # old assertion here was a ceiling — "fewer than twelve tasks" — which
+    # was never a rule, only a fact about how much work happened to be
+    # overdue when it was written. Other people's work legitimately rides
+    # in the same email when it is the same person at the same level, so
+    # the ceiling failed the day the suite grew, having tested nothing.
+    check("and the count on it is the number of tasks actually in it",
+          _mQ.task_count == len(_d.scalars(_SEL(_EsQ).where(
+              _EsQ.mail_id == _mQ.id)).all()), _mQ.task_count)
     check("every one of the six is listed in it",
           all((_d.get(_TkQ, i).ref in _mQ.body) for i in _manyIdsQ),
           _mQ.body)
@@ -12647,7 +12654,15 @@ _mlR.HOST, _mlR.FROM = "smtp.test", "gcs@test"
 
 with _slQ() as _d:
     _orgR = _d.scalar(_SEL(_OgQ))
-    _tR = _d.scalar(_SEL(_TkQ).where(_TkQ.org_id == _orgR.id))
+    # Ordered, and cleared. Unordered, PostgreSQL and SQLite pick
+    # different tasks; uncleared, the task picked may already have been
+    # escalated at level 1 today by an earlier block — and the unique
+    # index on (task, level, repeat) is doing its job when that collides.
+    _tR = _d.scalars(_SEL(_TkQ).where(_TkQ.org_id == _orgR.id)
+                     .order_by(_TkQ.id)).first()
+    for _e in _d.scalars(_SEL(_EsQ).where(_EsQ.task_id == _tR.id)).all():
+        _d.delete(_e)
+    _d.commit()
     _dayR = _escQ.clock.today()
     _mR = _EmQ(org_id=_orgR.id, day=_dayR, level=1, repeat_n=0,
                to_name="HOD", to_email="hod@gcs.local", subject="s",
@@ -12698,6 +12713,10 @@ with _slQ() as _d:
                to_name="EA", to_email="ea@gcs.local", subject="s2",
                body="b2", task_count=1, status="failed", error="nope")
     _d.add(_mD); _d.flush()
+    for _e in _d.scalars(_SEL(_EsQ).where(_EsQ.task_id == _tRid,
+                                          _EsQ.level == 2)).all():
+        _d.delete(_e)
+    _d.flush()
     _d.add(_EsQ(org_id=_orgR.id, task_id=_tRid, level=2, repeat_n=0,
                 day=_dayR, days_overdue=2, to_email="ea@gcs.local",
                 mail_id=_mD.id, subject="s2"))
@@ -12956,6 +12975,11 @@ _waV.PHONE_ID, _waV.TEMPLATE = "PID-9999", "overdue_followup"
 check("with all four set it is ready", _waV.enabled())
 check("and the status line never prints the key",
       "KEY-abcdef123456" not in _waV.status(), _waV.status())
+# "Invalid API key" is almost always a key pasted with a space or a line
+# break on the end, or half a key from a box that scrolled. Counting it is
+# the only way to see that without reading the key out loud.
+check("but it does say how long the key is, which is what finds a bad paste",
+      f"{len('KEY-abcdef123456')} characters" in _waV.status(), _waV.status())
 # A gateway that echoes the request back in an error would otherwise write
 # the key into a log everybody with the escalation page can read.
 check("nor does an error that quotes the request back",
@@ -13161,6 +13185,18 @@ with _slQ() as _d:
     _feF.forget()
 
     # Just outside the ten days, then just inside.
+    # The seeded calendar has real festivals on it, and one of them may
+    # be nearer than the one this test is about — which would make every
+    # assertion below about that one instead. Hidden for the duration and
+    # put back afterwards.
+    _hidF = _d.scalars(_SEL(_HolF).where(
+        _HolF.day >= _todayF,
+        _HolF.day <= _todayF + _tdT(days=_feF.LEAD_DAYS + 10))).all()
+    _keptF = [(h.org_id, h.branch_id, h.day, h.name) for h in _hidF]
+    for _h in _hidF:
+        _d.delete(_h)
+    _d.commit()
+
     _d.add(_HolF(org_id=_orgF.id, branch_id=None, name="SMOKE Faraway",
                  day=_todayF + _tdT(days=_feF.LEAD_DAYS + 5)))
     _d.commit()
@@ -13262,6 +13298,8 @@ with _slQ() as _d:
     for _old in _d.scalars(_SEL(_HolF).where(
             _HolF.name.in_(("SMOKE Diwali", "SMOKE Faraway")))).all():
         _d.delete(_old)
+    for _o, _b, _day, _nm in _keptF:
+        _d.add(_HolF(org_id=_o, branch_id=_b, day=_day, name=_nm))
     _d.commit()
     _feF.forget()
 
