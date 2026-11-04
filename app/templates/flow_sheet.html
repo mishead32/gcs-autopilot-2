@@ -50,14 +50,22 @@
       {% for c in cols %}
       <tr><td><strong>{{ c.label }}</strong>
         {% if c.required %}<span class="m"> · required</span>{% endif %}</td>
-        <td class="m">{{ c.type|replace('company', 'one of your companies') }}
-          {%- if c.options %} — {{ c.options|join(', ') }}{% endif %}</td></tr>
+        <td class="m">
+          {%- if c.type == 'file' -%}
+            a link to the document — http:// or https://, may be empty
+          {%- else -%}
+            {{ c.type|replace('company', 'one of your companies') }}
+            {%- if c.options %} — {{ c.options|join(', ') }}{% endif %}
+          {%- endif -%}</td></tr>
       {% endfor %}
     </table>
     {% if file_questions %}
-    <p class="m"><strong>Not carried:</strong>
-      {{ file_questions|join(', ') }} — a cell cannot hold a document.
-      Those are attached later, on the step that needs them.</p>
+    <p class="m"><strong>Carried as a link:</strong>
+      {{ file_questions|join(', ') }} — a cell cannot hold a document, so
+      that column takes the web address of one. A Google Form writes a
+      Drive link there by itself, and the run shows it on every step.
+      A column the sheet does not have at all is fine: those runs simply
+      start without a document.</p>
     {% endif %}
     <p class="m">The <a href="/flows/{{ flow.id }}/bulk">bulk upload page</a>
       downloads a file with exactly these headings — open it, copy row 1

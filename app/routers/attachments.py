@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 from ..config import UPLOAD_DIR
 from ..db import get_db
 from ..deps import current_user, can_view_task
-from ..models import Task, TaskStatus, Attachment, User, Right
+from ..models import (Task, TaskStatus, Attachment, LINK_SCHEMES, User,
+                      Right)
 from ..services import storage, shrink
 
 router = APIRouter()
@@ -235,10 +236,27 @@ def _fetch(attachment_id: int, user: User, db: Session) -> Attachment:
     raise HTTPException(404, "Not found")
 
 
+def _to_link(att: Attachment) -> RedirectResponse:
+    """Send the reader to a linked document, wherever it lives.
+
+    The address is re-checked here and not only where it was stored. This
+    route is the one thing that turns a value in the database into
+    somewhere a person's browser goes, so it refuses anything that is not
+    an ordinary web address rather than trusting that it was checked on the
+    way in — storage rules change, this guarantee should not.
+    """
+    target = att.stored_name or ""
+    if not target.lower().startswith(LINK_SCHEMES):
+        raise HTTPException(400, "That link is not a web address.")
+    return RedirectResponse(target, status_code=307)
+
+
 @router.get("/attachments/{attachment_id}")
 def download(attachment_id: int, user: User = Depends(current_user),
              db: Session = Depends(get_db)):
     att = _fetch(attachment_id, user, db)
+    if att.is_link:
+        return _to_link(att)
     if att.storage == "db":
         return _from_db(att, inline=False)
     if att.storage == "s3":
@@ -257,6 +275,8 @@ def view(attachment_id: int, user: User = Depends(current_user),
          db: Session = Depends(get_db)):
     """Same file, shown in the browser instead of downloaded — for previews."""
     att = _fetch(attachment_id, user, db)
+    if att.is_link:
+        return _to_link(att)
     if att.storage == "db":
         return _from_db(att, inline=True)
     if att.storage == "s3":
@@ -282,7 +302,11 @@ def remove(attachment_id: int, user: User = Depends(current_user),
         raise HTTPException(400, "This task is closed — the file is part of the record")
 
     task_id = att.task_id
-    storage.delete(att.stored_name)
+    # A link is an address, not a file: there is nothing in the bucket or on
+    # disk to remove, and handing a web address to the file deleter would
+    # have it looking for a path made out of one.
+    if not att.is_link:
+        storage.delete(att.stored_name)
     db.delete(att)
     db.commit()
     return RedirectResponse(f"/tasks/{task_id}", status_code=303)

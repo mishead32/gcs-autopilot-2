@@ -1525,6 +1525,44 @@ class TaskComment(Base):
     author: Mapped[User] = relationship()
 
 
+#: The value of Attachment.storage when the row is a LINK rather than a
+#: file this system holds: stored_name is the web address. Kept as a value
+#: of the existing column rather than a new one, so every rule already
+#: written about who may see an attachment covers it unchanged.
+LINK_STORAGE = "link"
+
+#: What a link may begin with. Anything else is refused when it is read,
+#: because an attachment is something people click: a javascript: or
+#: file: address in that position is a way to make somebody's browser do
+#: something they did not ask for.
+LINK_SCHEMES = ("http://", "https://")
+
+#: stored_name is VARCHAR(512); a link longer than this is refused rather
+#: than cut, because half a web address is worse than none.
+LINK_MAX = 500
+
+
+def read_link(value: str) -> tuple[str, str]:
+    """A web address out of a spreadsheet cell: (link, problem).
+
+    One of the two is always empty. Written here, beside the column it has
+    to fit in, so the upload and the live Google Sheet cannot disagree
+    about what a usable link is.
+    """
+    text = (value or "").strip()
+    if not text:
+        return "", ""
+    if " " in text:
+        text = text.split()[0]
+    if not text.lower().startswith(LINK_SCHEMES):
+        return "", ("That does not look like a web link — it should start "
+                    "with http:// or https://. Paste the Drive link to the "
+                    "document, or leave the cell empty.")
+    if len(text) > LINK_MAX:
+        return "", f"That link is longer than {LINK_MAX} characters."
+    return text, ""
+
+
 class Attachment(Base):
     __tablename__ = "attachments"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1562,7 +1600,29 @@ class Attachment(Base):
         return self.content_type.startswith("image/")
 
     @property
+    def is_link(self) -> bool:
+        """A document that lives somewhere else, named by a web address.
+
+        A spreadsheet cell cannot hold a file, but it very often holds a
+        Google Drive link to one — which is exactly what a Google Form's
+        file question writes into its responses sheet. Rather than drop
+        that column, the link is kept as an attachment of its own kind:
+        same place on the page, same rules about who may see it, and one
+        click to the document. Nothing is copied, so if the Drive file is
+        moved or un-shared the link stops working — which is the honest
+        behaviour, and better than a column silently thrown away.
+        """
+        return self.storage == LINK_STORAGE
+
+    @property
+    def url(self) -> str:
+        """Where a linked document actually is. Empty for a real file."""
+        return self.stored_name if self.is_link else ""
+
+    @property
     def size_label(self) -> str:
+        if self.is_link:
+            return "link"
         kb = self.size / 1024
         return f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
 

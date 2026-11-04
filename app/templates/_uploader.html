@@ -41,11 +41,19 @@
 {% if rows %}
 <div class="att-grid">
   {% for a in rows %}
-  <div class="att {{ 'img' if a.is_image }}">
+  {# A linked document — a Drive address out of a spreadsheet cell — is
+     shown here beside the uploaded ones, because to the person doing the
+     work it is the same thing: the document this run is about. It opens in
+     a new tab, is marked LINK rather than given a made-up file type, and
+     says plainly that it is held somewhere else. #}
+  <div class="att {{ 'img' if a.is_image }}{{ ' link' if a.is_link }}">
     {% if a.is_image %}
     <a href="/attachments/{{ a.id }}/view" target="_blank" rel="noopener" class="thumb">
       <img src="/attachments/{{ a.id }}/view" alt="{{ a.filename }}" loading="lazy">
     </a>
+    {% elif a.is_link %}
+    <a href="/attachments/{{ a.id }}" target="_blank" rel="noopener noreferrer"
+       class="thumb file"><span class="ext">LINK</span></a>
     {% else %}
     <a href="/attachments/{{ a.id }}" class="thumb file">
       <span class="ext">{{ a.filename.rsplit('.', 1)[-1][:4]|upper if '.' in a.filename else 'FILE' }}</span>
@@ -55,9 +63,16 @@
       {% if a.start_field %}
       <div class="m" style="font-weight:600;color:var(--ink)">{{ a.start_field }}</div>
       {% endif %}
+      {% if a.is_link %}
+      <a href="/attachments/{{ a.id }}" class="fn" target="_blank"
+         rel="noopener noreferrer" title="{{ a.url }}">Open the document</a>
+      <div class="m">Kept where it is — opens elsewhere ·
+        {{ a.created_at|dt('%d %b, %I:%M %p') }}</div>
+      {% else %}
       <a href="/attachments/{{ a.id }}" class="fn" title="{{ a.filename }}">{{ a.filename }}</a>
       <div class="m">{{ a.size_label }} · {{ a.uploaded_by.name.split()[0] }}
         · {{ a.created_at|dt('%d %b, %I:%M %p') }}</div>
+      {% endif %}
     </div>
   </div>
   {% endfor %}

@@ -53,6 +53,10 @@
           {% elif c.type == 'number' %}A number
           {% elif c.type == 'date' %}A date, e.g. 2026-11-20
           {% elif c.type == 'datetime' %}A date and time
+          {% elif c.type == 'file' %}
+            A link to the document — a Google Drive address, or any other
+            beginning http:// or https://. The file is not copied here; the
+            link opens from every step of the run. May be left empty.
           {% else %}Text{% endif %}
         </td>
       </tr>
@@ -62,30 +66,34 @@
     {% if file_questions %}
     <p class="m" style="margin:12px 0 0">
       <strong>{{ file_questions|join(', ') }}</strong>
-      {{ 'is a file question and is' if file_questions|length == 1
-         else 'are file questions and are' }} left out — a cell cannot hold
-      a document. Runs started this way have no file against them; attach
-      it on the step that needs it, or start those runs one at a time.
-      The file's second sheet says the same thing beside the question, for
-      whoever opens it next week.
+      {{ 'is a file question, and its column takes a LINK'
+         if file_questions|length == 1
+         else 'are file questions, and their columns take LINKS' }}
+      to the document rather than the document itself — a Google Drive
+      address, or any other beginning http:// or https://. The file is not
+      copied here; the link is shown on every step of the run, so whoever
+      is doing the work can open it. Leave the cell empty and the row still
+      starts, with the document attached later on the step that needs it.
     </p>
     {% endif %}
-    {# A required file question is a promise this route cannot keep: the
-       start form refuses to create a run without it, and these rows will
-       be created without it. Said here rather than discovered later by
-       somebody holding a Dak entry with no Dak attached. #}
+    {# A required file question is a promise this route can only half keep:
+       the start form refuses to create a run without the document, and a
+       row whose link cell is empty will be created without one. Said here
+       rather than discovered later by somebody holding a Dak entry with no
+       Dak against it. #}
     {% if required_files %}
     <p class="m warnline" style="margin:10px 0 0">
       <strong>{{ required_files|join(', ') }}</strong>
       {{ 'is marked required on the start form' if required_files|length == 1
-         else 'are marked required on the start form' }}, and a spreadsheet
-      cannot carry {{ 'it' if required_files|length == 1 else 'them' }}.
-      Starting runs from a file creates them anyway, without
-      {{ 'that document' if required_files|length == 1 else 'those documents' }} —
-      the one thing the start form would not let you do. Upload in bulk only
-      if somebody will attach
-      {{ 'it' if required_files|length == 1 else 'them' }} to the step
-      afterwards.
+         else 'are marked required on the start form' }}, so the form will
+      not create a run without
+      {{ 'it' if required_files|length == 1 else 'them' }}. A file can, if
+      the {{ 'cell is' if required_files|length == 1 else 'cells are' }}
+      left empty. Either paste the
+      {{ 'link' if required_files|length == 1 else 'links' }} in, or make
+      sure somebody attaches
+      {{ 'the document' if required_files|length == 1 else 'the documents' }}
+      to the step afterwards.
     </p>
     {% endif %}
   </div>
@@ -166,6 +174,15 @@
     {% for c in cols %}
     <td>{% if c.type == 'company' %}
       <span class="m">{{ r.branch_id and '✓' or '—' }}</span>
+      {# A link is not an answer — it does not go into the run's context, it
+         becomes a document on the run. Shown as the word rather than forty
+         characters of Drive identifier, which would push every other
+         column off the screen and tell nobody anything. #}
+      {% elif c.type == 'file' %}
+      {% if r.links.get(c.label) %}<a href="{{ r.links[c.label] }}"
+        target="_blank" rel="noopener noreferrer"
+        title="{{ r.links[c.label] }}">link ↗</a>
+      {% else %}<span class="m">—</span>{% endif %}
       {% else %}{{ r.context.get(c.label, '') or '—' }}{% endif %}</td>
     {% endfor %}
   </tr>

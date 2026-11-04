@@ -13328,12 +13328,13 @@ with _slQ() as _d:
     _d.commit()
     _feF.forget()
 
-print("\n== the file says which questions it cannot carry ==")
+print("\n== the file says how each question is carried ==")
 # Somebody compared the downloaded template to the start form, found a
-# question missing and reasonably concluded the file was wrong. One of
-# them genuinely cannot be a column — a cell will not hold a document —
-# and the place to say so is IN the file, beside the question, not on a
-# web page they were on ten minutes ago.
+# question missing and reasonably concluded the file was wrong. A document
+# is the awkward one: a cell will not hold it, but it will hold a LINK to
+# it, which is what a Google Form's responses sheet writes there anyway.
+# So the column exists and says what goes in it — in the file, beside the
+# question, not on a web page they were on ten minutes ago.
 import io as _ioD
 from openpyxl import load_workbook as _lwD
 
@@ -13372,19 +13373,22 @@ check("every question on the form is listed, carried or not",
       str(list(_readD)))
 check("the ones it carries say yes",
       _readD["Document number"][0] == "Yes")
-check("the document says no, and why",
-      _readD["Upload received document"][0] == "No"
-      and "cannot hold a document" in _readD["Upload received document"][1],
+check("the document says it is carried as a link, and what that means",
+      _readD["Upload received document"][0] == "As a link"
+      and "http://" in _readD["Upload received document"][1],
       str(_readD["Upload received document"]))
-# The sheet is an explanation, not a second place to type answers.
-check("and the rows sheet still has only the columns to fill in",
-      [c.value for c in _wbD["Rows"][1]].count("Upload received document") == 0)
+# It used to be left out of the Rows sheet entirely. That is the bug this
+# changed: a responses sheet full of Drive links started runs with no
+# document against them, and nothing anywhere said why.
+check("and the rows sheet has a column for it to go in",
+      [c.value for c in _wbD["Rows"][1]].count("Upload received document") == 1,
+      [c.value for c in _wbD["Rows"][1]])
 
-# A required file question is a promise this route cannot keep: the start
-# form refuses to create a run without it, and these rows are created
-# without it.
+# A required file question is a promise this route can only half keep: the
+# start form refuses to create a run without the document, and a row whose
+# link cell is empty is created without one.
 _bulkPageD = admin.get(f"/flows/{_fDid2}/bulk").text
-check("the bulk page says which questions are left out",
+check("the bulk page names the file questions",
       "Upload received document" in _bulkPageD)
 check("and warns when one of them was marked required",
       "marked required on the start form" in _bulkPageD)
@@ -13551,6 +13555,148 @@ with _slQ() as _d:
     check("and the board reads the LAST pass, not the first",
           _c1b.actual is None and _c1b.state in ("running", "waiting"),
           _c1b.state)
+
+print("\n== a document a spreadsheet can carry: its link ==")
+# A cell cannot hold a document, so the file questions were left out of the
+# template and out of the sheet reader — and a Google Form's responses
+# sheet, whose upload column is full of Drive links, started runs with no
+# document against them and nothing anywhere saying why. The column is now
+# read as a LINK: not copied, pointed at.
+from app.models import Attachment as _AtL, read_link as _rlL
+from app.services import flowbulk as _fbL
+import io as _ioL
+from openpyxl import load_workbook as _lwL
+
+check("a plain web address is taken", _rlL("https://drive.google.com/x")[0]
+      == "https://drive.google.com/x")
+check("and an http one", _rlL("http://example.com/a.pdf")[0]
+      == "http://example.com/a.pdf")
+check("an empty cell is not a problem, it is just empty",
+      _rlL("  ") == ("", ""))
+check("something that is not a link is refused with a reason",
+      _rlL("see the drive folder")[0] == ""
+      and "http://" in _rlL("see the drive folder")[1])
+# The one that matters for safety: this value ends up somewhere a browser
+# is sent, so anything that is not an ordinary web address is refused.
+check("a javascript: address is refused outright",
+      _rlL("javascript:alert(1)")[0] == "", _rlL("javascript:alert(1)"))
+check("and so is a file: one", _rlL("file:///etc/passwd")[0] == "")
+check("a link longer than the column is refused, not cut",
+      _rlL("https://x.test/" + "a" * 600)[0] == "")
+
+_lkF = admin.post("/flows/new", data={
+    "name": f"SMOKE link {RUN}", "branch_id": "", "description": "",
+    "sf_label": ["Member", "Upload Received Document"],
+    "sf_type": ["text", "file"], "sf_required": ["1", "1"],
+    "sf_options": ["", ""],
+    "step_title": ["Act on it"], "step_doer": [str(_staffB[0].id)],
+    "step_tat": ["1"], "step_tat_unit": ["days"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+    "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+    "step_no": [""], "step_next": ["0"], "step_fail": [""],
+    "step_due_from": [""]})
+check("a flow with a file question saves", _lkF.status_code == 200)
+with _slQ() as _d:
+    _lkflow = _d.scalar(_SEL(_FlF).where(_FlF.name == f"SMOKE link {RUN}"))
+    _lkid = _lkflow.id
+    _lkcols = _fbL.columns(_lkflow, _fbL.needs_company(_lkflow))
+    check("the file question now HAS a column in the file",
+          "Upload Received Document" in [c["label"] for c in _lkcols],
+          [c["label"] for c in _lkcols])
+    # Required on the form, optional in the file. A link is not something a
+    # spreadsheet can be made to produce, and refusing every row without one
+    # would stop the whole sheet over a column that is a courtesy.
+    _lkcol = next(c for c in _lkcols if c["type"] == "file")
+    check("and it is optional there, however the form marks it",
+          _lkcol["required"] is False)
+    _lkblob = _fbL.template(_d, _lkflow)
+
+_lkwb = _lwL(_ioL.BytesIO(_lkblob))
+_lkws = _lkwb["Rows"]
+_lkheads = [_lkws.cell(row=1, column=i).value
+            for i in range(1, _lkws.max_column + 1)]
+check("the downloaded template prints the column too",
+      "Upload Received Document" in _lkheads, _lkheads)
+check("and a second sheet says how it is carried",
+      "What this file carries" in _lkwb.sheetnames)
+
+_LKURL = "https://drive.google.com/file/d/SMOKE" + RUN + "/view"
+_lkvals = {"Which company": "Bodyzone Fitness & Spa", "Member": f"Anita {RUN}",
+           "Upload Received Document": _LKURL}
+for _i, _h in enumerate(_lkheads, start=1):
+    _lkws.cell(row=3, column=_i, value=_lkvals.get(_h, ""))
+# A second row with a typed note where the link should be: the import must
+# say so rather than start a run pointing at nothing.
+_lkws.cell(row=4, column=_lkheads.index("Which company") + 1,
+           value="Bodyzone Fitness & Spa")
+_lkws.cell(row=4, column=_lkheads.index("Member") + 1, value=f"Ravi {RUN}")
+_lkws.cell(row=4, column=_lkheads.index("Upload Received Document") + 1,
+           value="in the drive folder")
+_lkbuf = _ioL.BytesIO()
+_lkwb.save(_lkbuf)
+
+with _slQ() as _d:
+    _lkflow = _d.get(_FlF, _lkid)
+    _lkparsed = _fbL.parse(_d, _lkflow, _lkbuf.getvalue())
+    check("the good row reads, with its link",
+          [r.links for r in _lkparsed.ready] == [{"Upload Received Document": _LKURL}],
+          [r.links for r in _lkparsed.ready])
+    check("the row whose cell is not a link is held back, not imported",
+          len(_lkparsed.bad) == 1
+          and "Upload Received Document" in _lkparsed.bad[0].problems[0],
+          [r.problems for r in _lkparsed.bad])
+    _lkmade = _fbL.commit(_d, _lkflow, _d.get(_UsB, 1), _lkparsed)
+    _d.commit()
+    check("one run is started, not two", len(_lkmade) == 1, len(_lkmade))
+    _lkrun = _lkmade[0].id
+with _slQ() as _d:
+    _lkatt = _d.scalars(_SEL(_AtL)
+                        .where(_AtL.flow_instance_id == _lkrun)).all()
+    check("the link is on the run as a document", len(_lkatt) == 1, len(_lkatt))
+    _a = _lkatt[0]
+    check("it knows it is a link rather than a file", _a.is_link)
+    check("it points where the cell said", _a.url == _LKURL, _a.url)
+    check("it is named after the question, not the Drive id",
+          _a.filename == "Upload Received Document", _a.filename)
+    check("it is filed against the question it answers",
+          _a.start_field == "Upload Received Document")
+    check("and it takes up no room", _a.size == 0 and _a.size_label == "link")
+    _lkaid = _a.id
+    _lktask = _d.scalars(_SEL(_TKT)
+                         .where(_TKT.flow_instance_id == _lkrun)).first()
+    _lktid, _lkdoer = _lktask.id, _lktask.doer.email
+
+_lkpage = admin.get(f"/flows/instance/{_lkrun}")
+check("the run page shows the document", _lkpage.status_code == 200
+      and "Open the document" in _lkpage.text)
+check("and counts it as a link, not as a file held here",
+      "1 link to the document" in _lkpage.text,
+      "the run page does not say how it got there")
+_lkdc = login(_lkdoer)
+check("whoever has the step can see it on their task",
+      "Open the document" in _lkdc.get(f"/tasks/{_lktid}").text)
+_lkhop = admin.get(f"/attachments/{_lkaid}", follow_redirects=False)
+check("opening it goes to the document itself",
+      _lkhop.status_code == 307
+      and _lkhop.headers.get("location") == _LKURL,
+      f"{_lkhop.status_code} {_lkhop.headers.get('location')}")
+
+# The reason this column could not simply be made required: every sheet
+# connected before today has no such column at all, and a reader that
+# stopped on a missing heading would break all of them.
+with _slQ() as _d:
+    _lkflow = _d.get(_FlF, _lkid)
+    _lkold = _fbL.read_rows(
+        _d, _lkflow, _fbL.head_map(("Which company", "Member")),
+        [("Bodyzone Fitness & Spa", f"Older {RUN}")], 2)
+    check("a sheet with no link column at all still reads",
+          _lkold.missing == [] and len(_lkold.ready) == 1,
+          f"missing {_lkold.missing}")
+    check("and its rows simply carry no document",
+          _lkold.ready[0].links == {})
+
+check("the bulk page explains the column in words",
+      "link to the document" in admin.get(f"/flows/{_lkid}/bulk").text.lower())
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -1480,10 +1480,28 @@ def instance_detail(instance_id: int, request: Request, user: User = Depends(cur
             # when the run was started, which is what makes "which of the
             # three uploads is the Dak" answerable at all.
             got = [a for a in run_files if (a.start_field or "") == label]
-            started_with[label] = (
-                f"{len(got)} file(s) — see above" if got
-                else ("— nothing uploaded" if not field["required"]
-                      else "— no file against this run"))
+            # A document reached a run one of two ways — uploaded on the
+            # start form, or named by a link in a spreadsheet cell — and the
+            # table says which. They are not the same promise: this system
+            # holds the first and only points at the second.
+            links = sum(1 for a in got if a.is_link)
+            files = len(got) - links
+
+            def _n(count: int, word: str) -> str:
+                return f"{count} {word}" + ("" if count == 1 else "s")
+
+            if got and not files:
+                started_with[label] = (
+                    _n(links, "link") + " to the document — see above")
+            elif got and links:
+                started_with[label] = (f"{_n(files, 'file')} and "
+                                       f"{_n(links, 'link')} — see above")
+            elif got:
+                started_with[label] = _n(files, "file") + " — see above"
+            else:
+                started_with[label] = ("— nothing uploaded"
+                                       if not field["required"]
+                                       else "— no file against this run")
             continue
         started_with[label] = answered.get(label) or "—"
     # Anything in the run's own answers that the form no longer asks: a

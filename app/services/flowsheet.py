@@ -251,6 +251,10 @@ def poll(db: Session, cfg: FlowSheet, ws=None) -> dict:
         try:
             inst = start_flow(db, cfg.flow, row.name, actor,
                               context=row.context, branch_id=row.branch_id)
+            # A Drive link typed into a file question's column becomes a
+            # document on the run — the same as one uploaded on the start
+            # form, and the reason that column is no longer dropped.
+            flowbulk.attach_links(db, inst, actor, row.links)
             db.commit()
         except Exception as exc:                      # one bad row, not all
             db.rollback()

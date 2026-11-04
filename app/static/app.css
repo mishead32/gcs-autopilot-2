@@ -1454,3 +1454,11 @@ table.fmsboard .fmsb-pin .rowsub{white-space:nowrap;overflow:hidden;
 table.fmsboard .fmsb-what{display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical;overflow:hidden}
 table.fmsboard .fmsb-when{white-space:nowrap}
+
+/* A linked document — a Drive address out of a spreadsheet cell, not a file
+   this system holds. Marked rather than dressed up as an upload: what it
+   promises is different, and somebody deciding whether the proof is here
+   should be able to see which of the two they are looking at. */
+.att.link .thumb.file{background:#eff6ff}
+.att.link .thumb.file .ext{color:var(--brand)}
+.att.link{border-color:#bfdbfe}

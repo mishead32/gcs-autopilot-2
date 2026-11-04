@@ -34,7 +34,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Branch, CONTEXT_PEOPLE, Flow, User
+from ..models import (Attachment, Branch, CONTEXT_PEOPLE, Flow, FlowInstance,
+                      LINK_STORAGE, User, read_link)
 from . import flowform
 
 HEAD = PatternFill("solid", fgColor="0F4C81")
@@ -73,20 +74,47 @@ def _note(field: dict) -> str:
         return f"{need} A date and time, e.g. 2026-11-20 15:30."
     if kind == "textarea":
         return f"{need} Long text."
+    if kind == "file":
+        return ("Optional. A link to the document — paste the Google Drive "
+                "address, or any other link beginning http:// or https://. "
+                "The file itself is not copied; the link is shown on every "
+                "step of the run. Leave it empty if there is no document.")
     return need
 
 
 def columns(flow: Flow, with_company: bool) -> list[dict]:
     """The questions this file asks, in the order the start form asks them.
 
-    File questions are left out. A spreadsheet cell cannot hold a document,
-    and a column people cannot fill in is a column they try to fill in.
+    A file question IS here, and it was not always. A spreadsheet cell
+    cannot hold a document — but it very often holds a LINK to one, which
+    is exactly what a Google Form writes into its responses sheet when
+    somebody uploads a file. Leaving the column out meant a sheet whose
+    "Upload Received Document" column was full of Drive links started runs
+    with no document against them at all, and nothing anywhere said why.
+
+    So the column exists, it takes a web address, and it is always
+    optional — see `optional_here`. A link is not something the file can
+    be made to produce, and refusing every row that has no document would
+    stop the whole sheet over a column that is a courtesy.
     """
-    out = [f for f in flow.start_form_fields if f["type"] != "file"]
+    out = [dict(f, required=False) if f["type"] == "file" else f
+           for f in flow.start_form_fields]
     if with_company:
         out = [{"label": COMPANY, "type": "company", "options": [],
                 "required": bool([s for s in flow.steps if s.doer_dept])}] + out
     return out
+
+
+def optional_here(field: dict) -> bool:
+    """Is this column one the file may leave out entirely?
+
+    Only the link columns. Every other heading missing from a file stops
+    the import, because importing a row with a whole question unanswered
+    is the silent wrongness this module exists to avoid. A link column is
+    different: sheets that predate it do not have it, and stopping them
+    would break the thing it was added to help.
+    """
+    return field["type"] == "file"
 
 
 def needs_company(flow: Flow) -> bool:
@@ -174,12 +202,14 @@ def _readme(wb, flow: Flow, cols: list[dict]) -> None:
     for f in flow.start_form_fields:
         ws.cell(row=row, column=1, value=f["label"])
         if f["type"] == "file":
-            ws.cell(row=row, column=2, value="No")
+            ws.cell(row=row, column=2, value="As a link")
             ws.cell(row=row, column=3, value=(
-                "A spreadsheet cell cannot hold a document. Every run "
-                "started from this file is created without it — attach it "
-                "on the step that needs it, where whoever is doing the work "
-                "can open it."))
+                "A cell cannot hold the document itself, so this column "
+                "takes a LINK to it — a Google Drive address, or any other "
+                "beginning http:// or https://. Whoever is on any step of "
+                "the run can open it from their task. Optional: a row with "
+                "the cell empty still starts, and the document can be "
+                "attached later on the step that needs it."))
         else:
             ws.cell(row=row, column=2,
                     value="Yes" if f["label"] in here else "No")
@@ -217,6 +247,8 @@ class Row:
     people: dict = dc_field(default_factory=dict)
     branch_id: int | None = None
     name: str = ""                    # what the run will be called
+    # {question label: web address} for the file questions this row links to
+    links: dict = dc_field(default_factory=dict)
     problems: list = dc_field(default_factory=list)
 
     @property
@@ -292,7 +324,8 @@ def read_rows(db: Session, flow: Flow, heads: dict, raw_rows, first: int
 
     out = Parsed()
     out.missing = [f["label"] for f in cols
-                   if f["label"].strip().lower() not in heads]
+                   if f["label"].strip().lower() not in heads
+                   and not optional_here(f)]
     out.extra = [h for h in heads if h not in wanted]
     if out.missing:
         # Reading on would mean importing rows with whole questions
@@ -313,8 +346,22 @@ def read_rows(db: Session, flow: Flow, heads: dict, raw_rows, first: int
 
         row = Row(number=n)
         for f in cols:
-            idx = heads[f["label"].strip().lower()] - 1
+            at = heads.get(f["label"].strip().lower())
+            if at is None:
+                continue              # an optional column this file omits
+            idx = at - 1
             value = _cell(raw[idx]) if idx < len(raw) else ""
+
+            if f["type"] == "file":
+                # A link, not an answer: it does not go in the run's context
+                # — it becomes an attachment once the run exists, so it sits
+                # with the documents rather than among the typed answers.
+                link, problem = read_link(value)
+                if problem:
+                    row.problems.append(f"“{f['label']}”: {problem}")
+                elif link:
+                    row.links[f["label"]] = link
+                continue
 
             if f["type"] == "company":
                 if not value:
@@ -371,6 +418,7 @@ def commit(db: Session, flow: Flow, starter: User, parsed: Parsed) -> list:
         try:
             inst = start_flow(db, flow, "", starter, context=dict(row.context),
                               branch_id=row.branch_id)
+            attach_links(db, inst, starter, row.links)
             made.append(inst)
         except Exception as exc:                      # noqa: BLE001
             db.rollback()
@@ -378,3 +426,35 @@ def commit(db: Session, flow: Flow, starter: User, parsed: Parsed) -> list:
                 f"Could not be started: {type(exc).__name__}. The rows before "
                 "it were.")
     return made
+
+
+def attach_links(db: Session, inst: FlowInstance, user: User,
+                 links: dict) -> int:
+    """Hang this row's linked documents on the run. Returns how many.
+
+    Written once and called from both the spreadsheet upload and the live
+    Google Sheet, for the same reason the reader is shared: two copies of
+    this would be two answers to "where does a linked document end up",
+    and the day they differ a sheet quietly starts runs whose documents
+    nobody can find.
+
+    The link is stored against the run's FIRST step, exactly as a file
+    uploaded on the start form is — that is what every existing rule about
+    who may see an attachment already works from — and carries the run's
+    id as well, so the person on step 4 can open it without being handed
+    step 1.
+    """
+    if not links or not inst.tasks:
+        return 0
+    first = sorted(inst.tasks,
+                   key=lambda t: t.flow_step.position if t.flow_step else 0)[0]
+    for label, url in links.items():
+        db.add(Attachment(
+            task_id=first.id, uploaded_by_id=user.id,
+            # The question is the name. A Drive address is forty characters
+            # of identifier with nothing in it a person recognises, so
+            # showing it as the file name would tell nobody anything.
+            filename=label[:250], stored_name=url, size=0, content_type="",
+            storage=LINK_STORAGE, flow_instance_id=inst.id,
+            start_field=label[:160]))
+    return len(links)
