@@ -209,7 +209,10 @@
         {% endfor %}
       </table>
       {% endif %}
-      <div style="margin-top:14px">
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn ghost" href="/flows/{{ flow.id }}/board"
+           title="Every run on one screen — steps across, planned against actual">
+          Board — planned vs actual</a>
         <a class="btn ghost" href="/flows/{{ flow.id }}/submissions">
           All submitted data{% if submissions %} ({{ submissions }}){% endif %}</a>
       </div>

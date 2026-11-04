@@ -15,6 +15,8 @@
     {{ excel_btn('/flows/' ~ flow.id ~ '/submissions?export=xlsx&state=' ~ state ~
                  '&who=' ~ who ~ '&q=' ~ q,
                  title='Download these submissions, answers and all') }}
+    <a class="btn ghost" href="/flows/{{ flow.id }}/board"
+       title="The same runs read as a clock — steps across, planned against actual">Board</a>
     {% if flow.active and flow.steps %}
     <a class="btn" href="/flows/{{ flow.id }}">+ New submission</a>
     {% endif %}

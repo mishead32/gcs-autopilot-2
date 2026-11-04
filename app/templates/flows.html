@@ -82,6 +82,12 @@
          title="Watch a Google Sheet — a new row there starts a run here">Sheet</a>
       {% endif %}
       {% endif %}
+      {# The board is the one page that answers "where is the time going" —
+         every run of this flow with its steps across, planned against
+         actual. Beside Submissions, because the two read the same runs:
+         one as the answers they were started with, one as their clock. #}
+      <a class="btn sm ghost" href="/flows/{{ f.id }}/board"
+         title="Every run on one screen — steps across, planned against actual">Board</a>
       <a class="btn sm ghost" href="/flows/{{ f.id }}/submissions"
          title="Everything submitted to this flow">Submissions</a>
       {% if can_manage %}

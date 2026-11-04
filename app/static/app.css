@@ -1385,3 +1385,72 @@ label.check input{width:auto;flex:0 0 auto;margin-top:3px}
    problems. */
 .warnline{border-left:3px solid var(--warn,#d97706);padding-left:10px;
           color:#7c2d12}
+
+/* ------------------------------------------------------- the FMS board ----
+   One row per run, the steps across the page, each as planned / actual /
+   delay. Four steps is twelve date columns, so the table is wide on
+   purpose: it scrolls both ways inside its own frame while the run's
+   number stays pinned to the left edge and the step headings to the top.
+   Scrolling right without that pin leaves a field of timestamps with
+   nothing saying whose they are.
+
+   Every class here is prefixed, and the table is .fmsboard rather than
+   .board, because .board above is the CMD board's grid — a display:grid
+   landing on a <table> takes its rows apart. */
+.fmsbwrap{max-height:calc(100vh - 230px);overflow:auto}
+table.fmsboard{width:auto;min-width:100%;table-layout:fixed}
+table.fmsboard th,table.fmsboard td{padding:8px 10px;font-size:13px}
+
+/* The step's description block, from the paper format this was built to
+   match: what it is, who does it, how, and the turnaround it is given —
+   once at the top, not repeated down every cell. */
+table.fmsboard thead th{position:sticky;top:0;z-index:3;background:#f8fafc}
+table.fmsboard thead tr:nth-child(2) th{top:auto}
+table.fmsboard .fmsb-step{width:330px;text-transform:none;letter-spacing:0;
+  white-space:normal;vertical-align:top}
+table.fmsboard .fmsb-step .fmsb-t{font-size:13px;font-weight:700;
+  color:var(--ink);margin-bottom:3px;line-height:1.35}
+table.fmsboard .fmsb-step .fmsb-s{font-weight:400;font-size:11px;
+  color:var(--muted);text-transform:none;letter-spacing:0;line-height:1.5}
+table.fmsboard .fmsb-step .fmsb-avg{color:var(--brand);font-weight:600;
+  margin-top:3px}
+
+/* The pinned first column. A sticky cell needs a background of its own, or
+   the columns sliding under it show through. */
+table.fmsboard .fmsb-pin{position:sticky;left:0;z-index:4;
+  background:var(--card);border-right:2px solid var(--line);
+  width:180px;white-space:normal}
+table.fmsboard thead .fmsb-pin{background:#f8fafc;z-index:5}
+table.fmsboard tr.held .fmsb-pin{background:#fffdf5}
+table.fmsboard .fmsb-what{text-transform:none;letter-spacing:0;font-size:12px;
+  color:var(--ink);margin:2px 0;line-height:1.4}
+
+/* A rule between one step and the next, so three columns read as one step
+   rather than as twelve loose ones. */
+table.fmsboard .fmsb-sep{border-left:2px solid var(--line)}
+table.fmsboard .fmsb-when{width:108px}
+table.fmsboard .fmsb-gap{width:128px;white-space:normal;font-weight:600}
+table.fmsboard .fmsb-gap .fmsb-doer{font-weight:400;text-transform:none;
+  letter-spacing:0}
+table.fmsboard .fmsb-gap.st-late{color:var(--warn)}
+table.fmsboard .fmsb-gap.st-overdue{color:var(--bad)}
+table.fmsboard .fmsb-gap.st-done{color:var(--ok)}
+col.fmsb-c-pin{width:190px}
+col.fmsb-c-when{width:120px}
+col.fmsb-c-gap{width:132px}
+
+/* Who did it, under the delay. One line, cut with an ellipsis and the full
+   list on hover: three names stacked a letter at a time in a column this
+   narrow is unreadable, and the step heading already says who the step
+   goes to in the ordinary case. */
+table.fmsboard .fmsb-doer{display:block;max-width:100%;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+
+/* A row should be as tall as its dates, not as tall as the longest company
+   name in the pinned column. Everything in that column that can run long
+   gets one line and an ellipsis, with the whole of it on hover. */
+table.fmsboard .fmsb-pin .rowsub{white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:100%}
+table.fmsboard .fmsb-what{display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden}
+table.fmsboard .fmsb-when{white-space:nowrap}

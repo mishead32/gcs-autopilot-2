@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
+{% block title %}{{ flow.name }} — board · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<p class="sub"><a href="/flows/{{ flow.id }}">&larr; {{ flow.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Board</h1>
+    <p class="sub">Every run of <strong>{{ flow.name }}</strong> on one
+      screen. A row is a run; the steps go across, each as
+      <strong>planned</strong>, <strong>actual</strong> and the
+      <strong>delay</strong> between them.</p>
+  </div>
+  <div>
+    {{ excel_btn('/flows/' ~ flow.id ~ '/board?export=xlsx&state=' ~ state ~
+                 '&who=' ~ who ~ '&company=' ~ company ~ '&q=' ~ q,
+                 title='Download this board — one row per run, three columns per step') }}
+    <a class="btn ghost" href="/flows/{{ flow.id }}/submissions">Submissions</a>
+    {% if flow.active and flow.steps %}
+    <a class="btn" href="/flows/{{ flow.id }}">+ Start one</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if not steps %}
+<div class="empty">This flow has no steps yet, so there is nothing to lay
+  out. {% if user.has_manage_flow %}<a href="/flows/{{ flow.id }}/edit">Add
+  its steps →</a>{% endif %}</div>
+{% else %}
+
+{# The numbers above the table, so the shape of the thing is readable before
+   anybody starts reading dates. "Late" is a step that finished after its
+   planned time; "overdue" is one that has not finished and is already past
+   it. They are different problems — one is history, one is today — and a
+   single "late" count that mixed them told nobody what to do. #}
+<div class="grid g3">
+  <div class="kpi"><div class="l">Runs shown</div>
+    <div class="n">{{ rows|length }}</div>
+    <div class="m">{% if matched != total %}of {{ total }} in all{% else %}all
+      of them{% endif %}</div></div>
+  <div class="kpi ok"><div class="l">Steps on time</div>
+    <div class="n">{{ totals.done }}</div>
+    <div class="m">finished within their turnaround</div></div>
+  <div class="kpi warn"><div class="l">Finished late</div>
+    <div class="n">{{ totals.late }}</div>
+    <div class="m">done, but after the planned time</div></div>
+  <div class="kpi bad"><div class="l">Overdue now</div>
+    <div class="n">{{ totals.overdue }}</div>
+    <div class="m">still open, already past it</div></div>
+</div>
+
+{% if worst %}
+<p class="note" style="margin-top:14px"><strong>Step {{ worst[0].position }}
+  — {{ worst[0].title }}</strong> is the one that slips most: late on
+  {{ worst[1] }} of the {{ rows|length }} run(s) shown.
+  {% if user.has_manage_flow %}Its turnaround is
+  {{ worst[0].tat_label }}{% if worst[0].who_label %}, and it goes to
+  {{ worst[0].who_label|lower }}{% endif %}.{% endif %}</p>
+{% endif %}
+
+<div class="tabs">
+  <a class="{{ 'active' if not state }}"
+     href="/flows/{{ flow.id }}/board?who={{ who }}&company={{ company }}">All ({{ total }})</a>
+  <a class="{{ 'active' if state == 'running' }}"
+     href="/flows/{{ flow.id }}/board?state=running&who={{ who }}&company={{ company }}">Running</a>
+  <a class="{{ 'active' if state == 'done' }}"
+     href="/flows/{{ flow.id }}/board?state=done&who={{ who }}&company={{ company }}">Finished</a>
+  <a class="{{ 'active' if state == 'held' }}"
+     href="/flows/{{ flow.id }}/board?state=held&who={{ who }}&company={{ company }}">On hold</a>
+  <a class="{{ 'active' if state == 'stopped' }}"
+     href="/flows/{{ flow.id }}/board?state=stopped&who={{ who }}&company={{ company }}">Stopped</a>
+</div>
+
+<form method="get" action="/flows/{{ flow.id }}/board" class="card searchbar">
+  <input type="hidden" name="state" value="{{ state }}">
+  <input type="hidden" name="show" value="{{ show }}">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}" autocomplete="off" spellcheck="false"
+           placeholder="FMS-12, or words from what the run is about">
+  </div>
+  <div class="fb-f">
+    <label>Company</label>
+    <select name="company">
+      <option value="">Every company</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if company == b.id|string }}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fb-f">
+    <label>Started by</label>
+    <select name="who">
+      <option value="" {{ 'selected' if not who }}>Everybody</option>
+      <option value="mine" {{ 'selected' if who == 'mine' }}>Only mine</option>
+    </select>
+  </div>
+  <div class="acts">
+    <button class="btn">Search</button>
+    {% if q or who or company %}
+    <a class="btn ghost" href="/flows/{{ flow.id }}/board?state={{ state }}">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if rows %}
+{# The table is wide by design — four steps is twelve date columns — so it
+   scrolls sideways inside its own frame and the run's number stays pinned
+   to the left edge. Without that pin, scrolling right leaves a field of
+   timestamps with nothing saying which run they belong to. #}
+<div class="table-wrap fmsbwrap">
+<table class="fmsboard">
+  {# Widths said once, here, rather than left to the browser. A fixed
+     layout reads them from the first row, and the first row is all
+     colspans — so without this the three columns of a step get a third
+     each of whatever the heading text happened to need, and a step with a
+     long "How" is four times the width of the one beside it. #}
+  <colgroup>
+    <col class="fmsb-c-pin">
+    {% for s in steps %}
+    <col class="fmsb-c-when"><col class="fmsb-c-when"><col class="fmsb-c-gap">
+    {% endfor %}
+  </colgroup>
+  <thead>
+    {# The description block from the paper format: what the step is, who
+       does it, how, and the turnaround it is given — once at the top rather
+       than repeated in every cell underneath. #}
+    <tr>
+      <th class="fmsb-pin" rowspan="2">Run</th>
+      {% for s in steps %}
+      <th colspan="3" class="fmsb-step {{ 'fmsb-sep' if not loop.first }}">
+        <div class="fmsb-t">Step {{ s.position }} · {{ s.title }}</div>
+        <div class="fmsb-s"><strong>Who:</strong> {{ s.who_label }}</div>
+        {% if s.how_to or s.instructions %}
+        <div class="fmsb-s"><strong>How:</strong>
+          {{ (s.how_to or s.instructions)|truncate(70) }}</div>{% endif %}
+        <div class="fmsb-s"><strong>When:</strong> {{ s.tat_label }}</div>
+        {% if averages[loop.index0] %}
+        <div class="fmsb-s fmsb-avg">Average on the runs shown:
+          {{ averages[loop.index0] }}</div>{% endif %}
+      </th>
+      {% endfor %}
+    </tr>
+    <tr>
+      {% for s in steps %}
+      <th class="fmsb-when {{ 'fmsb-sep' if not loop.first }}">Planned</th>
+      <th class="fmsb-when">Actual</th>
+      <th class="fmsb-gap">Time delay</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+  {% for i in rows %}
+  <tr class="{{ 'held' if i.on_hold }}">
+    <td class="fmsb-pin">
+      <a class="refid" href="/flows/instance/{{ i.id }}">{{ i.label }}</a>
+      <div class="fmsb-what m" title="{{ i.reference }}">{{ i.reference }}</div>
+      <div class="m rowsub" {% if i.branch %}title="{{ i.branch.name }}"{% endif %}>
+        <span class="chip run_{{ i.state|replace(' ','_') }}">{{ i.state }}</span>
+        {% if i.branch %} {{ i.branch.name }}{% endif %}</div>
+    </td>
+    {% for c in board[i.id] %}
+    {# Three cells per step. A step the run never reached is three dashes,
+       not a blank — a blank reads as missing data, and "it never got here"
+       is a fact worth seeing. #}
+    <td class="fmsb-when {{ 'fmsb-sep' if not loop.first }}">
+      {% if c.planned %}{{ c.planned|dt('%d %b %Y') }}
+        <div class="m rowsub">{{ c.planned|dt('%I:%M %p') }}</div>
+      {% else %}<span class="m">—</span>{% endif %}
+    </td>
+    <td class="fmsb-when">
+      {% if c.actual %}{{ c.actual|dt('%d %b %Y') }}
+        <div class="m rowsub">{{ c.actual|dt('%I:%M %p') }}</div>
+      {% else %}<span class="m">—</span>{% endif %}
+    </td>
+    <td class="fmsb-gap st-{{ c.state }}">
+      {% if c.delay %}{{ c.delay }}
+      {% elif c.state == 'running' %}<span class="m">in hand</span>
+      {% elif c.state == 'waiting' %}<span class="m">to come</span>
+      {% elif c.state == 'held' %}<span class="m">on hold</span>
+      {% elif c.state == 'stopped' %}<span class="m">stopped</span>
+      {% else %}<span class="m">—</span>{% endif %}
+      {% if c.repeats > 1 %}
+      <div class="m rowsub" title="This step ran {{ c.repeats }} times on this
+        run — sent back and done again. The dates are the last pass."
+        >ran &times;{{ c.repeats }}</div>{% endif %}
+      {# Who it actually went to ON THIS RUN. Worth a line even though the
+         heading above says who the step is for: a step filled by position
+         or by an answer on the start form is a different person run to
+         run, and that is exactly when a delay needs a name against it. #}
+      {% if c.doers %}<div class="m rowsub fmsb-doer"
+        title="{{ c.doers|join(', ') }}">{{ c.doers|join(', ') }}</div>{% endif %}
+    </td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<p class="m" style="margin-top:10px">
+  {% if capped %}
+  Showing the {{ rows|length }} newest of {{ matched }} matching run(s) —
+  a board is wide, so it loads a page at a time.
+  <a href="/flows/{{ flow.id }}/board?state={{ state }}&who={{ who }}&company={{ company }}&q={{ q }}&show=all"
+     >Show all {{ matched }}</a>.
+  {% else %}
+  {{ rows|length }} run(s){% if matched != total %} of {{ total }}{% endif %}.
+  {% endif %}
+  Planned is the date the engine set for the step; actual is when its doer
+  finished it. A step with several people on it is finished when the last of
+  them is — the run does not move on before that.
+</p>
+{% else %}
+<div class="empty">
+  {% if q or who or company or state %}
+  Nothing matches that.
+  <a href="/flows/{{ flow.id }}/board">Show all {{ total }}</a>.
+  {% else %}
+  Nothing has been run through this flow yet.
+  {% if flow.active and flow.steps %}
+  <a href="/flows/{{ flow.id }}">Start the first one →</a>{% endif %}
+  {% endif %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

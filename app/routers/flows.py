@@ -13,8 +13,8 @@ from ..models import (Flow, FlowStep, FlowInstance, FlowSheet, Task, User, Branc
                       Priority,
                       Right, FIELD_TYPES, BUILDER_FIELD_TYPES,
                       RUN_PREFIX, ref_text, CONTEXT_PEOPLE, context_answers)
-from ..services import (flows as flow_svc, flowbulk, flowform, flowsheet, xlsx, storage,
-                        shrink)
+from ..services import (flows as flow_svc, flowboard, flowbulk, flowform, flowsheet,
+                        xlsx, storage, shrink)
 from ..templating import templates
 
 router = APIRouter()
@@ -633,6 +633,121 @@ def flow_submissions(flow_id: int, request: Request, state: str = "",
         "user": user, "flow": flow, "rows": rows, "answers": answers,
         "columns": columns, "state": state, "q": text_q, "who": who,
         "progress": {i.id: flow_svc.flow_progress(i) for i in rows},
+        "total": db.scalar(select(func.count()).select_from(FlowInstance)
+                           .where(FlowInstance.flow_id == flow.id)) or 0,
+    })
+
+
+# ---------------------------------------------------------- the board -----
+# Every other FMS page looks at one thing at a time. This one looks across:
+# a row per run, the steps left to right, each as planned / actual / delay.
+# The question it answers — "which step is where the time goes" — could not
+# be asked before without opening twenty runs and subtracting dates by hand.
+
+#: How many runs a board shows before it asks to be told to show more. Wide
+#: tables are heavy to draw, and nobody reads the three hundredth row.
+BOARD_PAGE = 40
+
+
+@router.get("/flows/{flow_id}/board", response_class=HTMLResponse)
+def flow_board(flow_id: int, request: Request, state: str = "",
+               q: str = "", who: str = "", company: str = "",
+               show: str = "", export: str = "",
+               user: User = Depends(current_user),
+               db: Session = Depends(get_db)):
+    """One glass: every run of a flow with its steps across the page."""
+    flow = _flow_or_404(db, user, flow_id)
+
+    rows = db.scalars(
+        select(FlowInstance).where(FlowInstance.flow_id == flow.id)
+        .order_by(FlowInstance.started_at.desc(), FlowInstance.id.desc())
+    ).all()
+
+    # The same filters, read the same way, as the submissions register — so
+    # the two pages agree about what "running" means and a person moving
+    # between them is not shown two different sets of runs.
+    text_q = search.clean(q)
+    if state == "running":
+        rows = [i for i in rows if i.completed_at is None
+                and i.cancelled_at is None and not i.on_hold]
+    elif state == "done":
+        rows = [i for i in rows if i.completed_at is not None]
+    elif state == "held":
+        rows = [i for i in rows if i.on_hold]
+    elif state == "stopped":
+        rows = [i for i in rows if i.cancelled_at is not None]
+    if who == "mine":
+        rows = [i for i in rows if i.started_by_id == user.id]
+    if company:
+        rows = [i for i in rows if str(i.branch_id or "") == company]
+    if text_q:
+        needle = text_q.lower()
+        typed = _ref_typed(text_q)
+        rows = [i for i in rows
+                if (i.ref or "").upper() == typed
+                or needle in (i.reference or "").lower()]
+
+    matched = len(rows)
+    capped = not export and show != "all" and matched > BOARD_PAGE
+    if capped:
+        rows = rows[:BOARD_PAGE]
+
+    steps = flowboard.positions(flow)
+    board = flowboard.grid(db, flow, rows)
+
+    if xlsx.wants(export):
+        # Two tabs, because the format this was built from puts the steps'
+        # descriptions above the table in merged cells — which Excel can
+        # show but cannot sort, filter or read back. The same facts live on
+        # their own sheet instead, one row per step.
+        cols = [
+            ("FMS no.", lambda i: i.label),
+            ("What this run is about", lambda i: i.reference),
+            ("Company", lambda i: i.branch.name if i.branch else ""),
+            ("State", lambda i: i.state),
+            ("Started on", lambda i: i.started_at),
+            ("Finished on", lambda i: i.completed_at),
+        ]
+        for n, s in enumerate(steps):
+            head = f"Step {s.position} — {s.title}"
+            cols += [
+                (f"{head} · Planned",
+                 lambda i, _n=n: board[i.id][_n].planned),
+                (f"{head} · Actual",
+                 lambda i, _n=n: board[i.id][_n].actual),
+                (f"{head} · Time delay",
+                 lambda i, _n=n: board[i.id][_n].delay),
+            ]
+        return xlsx.book(f"fms-{flow.name[:20]}-board", [
+            ("Board", cols, rows,
+             "One row per run. Each step is three columns — when it was "
+             "planned, when it was actually finished, and the gap."),
+            ("Steps", [
+                ("Step", lambda s: s.position),
+                ("What has to be done", lambda s: s.title),
+                ("Who will do it", lambda s: s.who_label),
+                ("How will it be done", lambda s: s.how_to or s.instructions or ""),
+                ("When it will be done", lambda s: s.tat_label),
+                ("Runs late in these", lambda s: sum(
+                    1 for cells in board.values()
+                    if cells[steps.index(s)].late)),
+            ], steps,
+             "The flow itself — what each step is, who does it and the "
+             "turnaround it is given."),
+        ])
+
+    return templates.TemplateResponse(request, "flow_board.html", {
+        "user": user, "flow": flow, "rows": rows, "steps": steps,
+        "board": board, "state": state, "q": text_q, "who": who,
+        "company": company, "show": show, "capped": capped,
+        "matched": matched, "page_size": BOARD_PAGE,
+        "totals": flowboard.totals(board),
+        "worst": flowboard.worst_step(flow, board),
+        "averages": [flowboard.average_delay(board, n)
+                     for n in range(len(steps))],
+        "branches": db.scalars(
+            select(Branch).where(Branch.org_id == user.org_id)
+            .order_by(Branch.name)).all(),
         "total": db.scalar(select(func.count()).select_from(FlowInstance)
                            .where(FlowInstance.flow_id == flow.id)) or 0,
     })

@@ -18,6 +18,18 @@ def check(label, cond, extra=""):
         FAIL.append(label)
 
 
+def skip(label, why):
+    """A check that cannot run here, said out loud rather than left out.
+
+    One test needs a copy of the live database, which is not in the
+    repository and should not be: it is somebody's real data. On a fresh
+    clone that test used to crash the whole suite before anything else
+    ran. Skipped and NAMED, so nobody mistakes a short run for a clean
+    one.
+    """
+    print("  SKIP  " + label + f"  <- {why}")
+
+
 import io
 TINY_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -2200,12 +2212,16 @@ with _SLP() as _d:
 # Step 3 is a month after STEP 1's date, not a month from now — that is the
 # whole point of tying it. Step 1 was due ~2 days out, so this lands near
 # a month and two days from now, not a month from now.
-# A month after step 1's date — give or take the shift off a closed day. If a
-# month later lands on a Sunday the deadline comes back to the Saturday, so
-# the check allows for that rather than demanding the exact date.
+# A month after step 1's date, or the next working day after that. A closed
+# day moves an FMS deadline FORWARD, never back — step 3 waits on step 2, so
+# pulling it earlier would stack it on top of the work it is waiting for. A
+# month after 6 Nov is a Sunday, so the deadline is the Monday; over a
+# holiday weekend it can be a day or two more. Hence a floor on step 1's
+# date plus a month and a generous ceiling, not an exact date — an exact
+# date is a check that only passes in the months nothing lands on a Sunday.
 _want3 = _ck.add_months(_due1, 1).date()
 check("step 3 counts its month from step 1's date, not from today",
-      0 <= (_want3 - _due3.date()).days <= 3,
+      0 <= (_due3.date() - _want3).days <= 4,
       f"step1 {_due1.date()} +1m = {_want3} but got {_due3.date()}")
 check("which is later than a month from now",
       _due3 > _ck.add_months(_ck.now(), 1) - __import__("datetime").timedelta(days=1))
@@ -2230,20 +2246,29 @@ with _SLP() as _d:
 # 4-hour step silently becomes 24. Prove the real database upgrade keeps
 # every number, and that running it twice changes nothing.
 import shutil as _sh, tempfile as _tf, subprocess as _sub, os as _os, json as _js
+_BACKUP = "midap-backup-20260910-072235.db"
 _probe = _os.path.join(_tf.mkdtemp(), "upgrade.db")
-_sh.copy("midap-backup-20260910-072235.db", _probe)
-_code = ("from app import migrate; migrate.run(); migrate.run();"
-         "from app.db import SessionLocal; from app.models import FlowStep;"
-         "from sqlalchemy import select; import json;"
-         "d=SessionLocal(); r=d.scalars(select(FlowStep)).all();"
-         "print(json.dumps([[s.tat_hours, s.tat_value, s.tat_unit] for s in r]))")
-_out = _sub.run([__import__("sys").executable, "-c", _code], capture_output=True, text=True,
-                env={**_os.environ, "DATABASE_URL": f"sqlite:///{_probe}"})
-_rows = _js.loads(_out.stdout.strip().splitlines()[-1]) if _out.stdout.strip() else []
-check("an existing database upgrades with its TAT numbers intact",
-      _rows and all(h == v and u == "hours" for h, v, u in _rows),
-      _out.stderr[-200:] or str(_rows[:4]))
-check("and the upgrade is safe to run twice", bool(_rows))
+if not _os.path.exists(_BACKUP):
+    # A snapshot of the real database, kept out of the repository because
+    # it is real data. Without it this cannot be proved here.
+    skip("an existing database upgrades with its TAT numbers intact",
+         f"{_BACKUP} is not in this checkout")
+    skip("and the upgrade is safe to run twice", "same")
+else:
+    _sh.copy(_BACKUP, _probe)
+    _code = ("from app import migrate; migrate.run(); migrate.run();"
+             "from app.db import SessionLocal; from app.models import FlowStep;"
+             "from sqlalchemy import select; import json;"
+             "d=SessionLocal(); r=d.scalars(select(FlowStep)).all();"
+             "print(json.dumps([[s.tat_hours, s.tat_value, s.tat_unit] for s in r]))")
+    _out = _sub.run([__import__("sys").executable, "-c", _code],
+                    capture_output=True, text=True,
+                    env={**_os.environ, "DATABASE_URL": f"sqlite:///{_probe}"})
+    _rows = _js.loads(_out.stdout.strip().splitlines()[-1]) if _out.stdout.strip() else []
+    check("an existing database upgrades with its TAT numbers intact",
+          _rows and all(h == v and u == "hours" for h, v, u in _rows),
+          _out.stderr[-200:] or str(_rows[:4]))
+    check("and the upgrade is safe to run twice", bool(_rows))
 
 print("\n== the start form is a real form builder ==")
 _nb = admin.get("/flows/new").text
@@ -13398,6 +13423,134 @@ check("a question that was answered is shown",
 # entirely, so the table no longer matched the form.
 check("and one left blank is shown as blank, not dropped",
       "Sender name" in _runPageD, "the blank question is missing")
+
+print("\n== every run of a flow on one screen ==")
+# The board. Every other FMS page looks at one thing at a time, so the
+# question nobody could ask was the one across the whole flow: where is the
+# time going. The answer has to be a row per run with the steps across it,
+# planned against actual — which is only worth anything if the three numbers
+# in a cell are the real ones. So this walks a run and checks them.
+from app.services import flowboard as _fbd
+from datetime import timedelta as _tdB
+
+_boardF = admin.post("/flows/new", data={
+    "name": f"SMOKE board {RUN}", "branch_id": "", "description": "",
+    "sf_label": ["Member"], "sf_type": ["text"], "sf_required": ["1"],
+    "sf_options": [""],
+    "step_title": ["Call them", "Write it up"],
+    "step_doer": [str(_staffB[0].id), str(_staffB[0].id)],
+    "step_tat": ["2", "1"], "step_tat_unit": ["hours", "hours"],
+    "step_priority": ["medium", "medium"], "step_instructions": ["", ""],
+    "step_fields": ["", ""], "step_audit": ["0", "0"],
+    "step_proof": ["0", "0"], "step_decision": ["0", "0"],
+    # Step 1 falls through to step 2; step 2 ends the flow. "0" on step 1
+    # would have ended it there, leaving step 2 with no tasks at all — and
+    # a board test whose second column was empty for the wrong reason.
+    "step_yes": ["", ""], "step_no": ["", ""], "step_next": ["", "0"],
+    "step_fail": ["", ""], "step_due_from": ["", ""]})
+check("a flow for the board saves", _boardF.status_code == 200)
+with _slQ() as _d:
+    _bfl = _d.scalar(_SEL(_FlF).where(_FlF.name == f"SMOKE board {RUN}"))
+    _bflid = _bfl.id
+admin.post(f"/flows/{_bflid}/start", data={"reference": "", "sf0": f"Anita {RUN}"})
+with _slQ() as _d:
+    _bi = _d.scalars(_SEL(_FiF).where(_FiF.flow_id == _bflid)
+                     .order_by(_FiF.id.desc())).first()
+    _biid = _bi.id
+
+_bdoer = login(_staffB[0].email)
+
+
+def _live_step(iid):
+    """The task the run is actually on. Written again here rather than
+    reusing the helper near the top: the short names that one closes over
+    have been rebound several times since, and a helper that reads whatever
+    a letter happens to mean three thousand lines later is a trap."""
+    with _slQ() as _d:
+        inst = _d.get(_FiF, iid)
+        rows = [t for t in _d.scalars(
+                    _SEL(_TKT).where(_TKT.flow_instance_id == iid)).all()
+                if t.closed_at is None and t.submitted_at is None
+                and not t.flow_waiting
+                and t.flow_step and t.flow_step.position == inst.current_position]
+        return (rows[0].id, rows[0].flow_step.position) if rows else (None, None)
+
+
+_bt, _bpos = _live_step(_biid)
+check("the board's run opens on step 1", _bpos == 1, str(_bpos))
+
+# Make step 1 unarguably late: push its plan three hours into the past, so
+# the gap the board reports cannot be a rounding of "just now".
+with _slQ() as _d:
+    _row = _d.get(_TKT, _bt)
+    _row.due_at = _ck.now() - _tdB(hours=3)
+    _d.commit()
+_bdoer.post(f"/tasks/{_bt}/submit", data={})
+
+with _slQ() as _d:
+    _bi = _d.get(_FiF, _biid)
+    _cells = _fbd.grid(_d, _bi.flow, [_bi])[_biid]
+    check("the board has a cell per step", len(_cells) == 2, len(_cells))
+    _c1, _c2 = _cells
+    check("step 1 reads as finished late", _c1.state == "late", _c1.state)
+    check("and says how late, in words", "late" in _c1.delay, _c1.delay)
+    check("with both dates on it, not just one",
+          _c1.planned is not None and _c1.actual is not None)
+    check("and the gap is the one that really passed",
+          150 <= (_c1.minutes or 0) <= 250, _c1.minutes)
+    check("the name of whoever did it is on the cell",
+          _staffB[0].name in _c1.doers, _c1.doers)
+    # Step 2 is open and not yet past its own plan, so it is neither late
+    # nor on time — it is work in hand, and saying "0 minutes late" about
+    # work nobody is behind on would be a lie the board tells every day.
+    check("step 2 is still to come, not scored",
+          _c2.state in ("running", "waiting"), _c2.state)
+    check("and carries no delay yet", _c2.delay == "", _c2.delay)
+    check("but does carry its planned date", _c2.planned is not None)
+    check("the totals count the late step once",
+          _fbd.totals({_biid: _cells})["late"] == 1)
+    check("and the worst step is the one that slipped",
+          _fbd.worst_step(_bi.flow, {_biid: _cells})[0].position == 1)
+
+_bpage = admin.get(f"/flows/{_bflid}/board")
+check("the board page opens", _bpage.status_code == 200, _bpage.status_code)
+check("it names the steps across the top",
+      "Call them" in _bpage.text and "Write it up" in _bpage.text)
+check("and heads the three columns planned, actual, delay",
+      _bpage.text.count("Planned") >= 2 and "Time delay" in _bpage.text)
+check("the run is on it by its number",
+      f"Anita {RUN}" in _bpage.text)
+check("a doer can read the board too, like the submissions register",
+      _bdoer.get(f"/flows/{_bflid}/board").status_code == 200)
+_bx = admin.get(f"/flows/{_bflid}/board?export=xlsx")
+check("and it downloads as Excel",
+      _bx.status_code == 200 and len(_bx.content) > 4000, _bx.status_code)
+check("filtering the board does not break it",
+      admin.get(f"/flows/{_bflid}/board?state=running&show=all").status_code == 200)
+check("a flow with no runs at all still draws its board",
+      admin.get(f"/flows/{_f2id}/board").status_code == 200)
+
+# A step sent back and done again is two passes, and the board must say so
+# rather than quietly showing one of them. Reopening the closed step is how
+# that happens in real life — an auditor pulls it back.
+with _slQ() as _d:
+    _bi = _d.get(_FiF, _biid)
+    _s1 = next(s for s in _bi.flow.steps if s.position == 1)
+    _again = _TKT(org_id=_bi.org_id, branch_id=_bi.branch_id,
+                  title="Call them", assigner_id=_bi.started_by_id,
+                  doer_id=_staffB[0].id, due_at=_ck.now() + _tdB(hours=2),
+                  created_at=_ck.now() + _tdB(minutes=30),
+                  flow_instance_id=_biid, flow_step_id=_s1.id)
+    _d.add(_again)
+    _d.commit()
+with _slQ() as _d:
+    _bi = _d.get(_FiF, _biid)
+    _c1b = _fbd.grid(_d, _bi.flow, [_bi])[_biid][0]
+    check("a step done twice is counted as two passes", _c1b.repeats == 2,
+          _c1b.repeats)
+    check("and the board reads the LAST pass, not the first",
+          _c1b.actual is None and _c1b.state in ("running", "waiting"),
+          _c1b.state)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

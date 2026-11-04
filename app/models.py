@@ -858,6 +858,25 @@ class FlowStep(Base):
                                 self.tat_value or self.tat_hours or 0)
 
     @property
+    def who_label(self) -> str:
+        """Who does this step, in one short phrase.
+
+        There are four answers and they are not interchangeable — a name, a
+        position filled per company, an answer somebody typed on the start
+        form, or nobody decided yet. Written once here so the board, the
+        flow page and the export all say it the same way.
+        """
+        names = [u.name for u in ([self.default_doer] if self.default_doer else [])]
+        if self.doer_dept:
+            return f"Whoever is in {self.doer_dept}"
+        if self.doer_field:
+            return f'Whoever "{self.doer_field}" names'
+        extra = len(self.doer_ids) - 1
+        if names:
+            return names[0] + (f" +{extra} more" if extra > 0 else "")
+        return "Picked when the run starts"
+
+    @property
     def yes_label(self) -> str:
         return (self.pass_label or "").strip() or "Approved"
 
