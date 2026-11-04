@@ -13698,5 +13698,120 @@ with _slQ() as _d:
 check("the bulk page explains the column in words",
       "link to the document" in admin.get(f"/flows/{_lkid}/bulk").text.lower())
 
+print("\n== and going back for the documents already missed ==")
+# A row the sheet has stamped is finished as far as a normal pass goes —
+# which is what stops one typed row becoming four runs, and also means
+# every run started before the file question had a column will never be
+# given its document. Without a way back, "it works now" is no help to the
+# thirty-five runs already on the board. This is the way back.
+with _slQ() as _d:
+    _bkflow = _FlD2(org_id=_d.scalar(_SEL(_OgQ)).id,
+                    name=f"SMOKE backfill {RUN}", active=True,
+                    branch_id=_staffB[0].branch_id)
+    _bkflow.start_form = _jsB.dumps([
+        {"label": "Document number", "type": "text", "options": [],
+         "required": True},
+        {"label": "Upload Received Document", "type": "file", "options": [],
+         "required": True}])
+    _d.add(_bkflow); _d.flush()
+    _d.add(_FsD2(flow_id=_bkflow.id, position=1, title="Register it",
+                 default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                 tat_unit="days", tat_value=1, requires_attachment=False))
+    _bkcfg = _FSh(org_id=_bkflow.org_id, flow_id=_bkflow.id,
+                  sheet_id="FAKEBACKFILL", connected_by_id=_staffB[0].id)
+    _d.add(_bkcfg); _d.commit()
+    _bkfid, _bkcid = _bkflow.id, _bkcfg.id
+
+_BK1 = "https://drive.google.com/file/d/BK1" + RUN + "/view"
+_BK2 = "https://drive.google.com/file/d/BK2" + RUN + "/view"
+_bksheet = FakeSheet([
+    ["Document number", "Upload Received Document"],
+    [f"EY{RUN}1IN", _BK1],
+    [f"EY{RUN}2IN", _BK2],
+])
+with _slQ() as _d:
+    _bkres = _fsv.poll(_d, _d.get(_FSh, _bkcid), _bksheet)
+    check("the sheet starts both rows", _bkres["started"] == 2, str(_bkres))
+with _slQ() as _d:
+    _bkruns = _d.scalars(_SEL(_FiF).where(_FiF.flow_id == _bkfid)).all()
+    _bkids = [r.id for r in _bkruns]
+    check("and each run gets its document straight away",
+          all(_d.scalars(_SEL(_AtL)
+                         .where(_AtL.flow_instance_id == i)).all()
+              for i in _bkids))
+    # Now make them look like the runs that already exist: started from the
+    # sheet, stamped in it, and carrying nothing — which is what every row
+    # processed before today looks like.
+    for _a in _d.scalars(_SEL(_AtL)
+                         .where(_AtL.flow_instance_id.in_(_bkids))).all():
+        _d.delete(_a)
+    _d.commit()
+    check("stripped back to how the old runs stand", not _d.scalars(
+        _SEL(_AtL).where(_AtL.flow_instance_id.in_(_bkids))).all())
+
+with _slQ() as _d:
+    check("a second ordinary pass does nothing, because the rows are stamped",
+          _fsv.poll(_d, _d.get(_FSh, _bkcid), _bksheet)["started"] == 0)
+
+with _slQ() as _d:
+    _bkgot = _fsv.backfill(_d, _d.get(_FSh, _bkcid), _bksheet)
+    check("going back finds both stamped rows", _bkgot["rows"] == 2,
+          str(_bkgot))
+    check("and attaches the document each one named",
+          _bkgot["added"] == 2 and _bkgot["runs"] == 2, str(_bkgot))
+with _slQ() as _d:
+    _bkatts = _d.scalars(_SEL(_AtL)
+                         .where(_AtL.flow_instance_id.in_(_bkids))).all()
+    check("which are links to where the documents really are",
+          sorted(a.url for a in _bkatts) == sorted([_BK1, _BK2]),
+          [a.url for a in _bkatts])
+    check("filed against the question, like any other start-form document",
+          all(a.start_field == "Upload Received Document" for a in _bkatts))
+
+# Pressing it twice must not hang two copies of the same document on a run.
+with _slQ() as _d:
+    _bkagain = _fsv.backfill(_d, _d.get(_FSh, _bkcid), _bksheet)
+    check("pressing it again adds nothing", _bkagain["added"] == 0,
+          str(_bkagain))
+with _slQ() as _d:
+    check("and the runs still have one document each",
+          len(_d.scalars(_SEL(_AtL)
+                         .where(_AtL.flow_instance_id.in_(_bkids))).all()) == 2)
+
+# It is about documents and nothing else: a stamped row is history, and
+# rewriting an answer somebody has since worked from would be a far larger
+# thing than this is.
+_bksheet.update_cell(2, 1, "CHANGED AFTERWARDS")
+with _slQ() as _d:
+    _fsv.backfill(_d, _d.get(_FSh, _bkcid), _bksheet)
+    _bkone = _d.get(_FiF, _bkids[0])
+    check("an answer edited in the sheet afterwards is NOT written back over",
+          "CHANGED AFTERWARDS" not in (_bkone.context or ""),
+          _bkone.context)
+
+# The page only draws the connected-sheet card when this site has a Google
+# account at all, and this suite deliberately has none — so the account is
+# borrowed for the length of one request rather than the check being
+# quietly dropped, which would have left the button untested.
+from app.services import sheets as _shB
+_bkkeep = _shB.SERVICE_ACCOUNT
+_shB.SERVICE_ACCOUNT = '{"client_email": "robot@example.test"}'
+try:
+    _bkpage = admin.get(f"/flows/{_bkfid}/sheet").text
+finally:
+    _shB.SERVICE_ACCOUNT = _bkkeep
+check("the button is on the sheet page",
+      "Fetch missing documents" in _bkpage,
+      "the connected-sheet card has no way back for old rows")
+check("and it names the column it is going back for",
+      "Upload Received Document" in _bkpage)
+# The button itself can only be pressed against the real Google here, which
+# this suite deliberately does not call. What is checked is that the route
+# exists and answers with the sheet page either way — a failure to reach
+# Google is reported on the page, not a traceback in somebody's face.
+_bkpress = admin.post(f"/flows/{_bkfid}/sheet/documents")
+check("pressing it answers with the sheet page, reachable Google or not",
+      _bkpress.status_code == 200, _bkpress.status_code)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

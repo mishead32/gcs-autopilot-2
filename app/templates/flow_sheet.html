@@ -118,6 +118,18 @@
       <form method="post" action="/flows/{{ flow.id }}/sheet/run" style="display:inline">
         <button class="btn sm" title="Look at the sheet now instead of waiting"
           >Check it now</button></form>
+      {# A row the sheet has already stamped is finished as far as a normal
+         pass is concerned — which is what stops one typed row becoming
+         four runs, and also means a run started before this flow's file
+         question had a column will never be given its document. This is
+         the one button that goes back for them. #}
+      {% if file_questions %}
+      <form method="post" action="/flows/{{ flow.id }}/sheet/documents"
+            style="display:inline">
+        <button class="btn sm ghost"
+          title="Go back over the rows this sheet has already started and attach the links in {{ file_questions|join(', ') }}. Runs that already have the document are left alone."
+          >Fetch missing documents</button></form>
+      {% endif %}
       <form method="post" action="/flows/{{ flow.id }}/sheet/pause" style="display:inline">
         <button class="btn sm ghost"
           >{{ 'Pause' if cfg.active else 'Start watching again' }}</button></form>

@@ -976,6 +976,39 @@ def sheet_run_now(flow_id: int, request: Request,
     return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
 
 
+@router.post("/flows/{flow_id}/sheet/documents")
+def sheet_backfill(flow_id: int, request: Request,
+                   user: User = Depends(require_right(Right.MANAGE_FLOW)),
+                   db: Session = Depends(get_db)):
+    """Go back for the documents on rows this sheet already started.
+
+    A stamped row is done as far as an ordinary pass is concerned, so runs
+    created before the file question had a column have no document and no
+    pass will ever fetch one. This is the one button that goes back.
+    """
+    flow = _flow_or_404(db, user, flow_id)
+    cfg = db.scalar(select(FlowSheet).where(FlowSheet.flow_id == flow.id))
+    if cfg is None:
+        raise HTTPException(404, "No sheet is connected to this flow.")
+    try:
+        got = flowsheet.backfill(db, cfg)
+    except Exception as exc:                          # noqa: BLE001
+        db.rollback()
+        flash.set(request, "error", f"Could not read the sheet: {exc}"[:300])
+        return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+    if got["added"]:
+        flash.set(request, "saved",
+                  f"{got['added']} document(s) attached to {got['runs']} "
+                  f"run(s) that were started without them")
+    else:
+        flash.set(request, "saved",
+                  "Nothing to add — every started row's document is already "
+                  "on its run, or those cells are empty"
+                  + (f". {len(got['unmatched'])} stamped row(s) name a run "
+                     "this flow does not have" if got["unmatched"] else ""))
+    return RedirectResponse(f"/flows/{flow.id}/sheet", status_code=303)
+
+
 @router.post("/flows/{flow_id}/sheet/pause")
 def sheet_pause(flow_id: int, request: Request,
                 user: User = Depends(require_right(Right.MANAGE_FLOW)),

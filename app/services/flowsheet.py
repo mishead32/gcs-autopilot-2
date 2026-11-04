@@ -35,7 +35,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..models import Flow, FlowSheet, User
+from ..models import (Flow, FlowInstance, FlowSheet, RUN_PREFIX, User,
+                      read_link)
 from . import flowbulk, sheets
 
 # The three columns the app keeps at the end of the sheet. Named as a
@@ -299,6 +300,75 @@ def baseline(db: Session, cfg: FlowSheet, ws=None) -> int:
     cfg.last_run_at = clock.now()
     db.commit()
     return marked
+
+
+def backfill(db: Session, cfg: FlowSheet, ws=None) -> dict:
+    """Attach the linked documents to runs that were started before links.
+
+    A row the sheet has already stamped with an FMS number is finished as
+    far as this sheet is concerned — that is the whole rule, and it is what
+    stops one typed row becoming four runs. Which also means every run
+    started before the file question had a column at all is sitting there
+    with no document against it, and no ordinary pass will ever go back for
+    it. This is the going back.
+
+    It touches nothing but the documents. It reads the stamped rows, finds
+    the run each one became, and attaches any link the row carries that the
+    run has not already got. A run with the document already on it — from
+    the start form, or from an earlier run of this — is left alone, so
+    pressing it twice does nothing the first press did not.
+    """
+    from .flowbulk import attach_links
+    from ..models import Attachment
+
+    ws = ws if ws is not None else _open(cfg)
+    grid = _grid(ws)
+    out = {"rows": 0, "added": 0, "runs": 0, "unmatched": []}
+    if not grid:
+        return out
+
+    heads = flowbulk.head_map(grid[0])
+    ref_at = heads.get(REF_COL.lower())
+    if ref_at is None:
+        return out
+    # Only the file questions: the rest of a stamped row is history, and
+    # rewriting an answer somebody has since worked from would be a far
+    # bigger thing than this is.
+    files = [f for f in cfg.flow.start_form_fields if f["type"] == "file"]
+    cols = {f["label"]: heads.get(f["label"].strip().lower()) for f in files}
+    cols = {k: v for k, v in cols.items() if v is not None}
+    if not cols:
+        return out
+
+    actor = db.get(User, cfg.connected_by_id)
+    for raw in grid[1:]:
+        stamp = (str(raw[ref_at - 1]).strip()
+                 if ref_at - 1 < len(raw) else "")
+        if not stamp or not stamp.upper().startswith(RUN_PREFIX):
+            continue                 # blank, or "— already here when connected"
+        out["rows"] += 1
+        inst = db.scalar(select(FlowInstance).where(
+            FlowInstance.flow_id == cfg.flow_id,
+            FlowInstance.ref == stamp.upper()))
+        if inst is None:
+            out["unmatched"].append(stamp)
+            continue
+        have = {a.start_field for a in db.scalars(select(Attachment).where(
+            Attachment.flow_instance_id == inst.id)).all()}
+        links = {}
+        for label, at in cols.items():
+            if label in have:
+                continue
+            link, problem = read_link(
+                str(raw[at - 1]) if at - 1 < len(raw) else "")
+            if link and not problem:
+                links[label] = link
+        if not links:
+            continue
+        out["added"] += attach_links(db, inst, actor, links)
+        out["runs"] += 1
+    db.commit()
+    return out
 
 
 def due(db: Session) -> list:
