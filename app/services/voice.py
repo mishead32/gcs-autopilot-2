@@ -44,11 +44,53 @@ import httpx
 from .. import clock
 
 # --------------------------------------------------------------- config --
-KEY = os.getenv("GROQ_API_KEY", "").strip()
-MODEL = os.getenv("VOICE_MODEL", "whisper-large-v3").strip()
-URL = os.getenv("VOICE_URL",
-                "https://api.groq.com/openai/v1/audio/transcriptions").strip()
+# Two services can do the listening, and which one is right is a question
+# about ACCENT rather than about price. Whisper on Groq is free and fast
+# and writes clean English; on an Indian office speaking Hindi and English
+# in the same sentence it guesses, and guesses differently each time.
+# Gemini can be TOLD how to write — keep the Hindi in Roman letters, spell
+# a name the way this company spells it — and that instruction is most of
+# the difference. So Gemini is the default wherever its key exists.
+GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("VOICE_MODEL", "whisper-large-v3").strip()
+GROQ_URL = os.getenv("VOICE_URL",
+                     "https://api.groq.com/openai/v1/audio/transcriptions"
+                     ).strip()
+
+# The same key and the same model name Task Detective already uses, so
+# there is one Google credential on this site and not two. Worth knowing:
+# the free allowance is shared between them, and a morning of dictation
+# comes out of the same bucket as the afternoon's proof-checking.
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = (os.getenv("VOICE_AI_MODEL", "").strip()
+                or os.getenv("AI_MODEL", "").strip() or "gemini-3.8-flash")
+GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+              "{model}:generateContent")
+
+#: Set to "groq" or "gemini" to force one. Left blank, Gemini wins when
+#: its key is there, because it is the one that can be told how to spell.
+PROVIDER = os.getenv("VOICE_PROVIDER", "").strip().lower()
+
 TIMEOUT = float(os.getenv("VOICE_TIMEOUT", "60") or 60)
+
+
+def provider() -> str:
+    """Which service is doing the listening, or "" when none can."""
+    if PROVIDER == "groq":
+        return "groq" if GROQ_KEY else ""
+    if PROVIDER == "gemini":
+        return "gemini" if GEMINI_KEY else ""
+    if GEMINI_KEY:
+        return "gemini"
+    return "groq" if GROQ_KEY else ""
+
+
+def _key() -> str:
+    return GEMINI_KEY if provider() == "gemini" else GROQ_KEY
+
+
+def _model() -> str:
+    return GEMINI_MODEL if provider() == "gemini" else GROQ_MODEL
 
 #: How the office actually speaks. Hindi and English in one sentence, so
 #: no language is forced by default — forcing "en" makes Whisper translate
@@ -92,7 +134,7 @@ STOP = {
 
 
 def enabled() -> bool:
-    return bool(KEY)
+    return bool(provider())
 
 
 def status() -> str:
@@ -102,18 +144,30 @@ def status() -> str:
     space, half a key, the quotes copied with it — is the common failure,
     and it is diagnosable from the length alone.
     """
-    if not KEY:
-        return ("Dictation is off: no GROQ_API_KEY is set. Add it in "
-                "Render's Environment tab and restart.")
-    return (f"Dictation is on — {MODEL}, with a key of {len(KEY)} "
-            "characters.")
+    who = provider()
+    if not who:
+        return ("Dictation is off: no GEMINI_API_KEY (or GROQ_API_KEY) is "
+                "set. Add one in Render's Environment tab and restart.")
+    where = "Gemini" if who == "gemini" else "Groq"
+    said = (f"Dictation is on — {where}, {_model()}, with a key of "
+            f"{len(_key())} characters.")
+    if who == "gemini":
+        said += (" Its free allowance is shared with Task Detective, so "
+                 "heavy dictation eats into the day's proof-checking.")
+    return said
 
 
 def _safe(text: str) -> str:
-    """Never let the key reach a screen, however an error quotes it back."""
+    """Never let a key reach a screen, however an error quotes it back.
+
+    Both of them, not just the one in use: an error from one service can
+    quote a header the other set, and a key on a screen is a key on a
+    screen whichever one it is.
+    """
     out = text or ""
-    if KEY and len(KEY) > 6:
-        out = out.replace(KEY, "***")
+    for secret in (GEMINI_KEY, GROQ_KEY):
+        if secret and len(secret) > 6:
+            out = out.replace(secret, "***")
     return out[:400]
 
 
@@ -135,19 +189,119 @@ def prompt_for(names: list[str]) -> str:
             + ", ".join(short) + ".")
 
 
-def transcribe(data: bytes, filename: str, content_type: str,
-               language: str = "", names: list[str] | None = None
-               ) -> tuple[str, str]:
-    """(transcript, problem) — exactly one of the two is ever filled in.
+def _instruction(language: str, names: list[str]) -> str:
+    """What Gemini is told before it listens. This IS the quality.
 
-    Never raises. This is called from a web request somebody is waiting on,
-    and a provider that is down must produce a sentence they can read, not
-    a traceback and an empty page.
+    Whisper can only be handed a list of likely words. Gemini can be given
+    a rule, and the rules that matter in this office are all about HOW to
+    write rather than what was said:
+
+      * Hindi in Roman letters, not Devanagari and not translated. An
+        instruction that comes back as "Tell Rohit to settle the bill" has
+        lost the person who said "bill clear kar de" — they read it, do
+        not recognise it, and stop trusting the transcript.
+      * Names spelled the way this company spells them. A name is the one
+        part of a task that cannot be fixed by reading it back, because a
+        name heard wrong does not look wrong.
+      * Nothing added. No summary, no "the speaker says", no apology for
+        poor audio — just the words.
     """
-    if not enabled():
-        return "", ("Dictation is not set up on this site yet — there is no "
-                    "GROQ_API_KEY in the environment.")
-    fields = {"model": (None, MODEL),
+    how = {
+        "en": "The speaker is talking in English.",
+        "hi": "The speaker is talking in Hindi. Write it in Roman letters "
+              "the way it sounds, not in Devanagari, and do not translate "
+              "it into English.",
+    }.get(language,
+          "The speaker is in an Indian office and will usually mix Hindi "
+          "and English in the same sentence. Keep both exactly as spoken: "
+          "write the Hindi words in Roman letters the way they sound "
+          "(\"bill clear kar de\", not \"settle the bill\" and not "
+          "Devanagari), and leave the English words in English.")
+    said = [
+        "Write down, word for word, what is said in this short recording. "
+        "It is a work instruction one colleague is giving another.",
+        how,
+        "Do not translate it. Do not summarise or tidy it. Do not add "
+        "anything of your own — no speaker labels, no timestamps, no "
+        "notes about the audio quality.",
+    ]
+    short = [n.strip() for n in (names or []) if n and n.strip()][:PROMPT_NAMES]
+    if short:
+        said.append(
+            "If a person is named, it will be one of these colleagues, and "
+            "you must spell the name exactly as it is written here: "
+            + ", ".join(short) + ".")
+    said.append("Reply with the transcript and nothing else. If nothing "
+                "can be heard, reply with nothing at all.")
+    return " ".join(said)
+
+
+def _say_gemini(data: bytes, content_type: str, language: str,
+                names: list[str]) -> tuple[str, str]:
+    """Ask Gemini. (transcript, problem) — never raises."""
+    import base64
+
+    mime = (content_type or "audio/webm").split(";")[0].strip().lower()
+    body = {
+        "contents": [{"role": "user", "parts": [
+            {"text": _instruction(language, names)},
+            {"inline_data": {"mime_type": mime,
+                             "data": base64.b64encode(data).decode("ascii")}},
+        ]}],
+        # Nothing creative is wanted here. Zero, so the same recording
+        # gives the same words twice — people compare them.
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 2048},
+    }
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.post(
+                GEMINI_URL.format(model=GEMINI_MODEL), json=body,
+                headers={"x-goog-api-key": GEMINI_KEY,
+                         "content-type": "application/json"})
+            # Google's own documentation does not say in so many words
+            # that a webm container is accepted, and a browser records
+            # webm by default. Rather than find that out in somebody's
+            # face, a refusal that is plainly about the FORMAT is tried
+            # once more under the container the same codec usually ships
+            # in. Once, and only for that error.
+            if (r.status_code == 400 and mime == "audio/webm"
+                    and "mime" in r.text.lower()):
+                body["contents"][0]["parts"][1]["inline_data"]["mime_type"] \
+                    = "audio/ogg"
+                r = client.post(
+                    GEMINI_URL.format(model=GEMINI_MODEL), json=body,
+                    headers={"x-goog-api-key": GEMINI_KEY,
+                             "content-type": "application/json"})
+    except Exception as exc:                          # noqa: BLE001
+        return "", _safe(f"Could not reach Gemini: {type(exc).__name__}. "
+                         "Type the task out instead.")
+
+    if r.status_code in (401, 403):
+        return "", ("Google refused the key. Check GEMINI_API_KEY in "
+                    "Render — a trailing space or a half-copied key looks "
+                    "exactly like this.")
+    if r.status_code == 429:
+        return "", ("Google's free allowance is used up for today. It is "
+                    "shared with Task Detective. It comes back after "
+                    "midnight; type the task out meanwhile.")
+    if r.status_code >= 400:
+        return "", _safe(f"Gemini said no ({r.status_code}): "
+                         f"{r.text[:200]}")
+    try:
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        said = " ".join(p.get("text", "") for p in parts)
+    except Exception:                                 # noqa: BLE001
+        # A reply with no text is what a safety block looks like, and
+        # "it failed" would send somebody hunting the wrong problem.
+        return "", _safe("Gemini answered with no transcript in it: "
+                         + r.text[:200])
+    return " ".join((said or "").split()), ""
+
+
+def _say_groq(data: bytes, filename: str, content_type: str, language: str,
+              names: list[str]) -> tuple[str, str]:
+    """Ask Groq's Whisper. (transcript, problem) — never raises."""
+    fields = {"model": (None, GROQ_MODEL),
               "response_format": (None, "text"),
               "prompt": (None, prompt_for(names or []))}
     if language in ("en", "hi"):
@@ -155,7 +309,7 @@ def transcribe(data: bytes, filename: str, content_type: str,
     try:
         with httpx.Client(timeout=TIMEOUT) as client:
             r = client.post(
-                URL, headers={"Authorization": f"Bearer {KEY}"},
+                GROQ_URL, headers={"Authorization": f"Bearer {GROQ_KEY}"},
                 files={"file": (filename, data,
                                 (content_type or "application/octet-stream")
                                 .split(";")[0]),
@@ -174,10 +328,30 @@ def transcribe(data: bytes, filename: str, content_type: str,
     if r.status_code >= 400:
         return "", _safe(f"The transcription service said no "
                          f"({r.status_code}): {r.text[:200]}")
-
     # response_format=text gives the transcript as the whole body, which
     # is one less thing to parse and one less shape to be wrong about.
-    said = " ".join((r.text or "").split())
+    return " ".join((r.text or "").split()), ""
+
+
+def transcribe(data: bytes, filename: str, content_type: str,
+               language: str = "", names: list[str] | None = None
+               ) -> tuple[str, str]:
+    """(transcript, problem) — exactly one of the two is ever filled in.
+
+    Never raises. This is called from a web request somebody is waiting on,
+    and a provider that is down must produce a sentence they can read, not
+    a traceback and an empty page.
+    """
+    who = provider()
+    if not who:
+        return "", status()
+    if who == "gemini":
+        said, problem = _say_gemini(data, content_type, language, names or [])
+    else:
+        said, problem = _say_groq(data, filename, content_type, language,
+                                  names or [])
+    if problem:
+        return "", problem
     if not said:
         return "", ("Nothing was heard in that recording. Check the "
                     "microphone and try again.")
@@ -226,13 +400,20 @@ def find_people(text: str, staff: list, limit: int = 4) -> list[Guess]:
     # Every one- and two-word run in the transcript, as a person's name
     # might be either. Ordinary grammar words are dropped first: "kar de"
     # is not somebody called Karan.
+    # A word with a digit in it is not somebody's name. Worth saying
+    # because the transcripts here are full of them — "EP152008047IN" is
+    # a Dak document number, and once the digits are stripped out to
+    # compare letters it becomes "EPIN", which will happily match
+    # somebody four letters long.
     keep = [w for w in said
-            if _norm(w) not in STOP and len(_norm(w)) >= MIN_PART]
+            if _norm(w) not in STOP and len(_norm(w)) >= MIN_PART
+            and not any(c.isdigit() for c in w)]
     spans = [(w, _norm(w)) for w in keep]
     spans += [(f"{a} {b}", _norm(a) + _norm(b))
               for a, b in zip(said, said[1:])
               if _norm(a) not in STOP and _norm(b) not in STOP
-              and len(_norm(a)) >= 3 and len(_norm(b)) >= 3]
+              and len(_norm(a)) >= 3 and len(_norm(b)) >= 3
+              and not any(c.isdigit() for c in a + b)]
 
     best: dict[int, Guess] = {}
     for person in staff:

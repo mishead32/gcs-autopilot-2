@@ -111,9 +111,10 @@
         var s = Math.round((Date.now() - started) / 1000);
         say('Listening… ' + Math.floor(s / 60) + ':' +
             String(s % 60).padStart(2, '0'));
-        // A hard stop, so a forgotten recording cannot become a 40 MB
-        // upload that is refused after five minutes of waiting.
-        if (s >= 600) stopBtn.click();
+        // A hard stop. Five minutes of plain WAV is about ten megabytes,
+        // which is the most the server takes — and a dictated task that
+        // runs past five minutes is not a task, it is a meeting.
+        if (s >= 300) stopBtn.click();
       }, 1000);
     }).catch(function () {
       fail('The microphone was not allowed. Allow it for this site in the ' +
@@ -136,13 +137,109 @@
     fileIn.value = '';
   });
 
+  /* ------------------------------------------------- making it plain WAV --
+   *
+   * Every browser records something different — webm/opus on Chrome and
+   * Firefox, mp4/aac on Safari — and the transcription services do not
+   * agree on which of those they will take. Rather than find that out in
+   * somebody's face, whatever was recorded or chosen is decoded here and
+   * re-encoded as 16 kHz mono WAV, which every one of them accepts.
+   *
+   * Nothing is lost by it: both services downsample to 16 kHz mono
+   * themselves before they listen, so this is the same audio they would
+   * have made, made earlier and in a container nobody argues about.
+   *
+   * If any step fails — an old browser, a format it cannot decode, a
+   * Safari that will only run an OfflineAudioContext at 44.1 kHz — the
+   * original blob is sent exactly as it was. A conversion that is an
+   * optimisation must never be the thing that breaks the feature.
+   */
+  var RATE = 16000;
+
+  function wavOf(samples, rate) {
+    var n = samples.length;
+    var buf = new ArrayBuffer(44 + n * 2);
+    var view = new DataView(buf);
+    function str(at, text) {
+      for (var i = 0; i < text.length; i++) view.setUint8(at + i, text.charCodeAt(i));
+    }
+    str(0, 'RIFF');
+    view.setUint32(4, 36 + n * 2, true);
+    str(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true);        // PCM header length
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);  // bytes per second
+    view.setUint16(32, 2, true);         // bytes per frame
+    view.setUint16(34, 16, true);        // bits per sample
+    str(36, 'data');
+    view.setUint32(40, n * 2, true);
+    for (var i = 0; i < n; i++) {
+      var v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  function toWav(blob) {
+    return new Promise(function (done) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!AC || !OAC || !blob.arrayBuffer) { done(null); return; }
+      var ctx;
+      blob.arrayBuffer().then(function (raw) {
+        ctx = new AC();
+        return ctx.decodeAudioData(raw);
+      }).then(function (audio) {
+        try { ctx.close(); } catch (e) { /* already closed */ }
+        var frames = Math.ceil(audio.duration * RATE);
+        if (!frames) return null;
+        var off = new OAC(1, frames, RATE);
+        var src = off.createBufferSource();
+        src.buffer = audio;
+        src.connect(off.destination);
+        src.start();
+        return off.startRendering().then(function (done2) {
+          return { audio: done2, seconds: Math.round(audio.duration) };
+        });
+      }).then(function (got) {
+        done(got ? { blob: wavOf(got.audio.getChannelData(0), RATE),
+                     seconds: got.seconds } : null);
+      }).catch(function () {
+        try { if (ctx) ctx.close(); } catch (e) { /* nothing to close */ }
+        done(null);
+      });
+    });
+  }
+
   /* ------------------------------------------------------------ sending -- */
 
   function send(blob, name, seconds) {
+    say('Tidying the recording…');
+    toWav(blob).then(function (made) {
+      if (made) {
+        upload(made.blob, name.replace(/\.[^.]+$/, '') + '.wav',
+               made.seconds || seconds);
+      } else {
+        // Sent as recorded. The service may still take it, and being
+        // told "your browser is too old" would be a worse answer than
+        // simply trying.
+        upload(blob, name, seconds);
+      }
+    });
+  }
+
+  function upload(blob, name, seconds) {
     if (blob.size > maxMb * 1024 * 1024) {
-      fail('That recording is ' + (blob.size / 1024 / 1024).toFixed(1) +
-           ' MB and the limit is ' + maxMb + ' MB. Record it in two parts, ' +
-           'or type the task out.');
+      // Said in minutes as well as megabytes: nobody chooses a recording
+      // by its file size, and "9.4 MB" tells them nothing they can act on.
+      fail('That recording comes to ' + (blob.size / 1024 / 1024).toFixed(1) +
+           ' MB once it is tidied up, and the limit is ' + maxMb + ' MB — ' +
+           'about five minutes of speech. Record it in two parts, or type ' +
+           'the task out.');
+      say('');
+      busy(false);
       return;
     }
     busy(true);

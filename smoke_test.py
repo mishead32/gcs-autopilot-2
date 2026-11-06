@@ -14151,9 +14151,20 @@ _askedV = {}
 
 
 def _groqV(req):
+    """Stands in for whichever service is listening.
+
+    Both are answered from one handler so the tests below can switch
+    provider without switching stub — and so a change that quietly sends
+    the request to the wrong one shows up as a wrong-shaped answer rather
+    than as a pass.
+    """
     _askedV["url"] = str(req.url)
     _askedV["auth"] = req.headers.get("authorization") or ""
+    _askedV["goog"] = req.headers.get("x-goog-api-key") or ""
     _askedV["body"] = req.content
+    if "generativelanguage" in str(req.url):
+        return _hxV.Response(200, json={"candidates": [{"content": {
+            "parts": [{"text": _SAIDV}]}}]})
     return _hxV.Response(200, text=_SAIDV)
 
 
@@ -14167,16 +14178,38 @@ class _StubV(_hxV.Client):
         super().__init__(*a, **k)
 
 
-_realV, _keyV = _vcV.httpx.Client, _vcV.KEY
+_realV = _vcV.httpx.Client
+_keysV = (_vcV.GEMINI_KEY, _vcV.GROQ_KEY, _vcV.PROVIDER)
 _vcV.httpx.Client = _StubV
-_vcV.KEY = "gsk-smoke-" + "k" * 30
+_GEMV = "AIza-smoke-" + "g" * 29
+_GRQV = "gsk-smoke-" + "k" * 30
+_vcV.GEMINI_KEY, _vcV.GROQ_KEY, _vcV.PROVIDER = _GEMV, _GRQV, ""
+
+# WHICH service listens is a question about accent, not price. Whisper
+# writes clean English and guesses at Hindi-and-English in one sentence;
+# Gemini can be TOLD how to write it down. So Gemini wins wherever its
+# key exists, and that choice has to be the one actually made.
+check("with both keys set, Gemini is the one that listens",
+      _vcV.provider() == "gemini", _vcV.provider())
+check("naming Groq explicitly still picks Groq",
+      (setattr(_vcV, "PROVIDER", "groq"), _vcV.provider())[1] == "groq")
+check("and with only a Groq key, Groq is used whatever the preference",
+      (setattr(_vcV, "PROVIDER", ""), setattr(_vcV, "GEMINI_KEY", ""),
+       _vcV.provider())[2] == "groq")
+_vcV.GEMINI_KEY = _GEMV
+check("with no key at all nothing is enabled",
+      (setattr(_vcV, "GROQ_KEY", ""), setattr(_vcV, "GEMINI_KEY", ""),
+       _vcV.enabled())[2] is False)
+_vcV.GEMINI_KEY, _vcV.GROQ_KEY = _GEMV, _GRQV
 
 check("with a key set, dictation reports itself on", _vcV.enabled())
-check("and the status names the model but never the key",
-      _vcV.MODEL in _vcV.status() and _vcV.KEY not in _vcV.status(),
+check("and the status names the service and model but never the key",
+      "Gemini" in _vcV.status() and _vcV.GEMINI_KEY not in _vcV.status(),
       _vcV.status())
 check("it says how LONG the key is, so a bad paste is visible",
-      f"{len(_vcV.KEY)} characters" in _vcV.status(), _vcV.status())
+      f"{len(_vcV.GEMINI_KEY)} characters" in _vcV.status(), _vcV.status())
+check("and warns that the allowance is shared with Task Detective",
+      "Task Detective" in _vcV.status(), _vcV.status())
 
 _formV = admin.get("/tasks/new").text
 check("the dictation card is drawn on the delegation form",
@@ -14192,15 +14225,30 @@ check("a recording is accepted", _sendV.status_code == 200, _sendV.status_code)
 _gotV = _sendV.json()
 check("and comes back with what was said", _gotV["ok"]
       and _gotV["text"] == _SAIDV, str(_gotV)[:160])
-check("it went to the transcription endpoint",
-      _askedV["url"].endswith("/audio/transcriptions"), _askedV["url"])
-check("with the key as a bearer token",
-      _askedV["auth"].lower().startswith("bearer "), _askedV["auth"][:10])
-check("and the staff list as a prompt, so names are spelled as names",
-      b'name="prompt"' in _askedV["body"]
-      and b"colleagues" in _askedV["body"])
-check("no language is forced when the office speaks both",
-      b'name="language"' not in _askedV["body"])
+check("it went to Gemini", "generativelanguage" in _askedV["url"]
+      and _askedV["url"].endswith(":generateContent"), _askedV["url"])
+check("with the key in its own header and not in the address",
+      _askedV["goog"] == _vcV.GEMINI_KEY
+      and _vcV.GEMINI_KEY not in _askedV["url"])
+_bodyV = _jsB.loads(_askedV["body"])
+_partsV = _bodyV["contents"][0]["parts"]
+check("the words first, then the sound", list(_partsV[0]) == ["text"]
+      and list(_partsV[1]) == ["inline_data"], [list(p) for p in _partsV])
+check("and the sound carries its own type",
+      _partsV[1]["inline_data"]["mime_type"].startswith("audio/"),
+      _partsV[1]["inline_data"]["mime_type"])
+check("nothing creative is asked for — the same words twice",
+      _bodyV["generationConfig"]["temperature"] == 0)
+# The instruction IS the quality. These three rules are the difference
+# between a transcript the office recognises and one it does not.
+_toldV = _partsV[0]["text"]
+check("it is told to keep Hindi in Roman letters, not translate it",
+      "Roman letters" in _toldV and "not translate" in _toldV.lower(),
+      _toldV[:200])
+check("and told the staff list, so a name is spelled as this office spells it",
+      _staffB[0].name in _toldV, _toldV[-200:])
+check("and told to add nothing of its own",
+      "nothing else" in _toldV.lower())
 
 # The name. Suggested, ranked, never selected.
 check("the person named is suggested",
@@ -14294,14 +14342,15 @@ def _stubbed(resp):
     _vcV.httpx.Client = S
 
 
-_stubbed(_hxV.Response(401, text="Invalid API Key: " + _vcV.KEY))
+_stubbed(_hxV.Response(401, text="Invalid API Key: " + _vcV.GEMINI_KEY))
 _badV = admin.post("/tasks/voice", files={
     "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
     data={"language": "", "seconds": "3"}).json()
-check("a refused key is reported in words", not _badV["ok"]
-      and "GROQ_API_KEY" in _badV["problem"], _badV["problem"])
+check("a refused key is reported in words, naming the one to check",
+      not _badV["ok"] and "GEMINI_API_KEY" in _badV["problem"],
+      _badV["problem"])
 check("and the key itself is never echoed back to the page",
-      _vcV.KEY not in _badV["problem"])
+      _vcV.GEMINI_KEY not in _badV["problem"])
 
 _stubbed(_hxV.Response(429, text="rate limited"))
 _fullV = admin.post("/tasks/voice", files={
@@ -14310,18 +14359,25 @@ _fullV = admin.post("/tasks/voice", files={
 check("a used-up allowance says to type it out instead",
       "allowance" in _fullV["problem"], _fullV["problem"])
 
-_stubbed(_hxV.Response(500, text="boom " + _vcV.KEY))
+_stubbed(_hxV.Response(500, text="boom " + _vcV.GEMINI_KEY))
 _oopsV = admin.post("/tasks/voice", files={
     "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
     data={"language": "", "seconds": "3"}).json()
 check("a provider error is scrubbed of the key",
-      _vcV.KEY not in _oopsV["problem"], _oopsV["problem"])
+      _vcV.GEMINI_KEY not in _oopsV["problem"], _oopsV["problem"])
+check("and of the OTHER service's key too, whichever one is in use",
+      _vcV.GROQ_KEY not in _oopsV["problem"])
 check("but the recording is kept anyway, so nothing said is lost",
       _oopsV["token"])
 with _slQ() as _d:
+    # The reason, in whatever words the service that failed earned —
+    # asserting one provider's phrasing here would have made this a test
+    # of the sentence rather than of the record being kept.
+    _whyV = (_d.scalar(_SEL(_VnV).where(_VnV.token == _oopsV["token"])).error
+             or "")
     check("with the reason it failed written beside it",
-          (_d.scalar(_SEL(_VnV).where(_VnV.token == _oopsV["token"])).error
-           or "").startswith("The transcription service"))
+          "500" in _whyV and len(_whyV) > 10, _whyV)
+    check("and that reason carries no key either", _vcV.GEMINI_KEY not in _whyV)
 
 _vcV.httpx.Client = _StubV
 check("a file that is not sound at all is refused before it is sent",
@@ -14336,6 +14392,64 @@ check("a doer cannot dictate tasks for other people",
       login("amit@gcs.local").post("/tasks/voice", files={
           "audio": ("n.webm", _ioV.BytesIO(b"q" * 2000), "audio/webm")},
           data={"language": "", "seconds": "2"}).status_code == 403)
+
+# Google's own documentation does not say in so many words that a webm
+# container is accepted, and a browser records webm by default. The page
+# converts to WAV before uploading, which settles it — but a browser too
+# old to convert still sends webm, so a refusal that is plainly about the
+# FORMAT is tried once more as the container the same codec ships in.
+_triedV = []
+
+
+def _picky(req):
+    _mimeV = _jsB.loads(req.content)["contents"][0]["parts"][1][
+        "inline_data"]["mime_type"]
+    _triedV.append(_mimeV)
+    if _mimeV == "audio/webm":
+        return _hxV.Response(400, json={"error": {
+            "message": "Unsupported MIME type: audio/webm"}})
+    return _hxV.Response(200, json={"candidates": [{"content": {
+        "parts": [{"text": "it went through the second time"}]}}]})
+
+
+class _PickyV(_realV):
+    def __init__(self, *a, **k):
+        k["transport"] = _hxV.MockTransport(_picky)
+        super().__init__(*a, **k)
+
+
+_vcV.httpx.Client = _PickyV
+_retryV = admin.post("/tasks/voice", files={
+    "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
+    data={"language": "", "seconds": "3"}).json()
+check("a webm refused on its format is tried once as ogg",
+      _triedV == ["audio/webm", "audio/ogg"], _triedV)
+check("and the second attempt is what the person gets",
+      _retryV["ok"] and "second time" in _retryV["text"], _retryV["text"])
+# Once, and only for that error — an endless retry on every 400 would
+# double the bill for every genuine mistake.
+_triedV.clear()
+_stubbed(_hxV.Response(400, json={"error": {"message": "bad request"}}))
+admin.post("/tasks/voice", files={
+    "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
+    data={"language": "", "seconds": "3"})
+check("a 400 that is not about the format is not retried",
+      len(_triedV) == 0)
+
+# And Groq still works, for anybody who prefers Whisper.
+_vcV.httpx.Client, _vcV.PROVIDER = _StubV, "groq"
+_askedV.clear()
+_grqV = admin.post("/tasks/voice", files={
+    "audio": ("n.wav", _ioV.BytesIO(b"RIFF" + b"q" * 3000), "audio/wav")},
+    data={"language": "", "seconds": "3"}).json()
+check("forced to Groq, it asks Groq", "groq" in _askedV["url"],
+      _askedV["url"])
+check("as a multipart upload with the staff list as its prompt",
+      b'name="prompt"' in _askedV["body"]
+      and b"colleagues" in _askedV["body"])
+check("and the words come back the same way", _grqV["ok"]
+      and _grqV["text"] == _SAIDV, _grqV["text"])
+_vcV.PROVIDER = ""
 
 print("\n== reading a name out of what was heard ==")
 # Whisper writes what it HEARS. The names have to survive that, and the
@@ -14376,6 +14490,13 @@ check("and neither is a word that happens to be in a job title",
               for g in _vcV.find_people("the spa bill", _peopleV)))
 check("nothing is suggested when nobody is named",
       _vcV.find_people("clear the pending bills today", _peopleV) == [])
+# The transcripts here are full of document numbers. Strip the digits out
+# of "EP152008047IN" to compare letters and you get "EPIN", which will
+# happily match somebody four letters long.
+check("a document number is never read as somebody's name",
+      _vcV.find_people("file document EP152008047IN today", _peopleV) == [],
+      [g.name for g in _vcV.find_people(
+          "file document EP152008047IN today", _peopleV)])
 check("and an empty transcript suggests nobody at all",
       _vcV.find_people("", _peopleV) == [])
 
@@ -14489,7 +14610,8 @@ with _slQ() as _d:
     check("a recording already turned into a task is never swept",
           _d.scalar(_SEL(_VnV).where(_VnV.token == _tokV)) is not None)
 
-_vcV.httpx.Client, _vcV.KEY = _realV, _keyV
+_vcV.httpx.Client = _realV
+_vcV.GEMINI_KEY, _vcV.GROQ_KEY, _vcV.PROVIDER = _keysV
 check("with no key at all, the card is not drawn and the route says why",
       'id="vn"' not in admin.get("/tasks/new").text
       and "GROQ_API_KEY" in admin.post("/tasks/voice", files={

@@ -135,8 +135,8 @@ CRON_SECRET  = <mash again, about 20, different from the first>
    |---|---|
    | `MAIL_API` + `MAIL_API_KEY` | Escalation and the morning emails, sent over HTTPS |
    | `WA_API_KEY` + `WA_PHONE_ID` | The overdue picture on WhatsApp |
-   | `GEMINI_API_KEY` | Task Detective — the AI second opinion on proof |
-   | `GROQ_API_KEY` | **Dictating a delegated task.** Free, from console.groq.com → API Keys. Without it the Dictate card simply is not drawn. |
+   | `GEMINI_API_KEY` | Task Detective — the AI second opinion on proof — **and dictating a delegated task**. One key does both; the free allowance is shared between them. Without it (and without `GROQ_API_KEY`) the Dictate card is not drawn. |
+   | `GROQ_API_KEY` | Dictation, using Whisper instead of Gemini. Optional — only needed if `GEMINI_API_KEY` is absent, or if you set `VOICE_PROVIDER` to `groq`. |
    | `GOOGLE_SERVICE_ACCOUNT` | Reading a Google Sheet that starts FMS runs |
 
 5. Under **Advanced**, set **Health Check Path** to `/healthz`.
