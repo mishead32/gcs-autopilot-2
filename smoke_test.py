@@ -14215,6 +14215,14 @@ check("and how sure it is, so the page can rank them",
 # The deadline. "kal shaam" is tomorrow evening — and because the chip
 # spells the date out, a person about to tap it can see what it decided.
 check("the deadline it heard is offered", _gotV["whens"], _gotV["whens"])
+# One unmistakable answer is FILLED IN rather than offered. Being made to
+# click a chip that says the one thing the recording plainly said reads as
+# the software not having listened — which is exactly how it read the
+# first time somebody used it.
+check("a single name heard almost exactly is applied, not just offered",
+      len(_gotV["people"]) == 1 and _gotV["people"][0]["apply"],
+      _gotV["people"])
+check("and so is a single deadline", _gotV["whens"][0]["apply"])
 check("spelled out in full, not as a bare number",
       "Nov" in _gotV["whens"][0]["label"] or "Dec" in _gotV["whens"][0]["label"],
       _gotV["whens"][0]["label"])
@@ -14370,6 +14378,61 @@ check("nothing is suggested when nobody is named",
       _vcV.find_people("clear the pending bills today", _peopleV) == [])
 check("and an empty transcript suggests nobody at all",
       _vcV.find_people("", _peopleV) == [])
+
+print("\n== a date said outright ==")
+# The gap people hit first. "That is 8th November" is how somebody
+# dictating a deadline most often says it, and reading only "tomorrow"
+# and "Friday" meant the one clear case produced nothing at all.
+_nov = __import__("datetime").datetime(2026, 11, 6, 10, 0)
+
+
+def _dateV(text):
+    got = _vcV.when_from(text, _nov)
+    return got[0].value if got else ""
+
+
+check("'8th November' is read as a date",
+      _dateV("That is 8th November.") == "2026-11-08T23:59",
+      _dateV("That is 8th November."))
+check("so is 'November 8'", _dateV("deadline November 8") == "2026-11-08T23:59")
+check("and '8 Nov 2026'", _dateV("8 Nov 2026 tak") == "2026-11-08T23:59")
+check("8/11 is read day-first, as India writes it",
+      _dateV("8/11") == "2026-11-08T23:59", _dateV("8/11"))
+check("and the chip spells the month out, so that reading is visible",
+      "November" in _vcV.when_from("8/11", _nov)[0].label,
+      _vcV.when_from("8/11", _nov)[0].label)
+check("'8 tarikh' is the 8th of this month", _dateV("8 tarikh tak")
+      == "2026-11-08T23:59")
+check("a date already gone rolls to next year, not into the past",
+      _dateV("5 January").startswith("2027-01-05"), _dateV("5 January"))
+check("a date that does not exist is not invented",
+      _vcV.when_from("due 30th February", _nov) == [])
+check("and a time of day still moves the hour on a named date",
+      _dateV("8th November shaam tak") == "2026-11-08T18:00",
+      _dateV("8th November shaam tak"))
+
+print("\n== and how urgent it sounded ==")
+# Only when it is said in so many words. Reading urgency into a tone of
+# voice is the kind of guess that makes people stop trusting the rest.
+
+
+def _urgV(text):
+    got = _vcV.urgency_from(text)
+    return got.value if got else None
+
+
+check("'urgent' is high", _urgV("ye urgent hai") == "high")
+check("'turant' is high", _urgV("turant karna hai") == "high")
+check("'ASAP' is high", _urgV("ASAP bhejo") == "high")
+check("'low priority' is low", _urgV("low priority ka kaam") == "low")
+check("'koi jaldi nahi' is low", _urgV("koi jaldi nahi hai") == "low")
+# The one that would have been wrong: "not urgent" contains "urgent".
+check("'not urgent' is LOW, not high", _urgV("not urgent at all") == "low",
+      _urgV("not urgent at all"))
+check("saying nothing about priority says nothing",
+      _urgV("please verify the September bill") is None)
+check("and what it heard is quoted back, so a wrong read is visible",
+      _vcV.urgency_from("ye turant chahiye").phrase == "turant")
 
 print("\n== and a deadline out of it ==")
 _nowV = __import__("datetime").datetime(2026, 11, 5, 10, 0)

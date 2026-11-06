@@ -36,12 +36,15 @@
   var dropBtn = document.getElementById('vnDrop');
   var whoBox = document.getElementById('vnWho');
   var whenBox = document.getElementById('vnWhen');
+  var howBox = document.getElementById('vnHow');
+  var doneNote = document.getElementById('vnDone');
   var errBox = document.getElementById('vnErr');
   var token = document.getElementById('vnToken');
 
   var titleIn = document.querySelector('input[name="title"]');
   var detailsIn = document.querySelector('textarea[name="details"]');
   var dueIn = document.querySelector('input[name="due_at"]');
+  var prioIn = document.querySelector('select[name="priority"]');
   var picker = document.querySelector('.doerpick .dp-src');
 
   var maxMb = parseFloat(card.dataset.max || '12');
@@ -202,19 +205,34 @@
     append(detailsIn, data.text);
     drawWho(data.people || []);
     drawWhen(data.whens || []);
+    drawHow(data.urgency || null);
+    tally();
   }
 
-  function chip(box, text, onClick, hint) {
+  /* A chip is one suggestion. Some arrive already applied — the page
+   * filled the form in because the recording was unmistakable — and
+   * clicking an applied one puts it back. Either way the same click
+   * toggles, so there is nothing to learn twice.
+   */
+  function chip(box, text, apply, undo, hint, applied) {
     var b = document.createElement('button');
+    var on = !!applied;
     b.type = 'button';
     b.className = 'vn-chip';
-    b.textContent = text;
     if (hint) b.title = hint;
+
+    function paint() {
+      b.classList.toggle('taken', on);
+      b.textContent = text;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
     b.addEventListener('click', function () {
-      onClick();
-      b.classList.add('taken');
-      b.disabled = true;
+      on = !on;
+      if (on) { apply(); } else if (undo) { undo(); }
+      paint();
+      tally();
     });
+    paint();
     box.appendChild(b);
     return b;
   }
@@ -226,22 +244,41 @@
     box.appendChild(s);
   }
 
+  /* One line saying what was filled in, so nobody has to notice it. */
+  function tally() {
+    var on = document.querySelectorAll('#vn .vn-chip.taken').length;
+    doneNote.hidden = !on;
+    doneNote.textContent = on
+      ? 'Filled in from the recording — check it, and click a tick to undo.'
+      : '';
+  }
+
+  function setDoer(id, want) {
+    if (!picker) return;
+    for (var i = 0; i < picker.options.length; i++) {
+      if (String(picker.options[i].value) === String(id)) {
+        picker.options[i].selected = !!want;
+      }
+    }
+    // Tell the tag picker drawn on top of the select to redraw itself.
+    picker.dispatchEvent(new Event('dp:refresh'));
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   function drawWho(people) {
     whoBox.innerHTML = '';
     whoBox.hidden = !people.length;
     if (!people.length || !picker) return;
-    label(whoBox, people.length === 1 ? 'Heard a name:' : 'Heard a name — which one?');
+    var auto = people.length === 1 && people[0].apply;
+    label(whoBox, auto ? 'Assigned to:'
+                       : (people.length === 1 ? 'Heard a name:'
+                                              : 'Heard a name — which one?'));
     people.forEach(function (p) {
-      chip(whoBox, p.name, function () {
-        for (var i = 0; i < picker.options.length; i++) {
-          if (String(picker.options[i].value) === String(p.id)) {
-            picker.options[i].selected = true;
-          }
-        }
-        // Tell the tag picker drawn on top of the select to redraw.
-        picker.dispatchEvent(new Event('dp:refresh'));
-        picker.dispatchEvent(new Event('change', { bubbles: true }));
-      }, 'It heard "' + p.heard + '". Click to assign to ' + p.name + '.');
+      var put = function () { setDoer(p.id, true); };
+      var off = function () { setDoer(p.id, false); };
+      if (p.apply) put();
+      chip(whoBox, p.name, put, off,
+           'It heard "' + p.heard + '".', p.apply);
     });
   }
 
@@ -249,11 +286,28 @@
     whenBox.innerHTML = '';
     whenBox.hidden = !whens.length;
     if (!whens.length || !dueIn) return;
-    label(whenBox, 'Heard a deadline:');
+    var was = dueIn.value;
+    label(whenBox, whens.length === 1 && whens[0].apply
+          ? 'Deadline set to:' : 'Heard a deadline:');
     whens.forEach(function (w) {
-      chip(whenBox, w.label, function () {
-        dueIn.value = w.value;
-      }, 'It heard "' + w.phrase + '". Click to set the deadline.');
+      var put = function () { dueIn.value = w.value; };
+      var off = function () { dueIn.value = was; };
+      if (w.apply) put();
+      chip(whenBox, w.label, put, off,
+           'It heard "' + w.phrase + '".', w.apply);
     });
   }
+
+  function drawHow(u) {
+    howBox.innerHTML = '';
+    howBox.hidden = !u;
+    if (!u || !prioIn) return;
+    var was = prioIn.value;
+    label(howBox, 'Priority:');
+    var put = function () { prioIn.value = u.value; };
+    var off = function () { prioIn.value = was; };
+    if (u.apply) put();
+    chip(howBox, u.label, put, off, 'It heard "' + u.phrase + '".', u.apply);
+  }
+
 })();

@@ -288,6 +288,15 @@ WEEKDAYS = {
     "sunday": 6, "ravivar": 6,
 }
 
+MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7,
+    "jul": 7, "august": 8, "aug": 8, "september": 9, "sept": 9, "sep": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+_MONTH_RE = "|".join(sorted(MONTHS, key=len, reverse=True))
+
 #: Words that move the hour rather than the day.
 HOURS = [
     (r"\b(morning|subah|subeh)\b", 11, "morning"),
@@ -328,6 +337,46 @@ def when_from(text: str, now: datetime | None = None) -> list[When]:
             hour, hour_word, minute = h, word, 0 if h != 23 else 59
             break
 
+    def add_date(day_n: int, month_n: int, year_s, phrase: str) -> None:
+        """A date somebody named outright, made sense of.
+
+        The year is the awkward part and is almost never said. Left out, it
+        is this year — and if that has already gone, next year, because a
+        deadline dictated today is not one that fell last March.
+        """
+        if not 1 <= day_n <= 31:
+            return
+        month = month_n or now.month
+        if not 1 <= month <= 12:
+            return
+        try:
+            year = int(year_s) if year_s else now.year
+        except (TypeError, ValueError):
+            year = now.year
+        if year < 100:
+            year += 2000
+        if not now.year - 1 <= year <= now.year + 5:
+            return
+        for bump in (0, 1):
+            m, y = month, year + bump
+            if month_n == 0 and bump:        # "8 tarikh": next MONTH, not year
+                m, y = (month % 12) + 1, year + (1 if month == 12 else 0)
+            try:
+                when = _at(datetime(y, m, day_n), hour, minute)
+            except ValueError:
+                return                        # 31 February and friends
+            if when > now:
+                stamp = when.strftime("%Y-%m-%dT%H:%M")
+                if any(w.value == stamp for w in out):
+                    return
+                shown = when.strftime("%-d %B") if hasattr(when, "strftime") \
+                    else ""
+                out.append(When(
+                    label=(shown + (f", {hour_word}" if hour_word else ""))
+                          + f" — {when:%a %d %b %Y, %I:%M %p}",
+                    value=stamp, phrase=phrase))
+                return
+
     def add(day: datetime, label: str, phrase: str) -> None:
         when = _at(day, hour, minute)
         if when <= now:
@@ -352,6 +401,31 @@ def when_from(text: str, now: datetime | None = None) -> list[When]:
         ahead = (index - now.weekday()) % 7 or 7
         add(now + timedelta(days=ahead), word.title(), word)
 
+    # An actual date said out loud: "8th November", "November 8", "8 Nov
+    # 2026". This was the gap people noticed first — "that is 8th November"
+    # is how somebody dictating a deadline most often says it, and reading
+    # only "tomorrow" and "Friday" meant the one clear case was the one
+    # that produced nothing.
+    for found in re.finditer(
+            r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(" + _MONTH_RE
+            + r")\b\.?\s*(\d{4})?", low):
+        add_date(int(found.group(1)), MONTHS[found.group(2)],
+                 found.group(3), found.group(0).strip())
+    for found in re.finditer(
+            r"\b(" + _MONTH_RE + r")\s+(\d{1,2})(?:st|nd|rd|th)?\b\.?"
+            r"\s*(\d{4})?", low):
+        add_date(int(found.group(2)), MONTHS[found.group(1)],
+                 found.group(3), found.group(0).strip())
+    # 8/11, 08-11-2026. Day first, as India writes it — and the chip spells
+    # the month out in words, so a reader can see which way it was read.
+    for found in re.finditer(
+            r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", low):
+        add_date(int(found.group(1)), int(found.group(2)),
+                 found.group(3), found.group(0).strip())
+    # "8 tarikh" — the 8th of this month, or next month if it has gone.
+    for found in re.finditer(r"\b(\d{1,2})\s*(?:tarikh|tareekh)\b", low):
+        add_date(int(found.group(1)), 0, None, found.group(0).strip())
+
     # "in 3 days", "3 din", "do din" — and the week and month versions.
     numbers = {"ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5,
                "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
@@ -370,6 +444,49 @@ def when_from(text: str, now: datetime | None = None) -> list[When]:
             f"in {n} {unit}", found.group(0).strip())
 
     return sorted(out, key=lambda w: w.value)
+
+
+# ----------------------------------------------------------- the urgency --
+
+@dataclass
+class Urgency:
+    """How urgent the recording said it was, and the words that said so."""
+    value: str          # high | medium | low, as the form's dropdown wants
+    label: str
+    phrase: str
+
+
+#: Read in this order, highest first, so "not urgent" is not matched by
+#: the word "urgent" sitting inside it. Each entry is (priority, pattern).
+URGENCY = [
+    ("low", r"\b(low priority|no rush|no hurry|koi jaldi nahi|"
+            r"jaldi nahi|baad mein|when you (are |get )?free|"
+            r"not urgent|whenever)\b"),
+    ("high", r"\b(urgent|urgently|asap|immediately|right away|top priority|"
+             r"high priority|critical|turant|abhi|jaldi|foran|emergency)\b"),
+    ("medium", r"\b(normal priority|medium priority|normal hai)\b"),
+]
+
+URGENCY_WORDS = {"high": "High", "medium": "Medium", "low": "Low"}
+
+
+def urgency_from(text: str) -> Urgency | None:
+    """How urgent it sounded, or None when nothing said.
+
+    None is the common answer and the right one: most instructions say
+    nothing about priority, and reading urgency into a tone of voice is
+    exactly the kind of guess that makes people stop trusting the rest.
+
+    "not urgent" is checked before "urgent" on purpose — the low pattern
+    runs first, and the first match wins.
+    """
+    low = " " + (text or "").lower() + " "
+    for value, pattern in URGENCY:
+        found = re.search(pattern, low)
+        if found:
+            return Urgency(value=value, label=URGENCY_WORDS[value],
+                           phrase=found.group(0).strip())
+    return None
 
 
 # ------------------------------------------------------------ the title ---

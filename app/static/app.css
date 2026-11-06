@@ -1506,3 +1506,4 @@ table.fmsboard .fmsb-when{white-space:nowrap}
 .att .thumb.file.sound{display:flex;align-items:center;justify-content:center;
   padding:0 8px;background:#f1f5f9}
 .att .thumb.file.sound audio{width:100%;height:36px}
+.vn-done{margin-top:10px;color:var(--ok);font-weight:600}

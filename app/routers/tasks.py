@@ -525,6 +525,24 @@ async def transcribe_voice(
     db.add(note)
     db.commit()
 
+    # Applied or offered. One unmistakable answer is filled in — a single
+    # name heard almost exactly, a single date, a priority said in so many
+    # words — because being made to click a chip that says the one thing
+    # the recording plainly said reads as the software not having listened.
+    #
+    # Anything less certain stays a suggestion. The line between them is
+    # "could this be a second person, or a second date": if it could, a
+    # human decides, because a task quietly assigned to the wrong Rohit is
+    # found three days later when nothing has been done.
+    #
+    # Everything applied is shown as applied, and can be undone with the
+    # same click that would have set it.
+    people = voice.find_people(said, staff)
+    whens = voice.when_from(said)
+    urgent = voice.urgency_from(said)
+    one_name = len(people) == 1 and people[0].sure
+    one_date = len(whens) == 1
+
     return JSONResponse({
         "ok": bool(said),
         "problem": problem,
@@ -532,10 +550,13 @@ async def transcribe_voice(
         "text": said,
         "title": voice.title_from(said),
         "people": [{"id": g.user_id, "name": g.name, "heard": g.heard,
-                    "score": g.score, "sure": g.sure}
-                   for g in voice.find_people(said, staff)],
-        "whens": [{"label": w.label, "value": w.value, "phrase": w.phrase}
-                  for w in voice.when_from(said)],
+                    "score": g.score, "sure": g.sure, "apply": one_name}
+                   for g in people],
+        "whens": [{"label": w.label, "value": w.value, "phrase": w.phrase,
+                   "apply": one_date} for w in whens],
+        "urgency": ({"value": urgent.value, "label": urgent.label,
+                     "phrase": urgent.phrase, "apply": True}
+                    if urgent else None),
     })
 
 
