@@ -13813,5 +13813,625 @@ _bkpress = admin.post(f"/flows/{_bkfid}/sheet/documents")
 check("pressing it answers with the sheet page, reachable Google or not",
       _bkpress.status_code == 200, _bkpress.status_code)
 
+print("\n== the flows nobody is starting ==")
+# The other kind of failure, and the one nothing else in this system can
+# see. Escalation fires when somebody is late with work they were given;
+# this fires when no work was given at all. A bill-to-payment flow that
+# nobody at the spa has started for four days raises no overdue task,
+# because no task was ever created — the process has simply stopped being
+# followed, and it stops quietly.
+from app.services import quietflows as _qf
+from app.models import Holiday as _HolQ
+from datetime import timedelta as _tdQ
+
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qoid = _qorg.id
+    _qbrs = _d.scalars(_SEL(_BrQ).where(_BrQ.org_id == _qoid)
+                       .order_by(_BrQ.name)).all()
+    _qnames = [b.name for b in _qbrs]
+    _qbids = [b.id for b in _qbrs]
+    check("there are several companies to report against", len(_qbrs) >= 3,
+          _qnames)
+
+    # Group-wide: no company of its own, so every company gets a line.
+    _qwide = _FlD2(org_id=_qoid, branch_id=None,
+                   name=f"SMOKE bill to payment {RUN}", active=True,
+                   created_at=_ck.now() - _tdQ(days=40))
+    _qwide.start_form = _jsB.dumps([
+        {"label": "Bill number", "type": "text", "options": [],
+         "required": True}])
+    _d.add(_qwide); _d.flush()
+    _d.add(_FsD2(flow_id=_qwide.id, position=1, title="Verify the bill",
+                 default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                 tat_unit="days", tat_value=1, requires_attachment=False))
+
+    # Pinned to one company: one line, whatever the others are doing.
+    _qone = _FlD2(org_id=_qoid, branch_id=_qbids[0],
+                  name=f"SMOKE one company {RUN}", active=True,
+                  created_at=_ck.now() - _tdQ(days=40))
+    _qone.start_form = _jsB.dumps([
+        {"label": "Member", "type": "text", "options": [], "required": True}])
+    _d.add(_qone); _d.flush()
+    _d.add(_FsD2(flow_id=_qone.id, position=1, title="Call them",
+                 default_doer_id=_staffB[0].id, priority=_PrB.MEDIUM,
+                 tat_unit="days", tat_value=1, requires_attachment=False))
+
+    # Switched off, and one with no steps. Neither can be started, so
+    # saying nobody has started them is true and useless.
+    _qoff = _FlD2(org_id=_qoid, branch_id=None,
+                  name=f"SMOKE retired {RUN}", active=False,
+                  created_at=_ck.now() - _tdQ(days=40))
+    _d.add(_qoff)
+    _qbare = _FlD2(org_id=_qoid, branch_id=None,
+                   name=f"SMOKE no steps {RUN}", active=True,
+                   created_at=_ck.now() - _tdQ(days=40))
+    _d.add(_qbare)
+    _d.commit()
+    _qwid, _qoid1 = _qwide.id, _qone.id
+
+with _slQ() as _d:
+    _qpairs = _qf.covered(_d, _qoid)
+    _qmine = [(f.name, b.name if b else None) for f, b in _qpairs
+              if RUN in (f.name or "")]
+    check("a group-wide flow gets a line for every company",
+          sorted(c for n, c in _qmine if "bill to payment" in n) == sorted(_qnames),
+          _qmine)
+    check("a flow pinned to one company gets exactly one",
+          [c for n, c in _qmine if "one company" in n] == [_qnames[0]],
+          _qmine)
+    check("a switched-off flow is left out entirely",
+          not any("retired" in n for n, _c in _qmine), _qmine)
+    check("and so is one with no steps, which cannot be started",
+          not any("no steps" in n for n, _c in _qmine), _qmine)
+
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qrows = [g for g in _qf.gaps(_d, _qorg, threshold=2)
+              if RUN in (g.flow.name or "")]
+    check("every one of them is reported, because none has ever been used",
+          len(_qrows) == len(_qnames) + 1, len(_qrows))
+    check("and each says so rather than showing a blank date",
+          all(not g.ever and g.since == "never started here" for g in _qrows))
+    check("counted from the day the flow was made, not from nothing",
+          all(20 <= g.days <= 40 for g in _qrows),
+          [(g.company, g.days) for g in _qrows])
+    check("the lines are grouped under the flow's name",
+          [n for n, _l in _qf.by_flow(_qrows)]
+          == sorted({g.flow.name for g in _qrows}),
+          [n for n, _l in _qf.by_flow(_qrows)])
+
+# The heart of it: an entry at ONE company must clear that company and
+# leave the rest alone. Rolling them into one line is how a company that
+# has stopped altogether hides behind one that has not.
+with _slQ() as _d:
+    _qinst = _fsB.start_flow(_d, _d.get(_FlD2, _qwid), f"BILL-{RUN}",
+                             _d.get(_UsB, 1), branch_id=_qbids[1])
+    _qinst.started_at = _ck.now() - _tdQ(days=1)
+    _d.commit()
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qrows2 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=2)
+               if "bill to payment" in (g.flow.name or "")}
+    check("the company that made an entry drops off the report",
+          _qnames[1] not in _qrows2, list(_qrows2))
+    check("and every other company is still on it, unchanged",
+          sorted(_qrows2) == sorted(n for n in _qnames if n != _qnames[1]),
+          sorted(_qrows2))
+    # One day is below a threshold of two, which is the whole point of a
+    # threshold: yesterday's entry is not a problem.
+    _qrows3 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=1)
+               if "bill to payment" in (g.flow.name or "")}
+    check("at a threshold of one it is back, with one day against it",
+          _qrows3.get(_qnames[1]) is not None
+          and _qrows3[_qnames[1]].days == 1,
+          _qrows3[_qnames[1]].days if _qnames[1] in _qrows3 else "absent")
+    check("and that line now carries the date, not 'never'",
+          _qnames[1] in _qrows3 and _qrows3[_qnames[1]].ever)
+
+print("\n== counted in working days, company by company ==")
+# Calendar days would put every school flow two days worse each Monday,
+# and the report would be noise by the second week. So a day the company
+# is shut does not count against it — and a company that works Sundays
+# does not get the discount.
+from app.services import holidays as _hoQ
+
+with _slQ() as _d:
+    _qsun = _d.get(_BrQ, _qbids[0])
+    _qopen = _d.get(_BrQ, _qbids[1])
+    _qsun.weekly_off = 6                 # closed Sundays, like the offices
+    _qopen.weekly_off = None             # never closes, like the gym
+    _d.commit()
+    # A fortnight has two Sundays in it, whatever day it starts on.
+    _qupto = _ck.today()
+    _qfrom = _qupto - _tdQ(days=14)
+    _qclosed = _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[0])
+    _qalways = _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[1])
+    check("a fortnight is fourteen days for a company that never closes",
+          _qalways == 14, _qalways)
+    check("and twelve for one that is shut on Sundays",
+          _qclosed == 12, _qclosed)
+    check("which is the same fortnight, counted two different ways",
+          _qalways - _qclosed == 2)
+
+    # A named holiday for one company only must not be taken off another's.
+    _qhol = _HolQ(org_id=_qoid, branch_id=_qbids[1],
+                  day=_qupto - _tdQ(days=3), name=f"SMOKE festival {RUN}")
+    _d.add(_qhol); _d.commit()
+    check("one company's holiday comes off its own count",
+          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[1]) == 13)
+    check("and not off anybody else's",
+          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[0]) == 12)
+    check("a gap of nothing is nothing, not one",
+          _hoQ.open_days_between(_d, _qoid, _qupto, _qupto, _qbids[1]) == 0)
+    _d.delete(_qhol); _d.commit()
+
+print("\n== the report as an email ==")
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qall, _qsubj, _qbody, _qhtml = _qf.compose(_d, _qorg, threshold=2)
+    _qmy = [g for g in _qall if RUN in (g.flow.name or "")]
+    check("the subject says how many lines and the worst gap",
+          "line(s) with no entry" in _qsubj and "working day(s)" in _qsubj,
+          _qsubj)
+    check("the flow's name is in the email", f"SMOKE bill to payment {RUN}"
+          in _qhtml)
+    check("so is the company's", _qnames[0] in _qhtml)
+    check("and the plain-text version says the same things",
+          f"SMOKE bill to payment {RUN}"[:40] in _qbody
+          and "Last entry" in _qbody)
+    check("the text version is not empty of rows",
+          _qbody.count("never started here") >= len(_qmy) - 1,
+          _qbody.count("never started here"))
+    check("nothing is fetched from the network by the HTML",
+          "<img" not in _qhtml and "<script" not in _qhtml
+          and "<link" not in _qhtml)
+    check("every style is inline, because half of mail strips <style>",
+          "<style" not in _qhtml)
+
+    # A quiet morning has to say so rather than send a blank table.
+    _qnone, _qsub2, _qbody2, _qhtml2 = _qf.compose(_d, _qorg, threshold=9999)
+    check("a morning with nothing to report says exactly that",
+          not _qnone and "Every flow has had an entry" in _qsub2, _qsub2)
+    check("and its text version is a sentence, not an empty table",
+          "Every FMS has had an entry" in _qbody2, _qbody2[:80])
+
+print("\n== sending it, and the test that is not a rehearsal ==")
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qorg.quiet_on = False
+    _qorg.quiet_gap = 2
+    _qorg.quiet_hour = 11
+    _qorg.quiet_to = None
+    _qorg.quiet_cc = None
+    _qorg.quiet_last_run = None
+    _d.commit()
+    check("switched off, nothing is ever owed", not _qf.due_today(_qorg))
+
+_qbase = {"esc_on": "", "working_days": "1", "after_top": "stop",
+          "scope": "chased", "hour": "9", "site_url": "", "grace": "0",
+          "doer_daily": "", "doer_whatsapp": ""}
+_qadmin = TestClient(app, follow_redirects=False)
+_qadmin.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"},
+             follow_redirects=True)
+check("switching it on with nobody to send to is refused",
+      _qadmin.post("/escalation/settings", data={
+          **_qbase, "quiet_on": "1", "quiet_gap": "2", "quiet_hour": "11",
+          "quiet_to": "", "quiet_cc": ""}).status_code == 400)
+check("and so is an address that is not one",
+      _qadmin.post("/escalation/settings", data={
+          **_qbase, "quiet_on": "1", "quiet_gap": "2", "quiet_hour": "11",
+          "quiet_to": "whoever at gcs", "quiet_cc": ""}).status_code == 400)
+check("a real list saves",
+      _qadmin.post("/escalation/settings", data={
+          **_qbase, "quiet_on": "1", "quiet_gap": "2", "quiet_hour": "0",
+          "quiet_to": " one@gcs.test , two@gcs.test ",
+          "quiet_cc": "boss@gcs.test"}).status_code == 303)
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    check("with the spaces taken off and the order kept",
+          _qf.recipients(_qorg) == (["one@gcs.test", "two@gcs.test"],
+                                    ["boss@gcs.test"]),
+          _qf.recipients(_qorg))
+    check("and now it is owed, because the hour has passed",
+          _qf.due_today(_qorg))
+
+# Written down even when there is no mail server, like every other email
+# here — so switching the mailbox on later shows what the morning would
+# have said rather than a gap in the record.
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qsent = _qf.send_report(_d, _qorg)
+    check("a run writes the report down", _qsent["lines"] >= 1, str(_qsent))
+    check("and records today as done", _qorg.quiet_last_run == _ck.today())
+    check("so it is not owed twice in one day", not _qf.due_today(_qorg))
+with _slQ() as _d:
+    _qm = _d.scalars(_SEL(_EmQ).where(_EmQ.level == _qf.QUIET_LEVEL)
+                     .order_by(_EmQ.id.desc())).first()
+    check("the record is in the escalation mail log", _qm is not None)
+    check("filed under a name, not 'L-1'", _qm.label == "FMS entries",
+          _qm.label)
+    check("addressed to the first of the list",
+          _qm.to_email == "one@gcs.test", _qm.to_email)
+    check("with everybody else on the copy line",
+          sorted(_qm.cc_list) == ["boss@gcs.test", "two@gcs.test"],
+          _qm.cc_list)
+    check("and it does not pretend to have been sent",
+          _qm.status in ("queued", "failed"), _qm.status)
+
+# The test button. Not a "this is a test" stub — the whole report, to one
+# person, and it must NOT persuade the scheduler that today is done.
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qorg.quiet_last_run = None
+    _d.commit()
+    _qtest = _qf.send_report(_d, _qorg, to=["raj@gcs.test"], cc=[],
+                             mark=False)
+    check("a test goes to the one address it was given",
+          _qtest["to"] == ["raj@gcs.test"] and _qtest["cc"] == [],
+          str(_qtest))
+    check("and carries the whole report, not a sample",
+          _qtest["lines"] == _qsent["lines"], str(_qtest))
+    check("while leaving today still owed", _qorg.quiet_last_run is None)
+    check("which means the real one still goes out", _qf.due_today(_qorg))
+
+with _slQ() as _d:
+    _qorg = _d.scalar(_SEL(_OgQ))
+    _qorg.quiet_to = None
+    _d.commit()
+    check("with nobody listed, a run says so and writes nothing",
+          _qf.send_report(_d, _qorg)["why"].startswith("Nobody is listed"))
+
+print("\n== the page that shows it before anybody is emailed ==")
+_qpage = admin.get("/escalation/quiet")
+check("the preview page opens", _qpage.status_code == 200, _qpage.status_code)
+check("it names the flow and the company",
+      f"SMOKE bill to payment {RUN}" in _qpage.text and _qnames[0] in _qpage.text)
+check("and says plainly that nothing on it sends anything",
+      "Nothing on this page sends anything" in _qpage.text)
+check("a different threshold can be tried without saving it",
+      admin.get("/escalation/quiet?gap=30").status_code == 200)
+check("the report is listed on the reports page",
+      "FMS nobody is starting" in admin.get("/reports").text)
+check("a doer cannot open it", login("amit@gcs.local").get(
+      "/escalation/quiet").status_code == 403)
+check("nor is it offered to them",
+      "FMS nobody is starting" not in login("amit@gcs.local").get("/reports").text)
+
+print("\n== a briefing file is not the doer's proof ==")
+# Found while building dictation, and worth its own section because it was
+# live. The new-task form offered an Attachments field, read the file,
+# checked it — and then saved it only `if storage.mode() == "local"`. On
+# the live site files live in the DATABASE, so every bill, letter and
+# screenshot anybody attached while handing out work was silently dropped.
+from app.models import Attachment as _AtV, VoiceNote as _VnV
+from app.services import storage as _stV, voice as _vcV
+import io as _ioV, httpx as _hxV
+
+_PNGV = b"\x89PNG\r\n\x1a\n" + b"\x00" * 300
+check("this suite is exercising the storage the live site uses",
+      _stV.mode() in ("db", "local"), _stV.mode())
+
+_mkV = admin.post("/tasks/new", data={
+    "title": f"SMOKE briefing {RUN}", "details": "", "doer_id": str(_staffB[0].id),
+    "priority": "medium", "due_at": "2026-12-01T18:00",
+    "requires_attachment": "1"},
+    files={"files": (f"bill-{RUN}.png", _ioV.BytesIO(_PNGV), "image/png")})
+check("a task with a file handed to the doer is created",
+      _mkV.status_code == 200, _mkV.status_code)
+with _slQ() as _d:
+    _tV = _d.scalars(_SEL(_TKT).where(_TKT.title == f"SMOKE briefing {RUN}")
+                     .order_by(_TKT.id.desc())).first()
+    check("and the file is actually SAVED, whatever the storage backend",
+          len(_tV.attachments) == 1, len(_tV.attachments))
+    _aV = _tV.attachments[0]
+    check("stored where this install keeps files",
+          _aV.storage in ("db", "local"), _aV.storage)
+    check("with its bytes, not an empty row", _aV.size == len(_PNGV), _aV.size)
+    # The second half: it was handed TO the doer, so it is not evidence
+    # the doer produced. Counting it as proof would let somebody close a
+    # task on the strength of the document they were given.
+    check("it is marked as given with the work", _aV.briefing)
+    check("so it does NOT count as the doer's proof", _tV.proof_files == [])
+    check("but it is listed as what they were given",
+          [a.id for a in _tV.briefing_files] == [_aV.id])
+    _tVid = _tV.id
+_pgV = admin.get(f"/tasks/{_tVid}").text
+check("the task page keeps the two apart, in words",
+      "Given with the task" in _pgV and "do not count as your proof" in _pgV)
+
+print("\n== dictating a delegated task ==")
+# Somebody walking the floor says it instead of typing it. The words come
+# from Groq; the name and the deadline are SUGGESTED and never set, because
+# a task silently assigned to the wrong person is found three days later
+# when nothing has been done.
+_SAIDV = (f"Rohit ko bolo ki Spa Kora ka bill kal shaam tak clear kar de "
+          f"{RUN}")
+_askedV = {}
+
+
+def _groqV(req):
+    _askedV["url"] = str(req.url)
+    _askedV["auth"] = req.headers.get("authorization") or ""
+    _askedV["body"] = req.content
+    return _hxV.Response(200, text=_SAIDV)
+
+
+class _StubV(_hxV.Client):
+    """Groq, stood in for. What is worth proving is the shape of the
+    request and what is done with the answer — a real network call proves
+    neither, and fails the suite whenever somebody's wifi does."""
+
+    def __init__(self, *a, **k):
+        k["transport"] = _hxV.MockTransport(_groqV)
+        super().__init__(*a, **k)
+
+
+_realV, _keyV = _vcV.httpx.Client, _vcV.KEY
+_vcV.httpx.Client = _StubV
+_vcV.KEY = "gsk-smoke-" + "k" * 30
+
+check("with a key set, dictation reports itself on", _vcV.enabled())
+check("and the status names the model but never the key",
+      _vcV.MODEL in _vcV.status() and _vcV.KEY not in _vcV.status(),
+      _vcV.status())
+check("it says how LONG the key is, so a bad paste is visible",
+      f"{len(_vcV.KEY)} characters" in _vcV.status(), _vcV.status())
+
+_formV = admin.get("/tasks/new").text
+check("the dictation card is drawn on the delegation form",
+      'id="vn"' in _formV and "voicenote.js" in _formV)
+
+_sendV = admin.post(
+    "/tasks/voice",
+    files={"audio": ("voice-note.webm",
+                     _ioV.BytesIO(b"\x1aE\xdf\xa3" + b"q" * 6000),
+                     "audio/webm;codecs=opus")},
+    data={"language": "", "seconds": "11"})
+check("a recording is accepted", _sendV.status_code == 200, _sendV.status_code)
+_gotV = _sendV.json()
+check("and comes back with what was said", _gotV["ok"]
+      and _gotV["text"] == _SAIDV, str(_gotV)[:160])
+check("it went to the transcription endpoint",
+      _askedV["url"].endswith("/audio/transcriptions"), _askedV["url"])
+check("with the key as a bearer token",
+      _askedV["auth"].lower().startswith("bearer "), _askedV["auth"][:10])
+check("and the staff list as a prompt, so names are spelled as names",
+      b'name="prompt"' in _askedV["body"]
+      and b"colleagues" in _askedV["body"])
+check("no language is forced when the office speaks both",
+      b'name="language"' not in _askedV["body"])
+
+# The name. Suggested, ranked, never selected.
+check("the person named is suggested",
+      any(p["name"].startswith("Rohit") or "Rohit" in p["name"]
+          for p in _gotV["people"]) or _gotV["people"],
+      _gotV["people"])
+check("each suggestion says what it actually heard",
+      all(p["heard"] for p in _gotV["people"]), _gotV["people"])
+check("and how sure it is, so the page can rank them",
+      all(0 < p["score"] <= 1 for p in _gotV["people"]))
+
+# The deadline. "kal shaam" is tomorrow evening — and because the chip
+# spells the date out, a person about to tap it can see what it decided.
+check("the deadline it heard is offered", _gotV["whens"], _gotV["whens"])
+check("spelled out in full, not as a bare number",
+      "Nov" in _gotV["whens"][0]["label"] or "Dec" in _gotV["whens"][0]["label"],
+      _gotV["whens"][0]["label"])
+check("with the words it came from, so a wrong one can be seen as wrong",
+      _gotV["whens"][0]["phrase"], _gotV["whens"][0])
+
+_tokV = _gotV["token"]
+check("the recording is kept against a token", _tokV)
+with _slQ() as _d:
+    _vnV = _d.scalar(_SEL(_VnV).where(_VnV.token == _tokV))
+    check("stored with the audio itself", _vnV and _vnV.size > 5000)
+    check("and the transcript exactly as it came back",
+          _vnV.text == _SAIDV, _vnV.text)
+    check("not yet counted as used", _vnV.used_at is None)
+
+# Creating the task from it.
+_madeV = admin.post("/tasks/new", data={
+    "title": f"SMOKE dictated {RUN}", "details": _gotV["text"],
+    "doer_id": str(_staffB[0].id), "priority": "medium",
+    "due_at": _gotV["whens"][0]["value"], "requires_attachment": "1",
+    "voice_token": _tokV})
+check("the task is created from the dictation", _madeV.status_code == 200)
+with _slQ() as _d:
+    _dtV = _d.scalars(_SEL(_TKT).where(_TKT.title == f"SMOKE dictated {RUN}")
+                      .order_by(_TKT.id.desc())).first()
+    _audV = [a for a in _dtV.attachments if a.is_audio]
+    check("the recording is attached to it", len(_audV) == 1, len(_dtV.attachments))
+    check("as something given, not as the doer's proof",
+          _audV[0].briefing and _dtV.proof_files == [])
+    check("and the page offers to play it rather than download it",
+          _audV[0].is_audio)
+    _cmV = _d.scalars(_SEL(_TCD).where(_TCD.task_id == _dtV.id)).all()
+    check("what it was heard to say is written on the task",
+          any(_SAIDV in (c.body or "") for c in _cmV),
+          [c.body[:60] for c in _cmV])
+    _vnV = _d.scalar(_SEL(_VnV).where(_VnV.token == _tokV))
+    check("and the recording is marked used", _vnV.used_at is not None)
+    _dtVid = _dtV.id
+
+# A token is one person's, and it is spent. Both matter: the second stops
+# one recording becoming four tasks if a form is resubmitted.
+_againV = admin.post("/tasks/new", data={
+    "title": f"SMOKE reused {RUN}", "details": "",
+    "doer_id": str(_staffB[0].id), "priority": "medium",
+    "due_at": "2026-12-01T18:00", "requires_attachment": "1",
+    "voice_token": _tokV})
+with _slQ() as _d:
+    _rV = _d.scalars(_SEL(_TKT).where(_TKT.title == f"SMOKE reused {RUN}")
+                     .order_by(_TKT.id.desc())).first()
+    check("a spent token attaches nothing the second time",
+          _rV is not None and not _rV.attachments,
+          len(_rV.attachments) if _rV else "no task")
+
+print("\n== and when it cannot hear, it says so ==")
+# A provider that is down, a key that is wrong, an empty recording. Each
+# one has to come back as a sentence somebody can read — never a spinner
+# that never stops, and never the key on a screen.
+
+
+def _stubbed(resp):
+    # Subclassing the REAL client, not whatever httpx.Client currently
+    # points at — which is already a stub. Subclassing the stub inherits
+    # its transport and quietly answers 200 to everything, which is how
+    # three checks here passed while testing nothing.
+    class S(_realV):
+        def __init__(self, *a, **k):
+            k["transport"] = _hxV.MockTransport(lambda r: resp)
+            super().__init__(*a, **k)
+    _vcV.httpx.Client = S
+
+
+_stubbed(_hxV.Response(401, text="Invalid API Key: " + _vcV.KEY))
+_badV = admin.post("/tasks/voice", files={
+    "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
+    data={"language": "", "seconds": "3"}).json()
+check("a refused key is reported in words", not _badV["ok"]
+      and "GROQ_API_KEY" in _badV["problem"], _badV["problem"])
+check("and the key itself is never echoed back to the page",
+      _vcV.KEY not in _badV["problem"])
+
+_stubbed(_hxV.Response(429, text="rate limited"))
+_fullV = admin.post("/tasks/voice", files={
+    "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
+    data={"language": "", "seconds": "3"}).json()
+check("a used-up allowance says to type it out instead",
+      "allowance" in _fullV["problem"], _fullV["problem"])
+
+_stubbed(_hxV.Response(500, text="boom " + _vcV.KEY))
+_oopsV = admin.post("/tasks/voice", files={
+    "audio": ("n.webm", _ioV.BytesIO(b"q" * 3000), "audio/webm")},
+    data={"language": "", "seconds": "3"}).json()
+check("a provider error is scrubbed of the key",
+      _vcV.KEY not in _oopsV["problem"], _oopsV["problem"])
+check("but the recording is kept anyway, so nothing said is lost",
+      _oopsV["token"])
+with _slQ() as _d:
+    check("with the reason it failed written beside it",
+          (_d.scalar(_SEL(_VnV).where(_VnV.token == _oopsV["token"])).error
+           or "").startswith("The transcription service"))
+
+_vcV.httpx.Client = _StubV
+check("a file that is not sound at all is refused before it is sent",
+      "not a sound file" in admin.post("/tasks/voice", files={
+          "audio": ("bill.pdf", _ioV.BytesIO(b"%PDF-1.4"), "application/pdf")},
+          data={"language": "", "seconds": "0"}).json()["problem"])
+check("and an empty recording is refused with a reason",
+      "empty" in admin.post("/tasks/voice", files={
+          "audio": ("n.webm", _ioV.BytesIO(b""), "audio/webm")},
+          data={"language": "", "seconds": "0"}).json()["problem"])
+check("a doer cannot dictate tasks for other people",
+      login("amit@gcs.local").post("/tasks/voice", files={
+          "audio": ("n.webm", _ioV.BytesIO(b"q" * 2000), "audio/webm")},
+          data={"language": "", "seconds": "2"}).status_code == 403)
+
+print("\n== reading a name out of what was heard ==")
+# Whisper writes what it HEARS. The names have to survive that, and the
+# words around them must not become names.
+
+
+class _Person:
+    def __init__(self, i, n):
+        self.id, self.name = i, n
+
+
+_peopleV = [_Person(1, "Rohit Kumar"), _Person(2, "Kiran Sandhu"),
+            _Person(3, "Amit Sharma"), _Person(4, "Sunita Rani"),
+            _Person(5, "EA Karan"), _Person(6, "Spa Kora Manager")]
+
+
+def _firstV(text):
+    got = _vcV.find_people(text, _peopleV)
+    return got[0].name if got else ""
+
+
+check("a name heard correctly is found",
+      _firstV("Rohit ko bolo") == "Rohit Kumar")
+check("a name heard slightly wrong is still found",
+      _firstV("Tell Rohith to check it") == "Rohit Kumar")
+check("a full name beats the surname on its own",
+      _vcV.find_people("Tell Rohith kumar to check", _peopleV)[0].heard
+      == "Rohith kumar")
+check("two people named gives two suggestions",
+      len(_vcV.find_people("Kiran and Amit should both look", _peopleV)) == 2)
+# The one that was wrong: "kar de" is ordinary Hinglish grammar, and it
+# was finding EA Karan on every single dictated task.
+check("ordinary grammar is not read as somebody's name",
+      not _vcV.find_people("bill clear kar de", _peopleV),
+      [g.name for g in _vcV.find_people("bill clear kar de", _peopleV)])
+check("and neither is a word that happens to be in a job title",
+      not any(g.name == "Spa Kora Manager"
+              for g in _vcV.find_people("the spa bill", _peopleV)))
+check("nothing is suggested when nobody is named",
+      _vcV.find_people("clear the pending bills today", _peopleV) == [])
+check("and an empty transcript suggests nobody at all",
+      _vcV.find_people("", _peopleV) == [])
+
+print("\n== and a deadline out of it ==")
+_nowV = __import__("datetime").datetime(2026, 11, 5, 10, 0)
+
+
+def _whenV(text):
+    return [(w.value, w.phrase) for w in _vcV.when_from(text, _nowV)]
+
+
+check("'kal' is read as tomorrow, because nobody delegates into the past",
+      _whenV("kal tak kar do")[0][0].startswith("2026-11-06"),
+      _whenV("kal tak kar do"))
+check("and the chip says 'tomorrow' in words, so the guess is visible",
+      "tomorrow" in _vcV.when_from("kal tak", _nowV)[0].phrase)
+check("'parso' is the day after", _whenV("parso bhej dena")[0][0]
+      .startswith("2026-11-07"), _whenV("parso bhej dena"))
+check("a weekday goes to the next one of those",
+      _whenV("by Friday")[0][0].startswith("2026-11-06"), _whenV("by Friday"))
+check("'3 din' is three days out",
+      _whenV("3 din mein")[0][0].startswith("2026-11-08"), _whenV("3 din mein"))
+check("'do hafte' is two weeks out",
+      _whenV("do hafte mein")[0][0].startswith("2026-11-19"),
+      _whenV("do hafte mein"))
+check("'shaam' moves the hour, not the day",
+      _whenV("kal shaam tak")[0][0] == "2026-11-06T18:00",
+      _whenV("kal shaam tak"))
+check("with no time said it is the end of that day",
+      _whenV("kal tak")[0][0] == "2026-11-06T23:59", _whenV("kal tak"))
+check("a deadline already in the past is never offered",
+      _vcV.when_from("aaj subah tak", _nowV) == []
+      or all(w.value > _nowV.strftime("%Y-%m-%dT%H:%M")
+             for w in _vcV.when_from("aaj subah tak", _nowV)),
+      _whenV("aaj subah tak"))
+check("and most sentences suggest nothing, which is the honest answer",
+      _vcV.when_from("please look into the spa complaint", _nowV) == [])
+
+print("\n== recordings nobody turned into a task ==")
+with _slQ() as _d:
+    _oldV = _VnV(org_id=_d.scalar(_SEL(_OgQ)).id, token="smokeold" + RUN,
+                 made_by_id=1, filename="old.webm", content_type="audio/webm",
+                 data=b"q" * 100, size=100,
+                 created_at=_ck.now() - _tdQ(days=3))
+    _freshV = _VnV(org_id=_oldV.org_id, token="smokenew" + RUN, made_by_id=1,
+                   filename="new.webm", content_type="audio/webm",
+                   data=b"q" * 100, size=100)
+    _d.add_all([_oldV, _freshV]); _d.commit()
+    _sweptV = _vcV.sweep(_d)
+    check("an abandoned recording is swept", _sweptV >= 1, _sweptV)
+    check("the old one is gone",
+          _d.scalar(_SEL(_VnV).where(_VnV.token == "smokeold" + RUN)) is None)
+    check("and one made minutes ago is left alone",
+          _d.scalar(_SEL(_VnV).where(_VnV.token == "smokenew" + RUN)) is not None)
+    # A used one is a record of what was said on a task somebody is doing.
+    check("a recording already turned into a task is never swept",
+          _d.scalar(_SEL(_VnV).where(_VnV.token == _tokV)) is not None)
+
+_vcV.httpx.Client, _vcV.KEY = _realV, _keyV
+check("with no key at all, the card is not drawn and the route says why",
+      'id="vn"' not in admin.get("/tasks/new").text
+      and "GROQ_API_KEY" in admin.post("/tasks/voice", files={
+          "audio": ("n.webm", _ioV.BytesIO(b"q" * 2000), "audio/webm")},
+          data={"language": "", "seconds": "2"}).json()["problem"])
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

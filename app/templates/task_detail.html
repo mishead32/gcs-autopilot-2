@@ -99,6 +99,19 @@
       {{ file_grid(run_files) }}
       {% endif %}
 
+      {# Handed to the doer WITH the work: the bill to be paid, the letter
+         to be answered, the recording the task was dictated from. Kept
+         apart from the proof below, and said so plainly — a doer looking
+         at one screen needs to know which of these files is the job and
+         which is the evidence. #}
+      {% if task.briefing_files %}
+      <label>Given with the task ({{ task.briefing_files|length }})</label>
+      <div class="m" style="margin:-2px 0 8px">Attached by
+        {{ task.assigner.name if task.assigner else 'whoever handed this out' }}
+        when the task was created. These do not count as your proof.</div>
+      {{ file_grid(task.briefing_files) }}
+      {% endif %}
+
       {% if task.proof_files %}
       <label>Attachments ({{ task.proof_files|length }})</label>
       {{ attachment_list(task, user, can_remove=true) }}

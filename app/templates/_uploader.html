@@ -54,6 +54,12 @@
     {% elif a.is_link %}
     <a href="/attachments/{{ a.id }}" target="_blank" rel="noopener noreferrer"
        class="thumb file"><span class="ext">LINK</span></a>
+    {% elif a.is_audio %}
+    {# A recording is played, not downloaded. Its whole value is the two
+       seconds of listening before somebody decides what a garbled
+       transcript actually meant. #}
+    <div class="thumb file sound"><audio controls preload="none"
+      src="/attachments/{{ a.id }}/view"></audio></div>
     {% else %}
     <a href="/attachments/{{ a.id }}" class="thumb file">
       <span class="ext">{{ a.filename.rsplit('.', 1)[-1][:4]|upper if '.' in a.filename else 'FILE' }}</span>

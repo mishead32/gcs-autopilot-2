@@ -150,6 +150,71 @@
       {% else %}It has not run yet.{% endif %}
     </div>
 
+    {# ------------------------------------ flows nobody is starting ----
+       The other kind of failure, and the reason it needs its own section
+       rather than a line in the one above: everything above is about work
+       somebody was given and has not done. This is about work nobody was
+       given — a flow that has quietly stopped being followed raises no
+       overdue task, because no task was ever created. #}
+    <hr style="margin:20px 0;border:none;border-top:1px solid var(--line)">
+    <h2 style="margin:0 0 4px">FMS nobody is starting</h2>
+    <p class="m" style="margin:0 0 12px">
+      A separate report, and a separate email. Escalation finds work that is
+      late; this finds a flow whose start form nobody has filled in for days
+      — at <strong>each company separately</strong>, so an entry at Bodyzone
+      does not cover for a spa that has stopped.
+      <a href="/escalation/quiet">See it as it stands now →</a>
+    </p>
+
+    <label class="check">
+      <input type="checkbox" name="quiet_on" value="1"
+             {{ 'checked' if org.quiet_on }}>
+      <span>Email the <strong>FMS entry report</strong> every morning</span>
+    </label>
+    <div class="m" style="margin:4px 0 14px">
+      Off until somebody switches it on. It sends on the same days as the
+      escalation check above, so it skips Sundays and holidays with it.
+    </div>
+
+    <label>Working days with no entry before a flow is listed</label>
+    <input name="quiet_gap" type="number" min="1" max="90"
+           value="{{ org.quiet_gap or 2 }}">
+    <div class="m" style="margin:6px 0 14px">
+      <strong>2</strong> means nothing was entered yesterday or the day
+      before. Working days for that company, so a Sunday at the school is
+      not counted against it and a Sunday at the gym is.
+    </div>
+
+    <label>It goes to</label>
+    <input name="quiet_to" value="{{ org.quiet_to or '' }}" maxlength="500"
+           placeholder="ea.gcsgroup@gmail.com, pc.gcs2@gmail.com">
+    <div class="m" style="margin:6px 0 10px">
+      Comma separated. Plain addresses, not people on the system — the
+      readers of this report are not the doers of anything in it.
+    </div>
+
+    <label>Copied to</label>
+    <input name="quiet_cc" value="{{ org.quiet_cc or '' }}" maxlength="500"
+           placeholder="cmd@thegcsgroup.in">
+    <div class="m" style="margin:6px 0 14px">
+      Somebody on both lines gets one copy, on the To line.
+    </div>
+
+    <label>It goes out at</label>
+    <select name="quiet_hour">
+      {% for h in range(0, 24) %}
+      <option value="{{ h }}" {{ 'selected' if org.quiet_hour == h }}>
+        {{ '%02d:00'|format(h) }}</option>
+      {% endfor %}
+    </select>
+    <div class="m" style="margin:6px 0 0">
+      Later than the escalation hour is usually right, so the two arrive in
+      order: what is overdue first, then what was never started.
+      {% if org.quiet_last_run %}
+      Last sent <strong>{{ org.quiet_last_run.strftime('%d %b %Y') }}</strong>.
+      {% else %}It has not run yet.{% endif %}
+    </div>
+
     <div style="margin-top:16px"><button class="btn">Save settings</button></div>
   </form>
 

@@ -322,6 +322,15 @@ REPORT_CARDS = [
      "title": "5 · Audit", "desc": "Audit pending and completed — FMS, Checklist, Delegation."},
     {"key": "score", "url": "/reports/score", "all_reports": True,
      "title": "6 · EM score", "desc": "Person-wise and branch-wise, with the full breakdown."},
+    # The odd one out, and listed here because this is where people look
+    # for it. Every report above counts work that exists; this one counts
+    # work that does not — a flow whose start form nobody has filled in.
+    # Behind the same right as the ladder, because it is read by the people
+    # the ladder is read by and names no individual doer at all.
+    {"key": "quiet", "url": "/escalation/quiet", "manage_user": True,
+     "title": "7 · FMS nobody is starting",
+     "desc": "Flows with no new entry, company by company — the report "
+             "emailed each morning."},
 ]
 
 
@@ -329,6 +338,7 @@ REPORT_CARDS = [
 def index(request: Request, user: User = Depends(current_user)):
     cards = [c for c in REPORT_CARDS
              if (not c.get("all_reports") or user.can_see_all_reports)
+             and (not c.get("manage_user") or user.has(Right.MANAGE_USER))
              and (not c.get("desk")
                   or user.can_see_all_reports or user.can_follow_up)]
     return templates.TemplateResponse(request, "reports_index.html",

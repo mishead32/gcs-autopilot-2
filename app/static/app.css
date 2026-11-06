@@ -1462,3 +1462,47 @@ table.fmsboard .fmsb-when{white-space:nowrap}
 .att.link .thumb.file{background:#eff6ff}
 .att.link .thumb.file .ext{color:var(--brand)}
 .att.link{border-color:#bfdbfe}
+
+/* ------------------------------------------------------- dictating a task --
+   The card above the delegation form. It produces a draft in the boxes
+   below and submits nothing, so it is visibly a tool rather than part of
+   the form — a lighter border and its own spacing. */
+.vn{border-left:3px solid var(--brand)}
+.vn-head{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;
+  margin-bottom:12px}
+.vn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.vn-lang{width:auto;min-width:190px;padding:7px 10px;font-size:13px}
+.vn-say{font-variant-numeric:tabular-nums}
+.vn .btn.vn-rec::first-letter{color:#dc2626}
+/* A label styled as a button must not be uppercased by the global label
+   rule, and [hidden] has to beat .btn's own display. */
+.vn label.btn{text-transform:none;letter-spacing:normal;font-weight:600;
+  margin:0;color:var(--brand);display:inline-block}
+.vn [hidden]{display:none !important}
+.vn-out{margin-top:12px}
+.vn-out audio{width:100%;max-width:420px;display:block}
+.vn-note{margin-top:6px}
+
+/* The suggestions. Deliberately buttons and not something that has already
+   happened: the name and the deadline are the two things that cost real
+   money when a machine gets them wrong, so both take a click. */
+.vn-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+  margin-top:12px}
+.vn-label{margin-right:2px}
+.vn-chip{border:1px dashed var(--brand);background:#f3f8fd;color:var(--brand);
+  border-radius:20px;padding:5px 13px;font-size:12.5px;font-weight:600;
+  cursor:pointer;font-family:inherit}
+.vn-chip:hover{background:var(--brand);color:#fff;border-style:solid}
+.vn-chip.taken{border-style:solid;border-color:var(--ok);background:#dcfce7;
+  color:#166534;cursor:default}
+.vn-chip.taken::before{content:"✓ "}
+.vn-chip:disabled{opacity:1}
+
+/* A button that reads as a link, inside explanatory grey text. */
+.linkish{border:0;background:none;padding:0;font:inherit;color:var(--brand);
+  text-decoration:underline;cursor:pointer}
+
+/* A recording in the attachment grid: a player, not a file icon. */
+.att .thumb.file.sound{display:flex;align-items:center;justify-content:center;
+  padding:0 8px;background:#f1f5f9}
+.att .thumb.file.sound audio{width:100%;height:36px}

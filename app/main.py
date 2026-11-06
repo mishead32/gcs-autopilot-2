@@ -31,6 +31,8 @@ from .services import detective
 from .services import flowsheet
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
+from .services import quietflows
+from .services import voice as voice_svc
 from .templating import templates
 from . import lastview
 
@@ -177,6 +179,23 @@ async def _daily_spawn():
             raised = await asyncio.to_thread(_escalate)
             if raised:
                 print(f"Escalation: {raised}")
+
+            # And the other report, after it: flows nobody has started.
+            # Same shape — it knows for itself whether today is owed, from
+            # the date it last ran rather than a timer, so calling it every
+            # tick survives a restart and a host that slept through eleven
+            # without any of that making it send twice.
+            quiet = await asyncio.to_thread(_quiet_report)
+            if quiet:
+                print(f"FMS entry report: {quiet}")
+
+            # Recordings somebody made on the new-task form and then
+            # wandered off from. Kept a day so a form left open over lunch
+            # still works, then swept — audio is the largest thing this
+            # database holds and none of it is worth keeping unattached.
+            swept = await asyncio.to_thread(_sweep_voice)
+            if swept:
+                print(f"Voice notes: dropped {swept} unused recording(s)")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -225,6 +244,22 @@ def _escalate() -> str:
         if result[key]:
             bits.append(f"{result[key]} {word}")
     return ", ".join(bits)
+
+
+def _sweep_voice() -> int:
+    with SessionLocal() as db:
+        return voice_svc.sweep(db)
+
+
+def _quiet_report() -> str:
+    """This morning's flows-nobody-is-starting email, or "" when not owed."""
+    with SessionLocal() as db:
+        got = quietflows.run_daily(db, site=os.getenv("SITE_URL", ""))
+    if not got:
+        return ""
+    if got["sent"]:
+        return f"{got['lines']} line(s) to {len(got['to'])} address(es)"
+    return f"{got['lines']} line(s), NOT sent: {got['why'] or 'unknown'}"
 
 
 @asynccontextmanager

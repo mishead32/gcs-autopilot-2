@@ -4,7 +4,57 @@
 <h1>Delegate a task</h1>
 <p class="sub">The doer is notified on WhatsApp and it lands on their dashboard immediately.</p>
 
+{# ------------------------------------------------------------ dictation --
+   Somebody walking the floor has a phone and no patience for a form. They
+   say it; the form fills itself in most of the way; they read it and press
+   the button.
+
+   Deliberately ABOVE the form rather than inside it, and deliberately not
+   a thing that submits anything. What it produces is a draft in the boxes
+   below — the name and the deadline are offered as something to tap, never
+   set — because the one failure worth designing against is a task assigned
+   to the wrong person because a machine was confident.
+
+   Not drawn at all when there is no key. A button that cannot work is
+   worse than no button. #}
+{% if voice_on %}
+<div class="card vn" id="vn" data-accept="{{ voice_accept }}"
+     data-max="{{ voice_max_mb }}" style="max-width:760px">
+  <div class="vn-head">
+    <strong>Dictate it</strong>
+    <span class="m">Say it in Hindi, English or both — then read what it
+      wrote before you send it.</span>
+  </div>
+
+  <div class="vn-row">
+    <button type="button" class="btn vn-rec" id="vnRec">● Record</button>
+    <button type="button" class="btn danger vn-stop" id="vnStop" hidden>■ Stop</button>
+    <label class="btn ghost vn-file" for="vnFile">Choose a recording</label>
+    <input type="file" id="vnFile" accept="{{ voice_accept }}" hidden>
+    <select id="vnLang" class="vn-lang" title="Which language to expect">
+      {% for key, text in voice_languages.items() %}
+      <option value="{{ key }}">{{ text }}</option>
+      {% endfor %}
+    </select>
+    <span class="m vn-say" id="vnSay"></span>
+  </div>
+
+  <div class="vn-out" id="vnOut" hidden>
+    <audio id="vnPlay" controls preload="metadata"></audio>
+    <div class="m vn-note">The recording is attached to the task, so whoever
+      has to do it can listen to what was actually said.
+      <button type="button" class="linkish" id="vnDrop">Remove it</button>
+    </div>
+  </div>
+
+  <div class="vn-chips" id="vnWho" hidden></div>
+  <div class="vn-chips" id="vnWhen" hidden></div>
+  <div class="m warnline" id="vnErr" hidden></div>
+</div>
+{% endif %}
+
 <form method="post" action="/tasks/new" enctype="multipart/form-data" class="card" style="max-width:760px">
+  {% if voice_on %}<input type="hidden" name="voice_token" id="vnToken">{% endif %}
   <label>Task title</label>
   <input name="title" required placeholder="e.g. Verify PT trainer allocation for September">
 
@@ -78,4 +128,5 @@
     <a class="btn ghost" href="/tasks">Cancel</a></div>
 </form>
 {{ doer_picker_script() }}
+{% if voice_on %}<script src="/static/voicenote.js"></script>{% endif %}
 {% endblock %}

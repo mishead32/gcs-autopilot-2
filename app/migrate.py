@@ -28,6 +28,11 @@ ADDITIONS = {
         ("start_field", "VARCHAR(160)"),
         ("storage", "VARCHAR(10) DEFAULT 'local'"),
         ("data", "BLOB"),
+        # Handed to the doer with the work, rather than produced by them as
+        # proof of it. FALSE for every existing row: delegation had no such
+        # marker, so there is nothing to backfill — the files that were
+        # briefings are indistinguishable from the ones that were proof.
+        ("briefing", "BOOLEAN DEFAULT 0"),
     ],
     "tasks": [
         ("how_to", "TEXT"),
@@ -86,6 +91,15 @@ ADDITIONS = {
         # This site's address, for the links inside an escalation email.
         # Filled in the first time the Escalation page is opened.
         ("site_url", "VARCHAR(200)"),
+        # The quiet-FMS report: flows nobody is starting. Off for an
+        # existing database for the same reason escalation is — an upgrade
+        # that starts emailing the CMD by itself is not an upgrade.
+        ("quiet_on", "BOOLEAN DEFAULT 0"),
+        ("quiet_gap", "INTEGER DEFAULT 2"),
+        ("quiet_to", "TEXT"),
+        ("quiet_cc", "TEXT"),
+        ("quiet_hour", "INTEGER DEFAULT 11"),
+        ("quiet_last_run", "DATE"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

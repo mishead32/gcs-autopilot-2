@@ -106,6 +106,40 @@ def is_holiday(db: Session, org_id: int, day: date,
     return is_closed(db, org_id, day, branch_id)
 
 
+#: Never count further back than this. A gap longer than a year means a
+#: flow nobody has touched since it was made, and the exact number stopped
+#: being interesting several hundred days ago.
+MAX_GAP = 400
+
+
+def open_days_between(db: Session, org_id: int, after: date, upto: date,
+                      branch_id: int | None = None,
+                      cap: int = MAX_GAP) -> int:
+    """How many working days fall in (after, upto] for one company.
+
+    Working days, not calendar days, because the two answer different
+    questions. "Nothing has been entered for three days" over a Friday and
+    a long weekend is not three days of nobody doing their job — it is one,
+    and a report that cannot tell the difference is one people stop reading
+    by the second Monday.
+
+    The holidays are read ONCE for the whole span rather than a query per
+    day: this is called for every flow against every company, and a day at
+    a time would be thousands of round trips to answer one email.
+    """
+    if upto <= after:
+        return 0
+    start = max(after + timedelta(days=1), upto - timedelta(days=cap))
+    named = holidays_for(db, org_id, branch_id, start, upto)
+    off = weekly_off(db, branch_id)
+    n, d = 0, start
+    while d <= upto:
+        if d not in named and (off is None or d.weekday() != off):
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def previous_working_day(db: Session, org_id: int, day: date,
                          branch_id: int | None = None) -> date:
     """The last day on or before `day` that somebody is actually in."""

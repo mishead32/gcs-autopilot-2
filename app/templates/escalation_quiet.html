@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% from "_emailframe.html" import email_frame, email_frame_script %}
+{% block title %}FMS nobody is starting · {{ APP_NAME }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>FMS nobody is starting</h1>
+    <p class="sub">Every flow whose start form has had no entry for
+      {{ threshold }} working day(s) or more — at each company separately.
+      Nothing on this page sends anything.</p>
+  </div>
+  <a class="btn ghost" href="/escalation">← Escalation</a>
+</div>
+
+{# Why this exists at all, said once. Somebody opening it for the first
+   time reasonably assumes it is another view of overdue work, and it is
+   the opposite: it is about work that was never created. #}
+<div class="card">
+  <p class="m" style="margin:0">
+    Escalation finds work somebody was given and has not done. This finds
+    the other failure — a flow that has quietly stopped being followed.
+    No task is overdue, because no task was ever created, so nothing else
+    in the software notices. Counted <strong>per flow and per company</strong>:
+    an entry at one company does not clear another, which is how a company
+    that has stopped altogether would otherwise hide behind one that has not.
+  </p>
+</div>
+
+<div class="grid g3">
+  <div class="kpi {{ 'bad' if rows else 'ok' }}">
+    <div class="l">Lines to report</div>
+    <div class="n">{{ rows|length }}</div>
+    <div class="m">flow &amp; company pairs</div></div>
+  <div class="kpi"><div class="l">Pairs watched</div>
+    <div class="n">{{ covered }}</div>
+    <div class="m">active flows × their companies</div></div>
+  <div class="kpi"><div class="l">Worst gap</div>
+    <div class="n">{{ rows|map(attribute='days')|max if rows else 0 }}</div>
+    <div class="m">working days with nothing entered</div></div>
+</div>
+
+<form method="get" action="/escalation/quiet" class="card searchbar"
+      style="margin-top:14px">
+  <div class="fb-f">
+    <label>Try a different threshold</label>
+    <input name="gap" type="number" min="1" max="90" value="{{ threshold }}">
+  </div>
+  <div class="acts">
+    <button class="btn ghost">Show</button>
+    {% if threshold != org.quiet_gap %}
+    <a class="btn ghost" href="/escalation/quiet">Back to {{ org.quiet_gap }}</a>
+    {% endif %}
+  </div>
+  <p class="m" style="flex-basis:100%;margin:8px 0 0">
+    This only changes what is on the screen. The saved setting is
+    <strong>{{ org.quiet_gap }}</strong> working day(s) —
+    <a href="/escalation">change it on the escalation page</a>.
+  </p>
+</form>
+
+{% if rows %}
+<h2>What it says, flow by flow</h2>
+{% for name, lines in groups %}
+<h3 class="cogroup">{{ name }} <span class="m">({{ lines|length }})</span></h3>
+<div class="table-wrap"><table>
+  <tr><th>Company</th><th>Days with no entry</th><th>Last entry</th></tr>
+  {% for g in lines %}
+  <tr>
+    <td><strong>{{ g.company }}</strong></td>
+    {# Red past a working week: by then it is not a slow week, it is a
+       process that has stopped. #}
+    <td class="{{ 'overdue' if g.days >= 5 }}">{{ g.days_label }}</td>
+    <td class="m">{{ g.since }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endfor %}
+{% else %}
+<div class="empty">
+  Every active flow has had an entry at every company within the last
+  {{ threshold }} working day(s). Nothing would be sent this morning.
+</div>
+{% endif %}
+
+<h2>Who it goes to</h2>
+<div class="card {{ '' if to else 'warnbox' }}">
+  {% if to %}
+  <table>
+    <tr><td style="width:90px"><strong>To</strong></td>
+        <td>{{ to|join(', ') }}</td></tr>
+    {% if cc %}
+    <tr><td><strong>Cc</strong></td><td class="m">{{ cc|join(', ') }}</td></tr>
+    {% endif %}
+    <tr><td><strong>When</strong></td>
+        <td class="m">
+          {% if org.quiet_on %}
+          Every morning from {{ '%02d:00'|format(org.quiet_hour or 11) }}, on
+          the same days as the escalation check — so not on Sundays or
+          holidays.
+          {% else %}
+          <strong>Switched off.</strong> Nothing is sent automatically until
+          it is turned on <a href="/escalation">on the escalation page</a>.
+          {% endif %}
+        </td></tr>
+  </table>
+  {% else %}
+  <strong>Nobody is listed to receive it</strong>
+  <p class="m" style="margin:8px 0 0">
+    Add at least one address <a href="/escalation">on the escalation
+    page</a>. A report with nowhere to go runs every morning and tells
+    nobody, which from the outside looks exactly like one that is working.
+  </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <strong>Send it now</strong>
+  <p class="m" style="margin:8px 0 12px">
+    The test sends this same report — not a sample of it — to
+    <strong>{{ user.email or 'your own address' }}</strong> and nobody else,
+    so you can read it in a real mail client before anyone else does. It
+    does not count as this morning's run.
+  </p>
+  {% if not mail_on %}
+  <p class="m warnline" style="margin:0 0 12px">{{ mail_status }}</p>
+  {% endif %}
+  <form method="post" action="/escalation/quiet/test" style="display:inline">
+    <button class="btn" {{ 'disabled' if not mail_on }}
+      title="The whole report, to your own address only">
+      Send a test to me</button></form>
+  <form method="post" action="/escalation/quiet/send" style="display:inline"
+        onsubmit="return confirm('Send this to {{ to|join(', ') }} now? It counts as today’s run, so the automatic one will not go out again today.')">
+    <button class="btn ghost" {{ 'disabled' if not mail_on or not to }}
+      title="Send to the real list this minute instead of waiting">
+      Send to the list now</button></form>
+</div>
+
+<h2>The email itself</h2>
+<div class="card">
+  <div class="esc-subject">{{ subject }}</div>
+  {{ email_frame(body_html, 'FMS entry report') }}
+  <details style="margin-top:10px">
+    <summary class="m">The plain-text version that goes with it</summary>
+    <div class="esc-body" style="margin-top:8px">{{ body }}</div>
+  </details>
+</div>
+{{ email_frame_script() }}
+{% endblock %}

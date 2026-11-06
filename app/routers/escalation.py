@@ -5,6 +5,7 @@ Three screens, and the split between them is deliberate:
     /escalation          the ladders and the group-wide switches
     /escalation/log      every escalation ever raised, filterable
     /escalation/preview  what this morning WOULD send, sending nothing
+    /escalation/quiet    the other report: flows nobody is starting
 
 The preview is the one that earns its place. The first question anybody
 sensible asks before switching this on is "who is about to be emailed, and
@@ -32,6 +33,7 @@ from ..models import (
 from ..services import cardimg
 from ..services import escalation as esc_svc
 from ..services import mail
+from ..services import quietflows
 from ..services import whatsapp
 from ..templating import templates
 
@@ -166,6 +168,94 @@ def send_test(request: Request, user: User = Depends(manage)):
         flash.set(request, "error",
                   f"It did not send: {why}{mail.advice(why)}")
     return RedirectResponse("/escalation", status_code=303)
+
+
+# ----------------------------------------- flows nobody is starting ------
+# The other half of the job. Escalation finds work that is late; this finds
+# work that was never created — a flow that has quietly stopped being
+# followed at one company raises no overdue task, because no task exists.
+
+@router.get("/quiet", response_class=HTMLResponse)
+def quiet_page(request: Request, gap: str = "",
+               user: User = Depends(manage), db: Session = Depends(get_db)):
+    """The report as it stands right now, with nothing sent.
+
+    The same answer the eleven o'clock email would give, on the screen, so
+    the first question — "what is this actually going to tell people" — is
+    answered without anybody's inbox being used to find out.
+    """
+    org = _org(db, user)
+    try:
+        threshold = max(1, min(90, int(str(gap).strip()))) if gap else None
+    except ValueError:
+        threshold = None
+    today = clock.today()
+    rows, subject, body, body_html = quietflows.compose(
+        db, org, today, threshold=threshold)
+    to, cc = quietflows.recipients(org)
+    return templates.TemplateResponse(request, "escalation_quiet.html", {
+        "user": user, "org": org, "rows": rows,
+        "groups": quietflows.by_flow(rows),
+        "subject": subject, "body": body, "body_html": body_html,
+        "to": to, "cc": cc, "today": today,
+        "threshold": threshold if threshold is not None else org.quiet_gap,
+        "covered": len(quietflows.covered(db, org.id)),
+        "mail_on": mail.enabled(), "mail_status": mail.status(),
+    })
+
+
+@router.post("/quiet/test")
+def quiet_test(request: Request, user: User = Depends(manage),
+               db: Session = Depends(get_db)):
+    """The real report, to the person who pressed the button, and nobody else.
+
+    Not a "this is a test" stub: the whole point is to see what the EA and
+    the CMD are about to be sent, in a real mail client, on a phone. So it
+    is the same message with one address on it — and `mark=False`, because
+    a test must not persuade the scheduler that today has been done.
+    """
+    org = _org(db, user)
+    if not (user.email or "").strip():
+        flash.set(request, "error",
+                  "Your own account has no email address, so there is "
+                  "nowhere to send the test.")
+        return RedirectResponse("/escalation/quiet", status_code=303)
+    if not mail.enabled():
+        flash.set(request, "error", mail.status())
+        return RedirectResponse("/escalation/quiet", status_code=303)
+    got = quietflows.send_report(db, org, send=True, to=[user.email], cc=[],
+                                 mark=False)
+    if got["sent"]:
+        flash.set(request, "saved",
+                  f"Sent to {user.email} — {got['lines']} line(s). This is "
+                  "the whole report, not a sample: it is exactly what would "
+                  "go to the list. Nothing was sent to anybody else, and "
+                  "today's automatic run is still owed.")
+    else:
+        flash.set(request, "error",
+                  "It did not send: " + (got["why"] or "unknown reason"))
+    return RedirectResponse("/escalation/quiet", status_code=303)
+
+
+@router.post("/quiet/send")
+def quiet_send_now(request: Request, user: User = Depends(manage),
+                   db: Session = Depends(get_db)):
+    """Send it to the real list this minute, rather than waiting for 11am."""
+    org = _org(db, user)
+    if not mail.enabled():
+        flash.set(request, "error", mail.status())
+        return RedirectResponse("/escalation/quiet", status_code=303)
+    got = quietflows.send_report(db, org, send=True)
+    if got["sent"]:
+        flash.set(request, "saved",
+                  f"Sent — {got['lines']} line(s) to "
+                  + ", ".join(got["to"])
+                  + (", copied to " + ", ".join(got["cc"]) if got["cc"] else "")
+                  + ". Today's automatic run is now done.")
+    else:
+        flash.set(request, "error",
+                  got["why"] or "It did not send, and said no more than that.")
+    return RedirectResponse("/escalation/quiet", status_code=303)
 
 
 @router.post("/test-whatsapp")
@@ -323,6 +413,9 @@ async def save_settings(request: Request, esc_on: str = Form(""),
                   scope: str = Form("chased"), hour: str = Form("9"),
                   site_url: str = Form(""), grace: str = Form("0"),
                   doer_daily: str = Form(""), doer_whatsapp: str = Form(""),
+                  quiet_on: str = Form(""), quiet_gap: str = Form("2"),
+                  quiet_hour: str = Form("11"), quiet_to: str = Form(""),
+                  quiet_cc: str = Form(""),
                   user: User = Depends(manage), db: Session = Depends(get_db)):
     org = _org(db, user)
     want_on = bool(esc_on)
@@ -381,6 +474,39 @@ async def save_settings(request: Request, esc_on: str = Form(""),
             400, "The web address has to start with https:// — otherwise "
                  "every link in every escalation email is a dead one.")
     org.site_url = address or None
+
+    # ----------------------------------- flows nobody is starting --------
+    # Checked before anything is saved, because switching it on with
+    # nobody to send to is a report that runs perfectly every morning and
+    # tells no one — the same failure the ladder guards against above.
+    want_quiet = bool(quiet_on)
+    to_list = mail.clean((quiet_to or "").replace(";", ",").split(","))
+    cc_list = mail.clean((quiet_cc or "").replace(";", ",").split(","))
+    typed = [a for a in (quiet_to or "").replace(";", ",").split(",")
+             if a.strip()]
+    bad = [a.strip() for a in typed if not mail.valid(a.strip())]
+    if bad:
+        raise HTTPException(
+            400, "These do not look like email addresses: "
+                 + ", ".join(bad[:4])
+                 + ". Separate them with commas.")
+    if want_quiet and not to_list:
+        raise HTTPException(
+            400, "The FMS entry report is still off. Give it at least one "
+                 "address to go to — otherwise it would run every morning "
+                 "and tell nobody, which looks exactly like a report that "
+                 "is working.")
+    org.quiet_on = want_quiet
+    org.quiet_to = ",".join(to_list) or None
+    org.quiet_cc = ",".join(cc_list) or None
+    org.quiet_hour = _num(quiet_hour, "the hour the FMS report goes out",
+                          0, 23)
+    try:
+        org.quiet_gap = max(1, min(90, int(str(quiet_gap).strip() or 2)))
+    except ValueError:
+        raise HTTPException(
+            400, "Working days with no entry has to be a whole number — "
+                 "2 means nothing was entered yesterday or the day before.")
 
     org.esc_on = want_on
     org.esc_working_days = bool(working_days)

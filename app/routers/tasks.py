@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Request, Form,
                      UploadFile, File, HTTPException)
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
+from fastapi.responses import (RedirectResponse, HTMLResponse, FileResponse,
+                               JSONResponse)
 from sqlalchemy import select, or_, update, case, func, delete as sa_delete
 from sqlalchemy.orm import Session
 
@@ -18,11 +19,11 @@ from ..deps import current_user, manager_up, can_view_task, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
-    HelpTicket, HelpStatus, REF_PREFIX,
+    HelpTicket, HelpStatus, REF_PREFIX, VoiceNote,
     Followup, Escalation
 )
-from ..services import (notify, flows as flow_svc, storage, holidays, xlsx,
-                        detective, shrink)
+from ..services import (attach, notify, flows as flow_svc, storage, holidays,
+                        xlsx, detective, shrink, voice)
 from ..templating import templates
 
 router = APIRouter()
@@ -454,10 +455,87 @@ def new_task_form(request: Request,
     return templates.TemplateResponse(request, "task_new.html", {
         "user": user, "doers": doers, "branches": branches,
         "priorities": list(Priority),
+        # Dictation. Off until a key is set, and the card is not drawn at
+        # all when it is off — an offered button that cannot work is worse
+        # than no button.
+        "voice_on": voice.enabled(),
+        "voice_status": voice.status(),
+        "voice_languages": voice.LANGUAGES,
+        "voice_accept": storage.AUDIO_ACCEPT_ATTR,
+        "voice_max_mb": storage.MAX_VOICE_MB,
         # End of tomorrow by default. Most delegated work is "by end of day",
         # and making people type a time every single time invites 12:00.
         "default_due": (clock.now() + timedelta(days=1))
                        .strftime("%Y-%m-%dT23:59"),
+    })
+
+
+@router.post("/tasks/voice")
+async def transcribe_voice(
+    request: Request,
+    audio: UploadFile = File(...),
+    language: str = Form(""),
+    seconds: str = Form("0"),
+    user: User = Depends(require_right(Right.CREATE_TASK)),
+    db: Session = Depends(get_db),
+):
+    """A recording in; the words, a name to confirm and a date to tap, out.
+
+    Answers with JSON rather than a page, because the form it feeds is
+    still open and half filled in — reloading it to show a transcript
+    would throw away whatever had been typed so far.
+
+    It never fails with a status code the browser has to interpret. A
+    provider that is down, a key that is wrong, an empty recording: all
+    of them come back as 200 with a sentence in `problem`, because the
+    one thing this must not do is leave somebody staring at a spinner.
+    """
+    data = await audio.read()
+    ctype = (audio.content_type or "").split(";")[0].strip()
+    name = (audio.filename or "voice-note").strip()
+    if "." not in name[-6:]:
+        name += storage.audio_ext(ctype)
+
+    problem = storage.check_audio(name, ctype, len(data))
+    if problem:
+        return JSONResponse({"ok": False, "problem": problem})
+    if not voice.enabled():
+        return JSONResponse({"ok": False, "problem": voice.status()})
+
+    # The same people the picker on the form offers. Filtered in Python
+    # because `receives_work` is a rule about the role, not a column —
+    # and it is a list of twenty, not twenty thousand.
+    staff = [p for p in db.scalars(
+        select(User).where(User.org_id == user.org_id, User.active.is_(True))
+        .order_by(User.name)).all() if p.receives_work]
+
+    said, problem = voice.transcribe(
+        data, name, ctype, language if language in ("en", "hi") else "",
+        [p.name for p in staff])
+
+    # Stored either way. A recording that could not be transcribed is
+    # still the thing somebody said, and attaching it to the task is more
+    # use than losing it because a provider had a bad minute.
+    note = VoiceNote(
+        org_id=user.org_id, token=uuid.uuid4().hex, made_by_id=user.id,
+        filename=name[:250], content_type=ctype, data=data, size=len(data),
+        seconds=max(0, min(36000, int(str(seconds).strip() or 0)
+                           if str(seconds).strip().isdigit() else 0)),
+        text=said or None, error=problem or None, language=language or None)
+    db.add(note)
+    db.commit()
+
+    return JSONResponse({
+        "ok": bool(said),
+        "problem": problem,
+        "token": note.token,
+        "text": said,
+        "title": voice.title_from(said),
+        "people": [{"id": g.user_id, "name": g.name, "heard": g.heard,
+                    "score": g.score, "sure": g.sure}
+                   for g in voice.find_people(said, staff)],
+        "whens": [{"label": w.label, "value": w.value, "phrase": w.phrase}
+                  for w in voice.when_from(said)],
     })
 
 
@@ -519,8 +597,14 @@ async def create_task(
     # Read once, not once per person: an UploadFile can only be read to the
     # end a single time, so reading it inside the loop would give the first
     # person the file and everybody else an empty one.
+    #
+    # Saved through `attach.save`, which knows where this install keeps
+    # files. It used to be guarded by `if storage.mode() == "local"`, which
+    # is false on the live site — where files live in the database — so
+    # every briefing document anybody attached while handing out work was
+    # read, checked, and then silently dropped.
     briefing = []
-    if storage.mode() == "local":
+    if storage.uploads_available():
         for f in files or []:
             if not f.filename:
                 continue
@@ -529,6 +613,17 @@ async def create_task(
             if storage.check(fname, ctype, len(data)):
                 continue
             briefing.append((fname, ctype, data))
+
+    # A task dictated rather than typed. The recording was uploaded and
+    # transcribed while the form was still being filled in, so all that
+    # arrives here is its token — and it is matched on the person as well,
+    # so a token that leaked is still not usable by anybody else.
+    note = None
+    token = (form.get("voice_token") or "").strip()
+    if token:
+        note = db.scalar(select(VoiceNote).where(
+            VoiceNote.token == token, VoiceNote.org_id == user.org_id,
+            VoiceNote.made_by_id == user.id, VoiceNote.used_at.is_(None)))
 
     made = []
     for person in doers:
@@ -557,11 +652,20 @@ async def create_task(
         made.append(task)
 
         for fname, ctype, data in briefing:
-            key = storage.save_local(task.id, fname, data)
-            db.add(Attachment(task_id=task.id, uploaded_by_id=user.id,
-                              filename=fname[:250], stored_name=key,
-                              size=len(data), content_type=ctype,
-                              storage="local"))
+            # `briefing=True`: handed to the doer with the work, not
+            # produced by them as proof of it. Without that a doer could
+            # submit on the strength of the document they were given.
+            attach.save(db, task.id, user.id, fname, ctype, data,
+                        briefing=True)
+
+        if note is not None:
+            attach.save(db, task.id, user.id, note.filename,
+                        note.content_type, note.data, briefing=True)
+            if note.text:
+                db.add(TaskComment(
+                    task_id=task.id, author_id=user.id,
+                    body="Dictated. What the recording was heard to say, "
+                         "before anybody edited it:\n\n" + note.text))
 
         if moved_from:
             # closed_reason gives either a holiday's name or "a Sunday", so
@@ -576,6 +680,8 @@ async def create_task(
 
         notify.queue_task_assigned(db, task)
 
+    if note is not None:
+        note.used_at = clock.now()
     db.commit()
     if len(made) == 1:
         flash.set(request, "assigned",

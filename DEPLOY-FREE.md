@@ -126,6 +126,19 @@ CRON_SECRET  = <mash again, about 20, different from the first>
    > its files are wiped on every restart, several times a day. This keeps every
    > screenshot and photo inside the database, where it survives.
 
+   These are the five the site needs to run. Everything below is optional and
+   can be added later, on the same Environment tab, without touching anything
+   else. Every one of them is a secret: it goes **here and nowhere else** —
+   not in the repository, not in a message, not in a chat.
+
+   | Name | What it switches on |
+   |---|---|
+   | `MAIL_API` + `MAIL_API_KEY` | Escalation and the morning emails, sent over HTTPS |
+   | `WA_API_KEY` + `WA_PHONE_ID` | The overdue picture on WhatsApp |
+   | `GEMINI_API_KEY` | Task Detective — the AI second opinion on proof |
+   | `GROQ_API_KEY` | **Dictating a delegated task.** Free, from console.groq.com → API Keys. Without it the Dictate card simply is not drawn. |
+   | `GOOGLE_SERVICE_ACCOUNT` | Reading a Google Sheet that starts FMS runs |
+
 5. Under **Advanced**, set **Health Check Path** to `/healthz`.
 6. **Create Web Service**, then wait 3–6 minutes. Watch for
    `==> Your service is live 🎉` and your address at the top, something like

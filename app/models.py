@@ -318,6 +318,29 @@ class Organization(Base):
     # and an office may want one channel and not the other.
     esc_doer_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # ------------------------------------------- flows nobody is starting --
+    # The other kind of failure. Escalation fires when somebody is late
+    # with work they were given; this fires when no work was given at all —
+    # a flow that has quietly stopped being followed at one company raises
+    # no overdue task, because no task was ever created.
+    #
+    # Off by default. A new system should not start emailing people about
+    # processes it has not watched long enough to have an opinion on.
+    quiet_on: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Working days with no start-form entry before a flow/company is
+    # reported. Two is "nothing yesterday and nothing the day before".
+    quiet_gap: Mapped[int] = mapped_column(Integer, default=2)
+    # Who it goes to, and who is copied — comma separated. Plain addresses
+    # rather than people on the system, because the readers of this report
+    # are the EA and the CMD, who are not the doers of anything in it.
+    quiet_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quiet_cc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Later than the escalation hour by default, so the two land in order:
+    # what is overdue first, then what was never started.
+    quiet_hour: Mapped[int] = mapped_column(Integer, default=11)
+    # Keyed off the date for the same reason esc_last_run is.
+    quiet_last_run: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     @property
     def esc_day_list(self) -> list[int]:
         """The weekdays it runs on. Empty setting means all seven."""
@@ -1260,9 +1283,17 @@ class Task(Base):
         A file answered on an FMS start form is stored against this task too
         (it has to belong to a task), but somebody else uploaded it before
         the work began. Counting it as proof would let a doer submit a step
-        on the strength of the document they were handed.
+        on the strength of the document they were handed. A delegation
+        briefing file — and the voice note a task was dictated from — is the
+        same thing by another route, and is marked `briefing`.
         """
-        return [a for a in self.attachments if not a.start_field]
+        return [a for a in self.attachments
+                if not a.start_field and not a.briefing]
+
+    @property
+    def briefing_files(self) -> list["Attachment"]:
+        """What the doer was GIVEN, as opposed to what they produced."""
+        return [a for a in self.attachments if a.briefing]
 
     @property
     def ref_label(self) -> str:
@@ -1579,6 +1610,16 @@ class Attachment(Base):
     # The start-form question it answers, so the run page can show it beside
     # the question rather than in an unlabelled heap.
     start_field: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # Handed TO the doer with the work, rather than produced BY the doer as
+    # evidence that the work happened. The bill to be paid, the letter to be
+    # answered, the voice note the task was dictated from.
+    #
+    # The distinction is the same one start_field already makes for FMS, and
+    # it matters for the same reason: counting a briefing file as proof would
+    # let somebody close a task on the strength of the document they were
+    # handed. Delegation had no such marker, so every file an assigner
+    # attached on the new-task form counted as the doer's own evidence.
+    briefing: Mapped[bool] = mapped_column(Boolean, default=False)
     uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     filename: Mapped[str] = mapped_column(String(255))
     # object key in the bucket, or the file name on disk
@@ -1598,6 +1639,16 @@ class Attachment(Base):
     @property
     def is_image(self) -> bool:
         return self.content_type.startswith("image/")
+
+    @property
+    def is_audio(self) -> bool:
+        """A recording, which a page can offer to play rather than download.
+
+        A voice note the task was dictated from is no use as a file to
+        save somewhere — its whole value is being listened to in the two
+        seconds before somebody decides what the garbled transcript meant.
+        """
+        return (self.content_type or "").split(";")[0].startswith("audio/")
 
     @property
     def is_link(self) -> bool:
@@ -1625,6 +1676,59 @@ class Attachment(Base):
             return "link"
         kb = self.size / 1024
         return f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
+
+
+class VoiceNote(Base):
+    """A recording dictated into the new-task form, and what it said.
+
+    It exists for the gap between two requests. The recording is uploaded
+    and transcribed while the form is still being filled in — there is no
+    task yet to hang it on — and the task is created some seconds or
+    minutes later, by a second request that must be able to find the same
+    audio again without sending it twice.
+
+    So the first request stores it here and hands back a token; the form
+    carries the token in a hidden field; and creating the task moves the
+    audio onto the task as a briefing attachment and marks this row used.
+    Anything still unused after a day was a recording somebody made and
+    then abandoned, and is swept.
+
+    The transcript is kept beside the audio deliberately. A voice note is
+    only half a record once somebody has edited the text it produced, and
+    the question "what did he actually say" is exactly the one that gets
+    asked three weeks later.
+    """
+    __tablename__ = "voice_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # Random, unguessable, and the only thing the browser is given. The
+    # row is also pinned to the person who made it, so a token that leaked
+    # is still not usable by anybody else.
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    made_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    filename: Mapped[str] = mapped_column(String(255), default="voice-note")
+    content_type: Mapped[str] = mapped_column(String(80), default="")
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    # Roughly how long it runs, as the browser measured it. Nothing here
+    # decodes the audio to find out — that is a codec library for a number
+    # shown in small grey type.
+    seconds: Mapped[int] = mapped_column(Integer, default=0)
+
+    # What came back, exactly as it came back — before anybody edited it.
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now,
+                                                 index=True)
+    # Set when a task was actually created from it. An unused row is a
+    # recording somebody abandoned.
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    made_by: Mapped[User] = relationship()
 
 
 class RecurringRule(Base):
@@ -2137,6 +2241,18 @@ class EscalationMail(Base):
 
     @property
     def label(self) -> str:
+        """What this email was, in the two or three words the log shows.
+
+        The ladder's own levels count up from 1. Two other things are
+        written down in the same table because they are the same kind of
+        thing — a message sent, recorded, retryable — and neither is a
+        rung: a doer's own morning list is level 0, and the quiet-FMS
+        report is below that. "L0" and "L-1" told nobody anything.
+        """
+        if self.level < 0:
+            return "FMS entries"
+        if self.level == 0:
+            return "Doer's list"
         base = f"L{self.level}"
         return base if not self.repeat_n else f"{base} · reminder {self.repeat_n}"
 

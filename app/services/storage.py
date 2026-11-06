@@ -51,7 +51,42 @@ ALLOWED_TYPES = {
 }
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic"}
 
+# Sound, which staff may NOT attach as proof — it is here only for a voice
+# note dictated into the new-task form. Kept out of ALLOWED_TYPES on
+# purpose: proof is meant to be something a reader can check at a glance,
+# and a four-minute recording as evidence that a job was done is a way of
+# making a task unauditable.
+#
+# One container holds several codecs. A browser's MediaRecorder writes
+# webm/opus on Chrome and Firefox and mp4/aac on Safari, and a WhatsApp
+# voice note forwarded from a phone is ogg/opus or m4a — so all of those
+# have to be here or the feature works on one machine and not the next.
+AUDIO_TYPES = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/oga": ".oga",
+    "audio/opus": ".opus",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/m4a": ".m4a",
+    "audio/aac": ".aac",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/flac": ".flac",
+}
+
+#: What a voice note may be. Separate from MAX_UPLOAD_MB because the two
+#: answer different questions: ten megabytes of photograph is ordinary,
+#: ten megabytes of speech is twenty minutes of it, and twenty minutes
+#: dictated into a task box is not a task.
+MAX_VOICE_MB = int(os.getenv("MAX_VOICE_MB", "12"))
+MAX_VOICE_BYTES = MAX_VOICE_MB * 1024 * 1024
+
 ACCEPT_ATTR = ".jpg,.jpeg,.png,.webp,.heic,.pdf,.xlsx,.xls,.docx,.doc,.csv,.txt"
+AUDIO_ACCEPT_ATTR = "audio/*,.m4a,.mp3,.ogg,.opus,.wav,.webm,.aac,.flac"
 
 # The S3_* settings are also used by backup.py, which copies local files into
 # object storage nightly. Setting them must NOT silently move live attachments
@@ -118,6 +153,34 @@ def check(filename: str, content_type: str, size: int) -> str | None:
         return (f"{filename} is not a type we accept. "
                 "Attach a photo, PDF, Excel or Word file.")
     return None
+
+
+def check_audio(filename: str, content_type: str, size: int) -> str | None:
+    """Returns an error message, or None when the recording is acceptable.
+
+    Its own check rather than `check` with a wider list, so widening what a
+    voice note may be never quietly widens what anybody can attach as proof.
+    """
+    if not filename.strip():
+        return "The recording has no name."
+    if size <= 0:
+        return "That recording is empty — nothing was captured."
+    if size > MAX_VOICE_BYTES:
+        return (f"That recording is {size / 1024 / 1024:.1f} MB, and the "
+                f"limit is {MAX_VOICE_MB} MB. Record it in two parts, or "
+                "type the task out.")
+    # The browser sometimes labels a webm recording "audio/webm;codecs=opus".
+    base = (content_type or "").split(";")[0].strip().lower()
+    if base not in AUDIO_TYPES:
+        return (f"{filename} is not a sound file this accepts. Record it "
+                "here, or attach an m4a, mp3, ogg, wav or webm.")
+    return None
+
+
+def audio_ext(content_type: str, fallback: str = ".webm") -> str:
+    """The extension to save a recording under, from what it says it is."""
+    base = (content_type or "").split(";")[0].strip().lower()
+    return AUDIO_TYPES.get(base, fallback)
 
 
 def is_image(content_type: str) -> bool:
