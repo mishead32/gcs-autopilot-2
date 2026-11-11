@@ -23,7 +23,7 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy import select, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .. import clock
 from .. import search
@@ -111,7 +111,13 @@ def _open_tasks(db: Session, user: User, sources, day: date,
         or_(Task.closed_at.is_(None), Task.closed_at > end),
         Task.status.not_in(PARKED_STATES),
     )
-    rows = list(db.scalars(_visible(user, q, desk_right)).all())
+    # The rule comes WITH the task. `needs_chasing` below asks a checklist
+    # task which rule it came from, and left lazy that is one query per
+    # row — a hundred and fifty on a busy day's desk, and the dashboard
+    # builds this list for every desk it shows.
+    rows = list(db.scalars(
+        _visible(user, q, desk_right).options(joinedload(Task.rule))
+    ).unique().all())
     # Work the desk is not expected to chase leaves the list ENTIRELY, not
     # just the pending column. A desk that can never reach 100% because the
     # total is full of jobs nobody expects them to ring about learns to
@@ -250,7 +256,7 @@ def followups(request: Request, desk: str = "", day: str = "",
                 ("Chased", lambda r: r["done"]),
                 ("Missed", lambda r: r["missed"]),
                 ("Chased by", lambda r: r["who"]),
-            ], rows, f"{start:%d %b %Y} to {end:%d %b %Y}")
+            ], rows, f"{start:%d/%m/%Y} to {end:%d/%m/%Y}")
         return templates.TemplateResponse(request, "followups.html", ctx)
 
     on = start
@@ -282,7 +288,7 @@ def followups(request: Request, desk: str = "", day: str = "",
         # One row per task on the desk that day, with the tick and who made
         # it — the tick list itself, not a summary of it.
         return xlsx.one(f"followups-{desk}-{on:%Y-%m-%d}",
-                        f"{cfg['label']} — {on:%d %b %Y}", [
+                        f"{cfg['label']} — {on:%d/%m/%Y}", [
             ("Task", lambda t: t.title),
             ("Doer", lambda t: t.doer.name if t.doer else ""),
             ("Branch", lambda t: t.branch.name if t.branch else ""),

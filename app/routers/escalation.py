@@ -45,6 +45,10 @@ AFTER_TOP = {
     "repeat": "Remind the top level again every day until it is closed",
 }
 
+#: How many of the morning's emails the preview writes out in full. The
+#: rest are listed with who, which level and how many — see `preview`.
+PREVIEW_BODIES = 5
+
 SCOPES = {
     "chased": "The work the follow-up desk chases (recommended)",
     "high": "High priority only",
@@ -298,9 +302,9 @@ def send_test_whatsapp(request: Request, user: User = Depends(manage),
     counts = esc_svc.counts_by_kind(mine)
     sections = esc_svc.by_kind(mine)
     subtitle = (f"{len(mine)} overdue task{'' if len(mine) == 1 else 's'}"
-                f" · {today.strftime('%d %b %Y')}")
+                f" · {today.strftime('%d/%m/%Y')}")
     if not mine:
-        subtitle = f"Test message · {today.strftime('%d %b %Y')}"
+        subtitle = f"Test message · {today.strftime('%d/%m/%Y')}"
 
     png = cardimg.report_png(
         user.name, subtitle, counts, sections,
@@ -628,31 +632,48 @@ def preview(request: Request, user: User = Depends(manage),
     out = []
     for g in groups:
         rule = g["rule"]
-        subject, body, body_html, cc = esc_svc.compose(
-            g["rows"], g["level"], g["repeat_n"], rule, g["rungs"],
-            _site(request), g["below_sent"])
-        out.append({"to": rule.name, "email": rule.email, "cc": cc,
+        out.append({"to": rule.name, "email": rule.email, "cc": [],
                     "level": g["level"], "repeat_n": g["repeat_n"],
                     "count": len(g["rows"]), "to_doer": False,
-                    "subject": subject, "body": body, "html": body_html})
+                    "group": g, "rows": g["rows"]})
         # And each doer's own copy of their own rows — shown here too, so
         # nobody is surprised by an email they did not know went out.
         if rule.cc_doer:
             for person, rows in esc_svc._doer_copies(g):
-                d_sub, d_body, d_html, _c = esc_svc.compose(
-                    rows, g["level"], g["repeat_n"], rule, g["rungs"],
-                    _site(request), g["below_sent"], for_doer=person.name)
                 out.append({"to": person.name, "email": person.email,
                             "cc": [], "level": g["level"],
                             "repeat_n": g["repeat_n"], "count": len(rows),
-                            "to_doer": True, "subject": d_sub,
-                            "body": d_body, "html": d_html})
+                            "to_doer": True, "group": g, "rows": rows,
+                            "for_doer": person.name})
+
+    # The bodies, for the first few only.
+    #
+    # Every one of these is a whole email with a row per task in it, and
+    # on a backlog of a couple of thousand that came to seven megabytes
+    # of HTML in one page — a page that took longer to draw than the
+    # thing it was previewing takes to send. What somebody checks here is
+    # that the right people are getting the right count at the right
+    # level; the first few written out in full show what one looks like,
+    # and the rest are listed with their numbers.
+    for n, row in enumerate(out):
+        if n >= PREVIEW_BODIES:
+            row["subject"] = esc_svc.subject_line(
+                row["rows"], row["level"], row["repeat_n"],
+                row["group"]["rule"], row.get("for_doer", ""))
+            continue
+        g = row["group"]
+        subject, body, body_html, cc = esc_svc.compose(
+            row["rows"], row["level"], row["repeat_n"], g["rule"],
+            g["rungs"], _site(request), g["below_sent"],
+            for_doer=row.get("for_doer", ""))
+        row.update(subject=subject, body=body, html=body_html,
+                   cc=[] if row["to_doer"] else cc)
 
     return templates.TemplateResponse(request, "escalation_preview.html", {
         "user": user, "org": org, "rows": out, "skipped": skipped,
         "tasks": sum(g["count"] for g in out if not g["to_doer"]),
         "today": today, "mail_on": mail.enabled(),
-        "mail_status": mail.status(),
+        "mail_status": mail.status(), "bodies": PREVIEW_BODIES,
     })
 
 

@@ -8,10 +8,27 @@ from .config import BASE_DIR, APP_NAME, EPHEMERAL_STORAGE, BANNER
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 
 
-def dt(value, fmt="%d %b %Y, %I:%M %p"):
+def dt(value, pattern=clock.WHEN):
+    """A date on a page. Always dd/mm/yyyy — see clock.fmt.
+
+    Every pattern passed in goes through the rewriter rather than being
+    used as written. That is what makes the rule hold: a template added
+    next year that asks for "%d %b %Y" still prints 05/11/2026, and
+    nobody has to have read a comment in another file for it to.
+    """
     if value is None:
         return "—"
-    return value.strftime(fmt)
+    return value.strftime(clock.fmt(pattern))
+
+
+def day(value):
+    """Just the date: 05/11/2026."""
+    return value.strftime(clock.DAY) if value is not None else "—"
+
+
+def when(value):
+    """The date and the time: 05/11/2026 06:30 PM."""
+    return value.strftime(clock.WHEN) if value is not None else "—"
 
 
 def relative_due(value):
@@ -61,7 +78,24 @@ def ago(value):
 
 templates.env.filters["ago"] = ago
 templates.env.filters["dt"] = dt
+templates.env.filters["day"] = day
+templates.env.filters["when"] = when
 templates.env.filters["due"] = relative_due
+# A stamp on every /static address, so the browser may keep those files
+# for a week (see CachedStatic in main.py) and still pick up a new one
+# the moment it is deployed. Computed once at import: the newest file in
+# the folder, which changes exactly when something is released.
+def _asset_version() -> str:
+    try:
+        folder = BASE_DIR / "app" / "static"
+        newest = max((f.stat().st_mtime for f in folder.iterdir()
+                      if f.is_file()), default=0)
+        return str(int(newest))
+    except OSError:
+        return "0"
+
+
+templates.env.globals["ASSET_V"] = _asset_version()
 templates.env.globals["APP_NAME"] = APP_NAME
 templates.env.globals["EPHEMERAL_STORAGE"] = EPHEMERAL_STORAGE
 

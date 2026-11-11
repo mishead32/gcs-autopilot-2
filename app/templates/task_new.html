@@ -135,5 +135,5 @@
     <a class="btn ghost" href="/tasks">Cancel</a></div>
 </form>
 {{ doer_picker_script() }}
-{% if voice_on %}<script src="/static/voicenote.js"></script>{% endif %}
+{% if voice_on %}<script src="/static/voicenote.js?v={{ ASSET_V }}"></script>{% endif %}
 {% endblock %}

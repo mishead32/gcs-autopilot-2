@@ -9,6 +9,7 @@ from fastapi.responses import (RedirectResponse, HTMLResponse, JSONResponse,
                                Response)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -384,6 +385,18 @@ class RememberTheList:
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
 # Added first, so it ends up innermost — see the class docstring.
 app.add_middleware(RememberTheList)
+# Compression, and it is not a small thing. Nothing was compressing these
+# pages: not this app, and not the host, which is a plain proxy in front
+# of it. A task list of five hundred rows is three quarters of a megabyte
+# of very repetitive HTML, and the same page gzipped is about twenty-seven
+# kilobytes — nearly thirty times less to pull down a phone connection.
+# Every table in here is the same tag repeated a few hundred times, which
+# is the shape gzip is best at, so this helps most exactly where the page
+# is heaviest.
+#
+# Below RememberTheList so that middleware still sees an uncompressed
+# body, and above everything else so nothing has to think about it.
+app.add_middleware(GZipMiddleware, minimum_size=600)
 app.add_middleware(HeadAsGet)
 app.add_middleware(
     SessionMiddleware,
@@ -392,7 +405,30 @@ app.add_middleware(
     https_only=SERVERLESS,      # the cookie is HTTPS-only once deployed
     same_site="lax",
 )
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "static")), name="static")
+class CachedStatic(StaticFiles):
+    """The stylesheet and the scripts, told to stay in the browser.
+
+    Without a Cache-Control header a browser still re-asks for every one
+    of these on every page — an If-None-Match round trip each, answered
+    304 with no body but costing the latency all the same. Five files is
+    five round trips before a page can finish drawing, on every click,
+    for files that have not changed since the last deploy.
+
+    A week, and the address carries a version stamp (see ASSET_V below),
+    so a deploy changes the URL and the new file is fetched at once. The
+    two together are what make a long cache safe: nothing is ever served
+    stale, because nothing is ever asked for under its old name again.
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "public, max-age=604800"
+        return resp
+
+
+app.mount("/static",
+          CachedStatic(directory=str(BASE_DIR / "app" / "static")),
+          name="static")
 
 
 

@@ -250,6 +250,66 @@ def _extend_enums(dialect: str) -> list[str]:
     return done
 
 
+# --------------------------------------------------------------- indexes --
+# The columns everything filters on. None of these mattered while this was
+# a few hundred rows in a file on the same machine: SQLite reads the whole
+# table in a blink and nobody notices. They matter enormously at ten
+# thousand rows with the database across the network, because every
+# unindexed filter becomes a full scan whose cost is paid in round trips.
+#
+# Written as plain CREATE INDEX IF NOT EXISTS rather than through the
+# models, so an existing database gets them on the next restart without
+# anybody running anything — and so this list is readable as what it is:
+# the shape of the questions this software actually asks.
+#
+# Composite where the pair is always asked together. "Everything open for
+# this organisation" and "what is on this person's plate" are the two
+# queries behind most pages here.
+INDEXES = [
+    ("tasks", "ix_tasks_org_status", "(org_id, status)"),
+    ("tasks", "ix_tasks_doer_status", "(doer_id, status)"),
+    ("tasks", "ix_tasks_org_due", "(org_id, due_at)"),
+    ("tasks", "ix_tasks_branch", "(branch_id)"),
+    ("tasks", "ix_tasks_source", "(source)"),
+    ("tasks", "ix_tasks_assigner", "(assigner_id)"),
+    # Every FMS run page and every progress bar reads the tasks of one
+    # run. Unindexed, that was a scan of the whole tasks table per run,
+    # and the FMS list draws fifty progress bars.
+    ("tasks", "ix_tasks_flow_instance", "(flow_instance_id)"),
+    ("tasks", "ix_tasks_rule_day", "(rule_id, covers_day)"),
+    ("tasks", "ix_tasks_closed", "(closed_at)"),
+    ("tasks", "ix_tasks_submitted", "(submitted_at)"),
+    # A task's own page reads its comments and its files. Neither column
+    # was indexed, so opening one task scanned both whole tables.
+    ("task_comments", "ix_task_comments_task", "(task_id)"),
+    ("attachments", "ix_attachments_task", "(task_id)"),
+    ("flow_instances", "ix_flow_instances_flow", "(flow_id)"),
+    ("flow_instances", "ix_flow_instances_org_done", "(org_id, completed_at)"),
+    ("flow_instances", "ix_flow_instances_branch", "(branch_id)"),
+    ("flow_steps", "ix_flow_steps_flow", "(flow_id)"),
+    ("escalation_mails", "ix_escalation_mails_org_day", "(org_id, day)"),
+    ("followups", "ix_followups_org_day", "(org_id, day)"),
+    ("outbound_messages", "ix_outbound_org_made", "(org_id, created_at)"),
+]
+
+
+def _indexes(conn, existing_tables: set) -> list[str]:
+    """Create any missing index. Safe to run on every start — see INDEXES."""
+    done = []
+    for table, name, cols in INDEXES:
+        if table not in existing_tables:
+            continue
+        try:
+            conn.execute(text(
+                f"CREATE INDEX IF NOT EXISTS {name} ON {table} {cols}"))
+            done.append(name)
+        except Exception as exc:                      # noqa: BLE001
+            # A column renamed away, or a dialect that will not take it.
+            # An index is an optimisation: never fail a deploy for one.
+            print(f"Index {name} not created: {type(exc).__name__}: {exc}")
+    return done
+
+
 def _detype_priority(conn, insp, dialect: str, existing_tables: set) -> list[str]:
     """Convert a native PostgreSQL enum priority column to plain text.
 
@@ -293,6 +353,12 @@ def run() -> list[str]:
 
     with engine.begin() as conn:
         applied += _detype_priority(conn, insp, dialect, existing_tables)
+        # After create_all, so a table made on this very run gets them too.
+        # Reported separately: a list of twenty index names in the deploy
+        # log every restart would bury the migrations that matter.
+        _made = _indexes(conn, set(inspect(conn).get_table_names()))
+        if _made:
+            print(f"Indexes checked: {len(_made)} present")
 
         for table, cols in ADDITIONS.items():
             if table not in existing_tables:

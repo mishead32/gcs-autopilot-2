@@ -57,7 +57,7 @@ Then, once for the whole scorecard:
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -139,32 +139,32 @@ def named_window(period: str, date_from: str = "", date_to: str = "",
             # somewhere else.
             start, end = resolve_window(None, None, 30)
         end = min(end, day_end)
-        return start, end, "Pick dates", f"{start:%d %b %Y} to {end:%d %b %Y}"
+        return start, end, "Pick dates", f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"
 
     if period == "last_week":
         mon, sat = week_bounds(today - timedelta(days=7))
         return (datetime.combine(mon, datetime.min.time()),
                 datetime.combine(sat, datetime.max.time()),
-                "Last week", f"Mon {mon:%d %b} to Sat {sat:%d %b}")
+                "Last week", f"Mon {mon:%d/%m/%Y} to Sat {sat:%d/%m/%Y}")
 
     if period == "this_week":
         mon, sat = week_bounds(today)
         end = min(datetime.combine(sat, datetime.max.time()), day_end)
-        note = f"Mon {mon:%d %b} to Sat {sat:%d %b}"
+        note = f"Mon {mon:%d/%m/%Y} to Sat {sat:%d/%m/%Y}"
         if end < datetime.combine(sat, datetime.max.time()):
             # Say it plainly rather than quietly scoring half a week as if it
             # were a whole one.
-            note = (f"Mon {mon:%d %b} to today — the rest of the week is not "
+            note = (f"Mon {mon:%d/%m/%Y} to today — the rest of the week is not "
                     f"counted until it is due")
         return datetime.combine(mon, datetime.min.time()), end, "This week", note
 
     if period == "all":
         start = datetime.combine(earliest or date(2020, 1, 1),
                                  datetime.min.time())
-        return start, day_end, "Overall", f"Everything up to {today:%d %b %Y}"
+        return start, day_end, "Overall", f"Everything up to {today:%d/%m/%Y}"
 
     start, end = resolve_window(None, None, 30)
-    return start, end, "Last 30 days", f"{start:%d %b} to {end:%d %b %Y}"
+    return start, end, "Last 30 days", f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"
 
 
 def _neg(x: float) -> float:
@@ -350,6 +350,33 @@ def handed_in(t: Task) -> datetime | None:
     return t.submitted_at
 
 
+def window_clause(start: datetime, end: datetime):
+    """`window_tasks` rule, as SQL — the same keep-or-drop, done in the database.
+
+    A task is kept when any of the three below is true, which is exactly
+    the three the loop checks:
+
+      · it was handed in inside the period;
+      · it was due by the end of the period and was not already handed in
+        before the period began.
+
+    (The loop's "due in" and "carried" cases share that second line: one
+    has the deadline inside the window and the other before it, and
+    neither counts work already finished beforehand.)
+
+    What this cannot judge is left to the loop: a cancelled or held task,
+    and an FMS step whose turn has not come. Those are a flag on the row
+    rather than a date, and keeping the decision in one place is worth
+    more than the handful of rows it would save.
+    """
+    done_in = and_(Task.submitted_at.is_not(None),
+                   Task.submitted_at >= start, Task.submitted_at <= end)
+    still_owed = and_(Task.due_at <= end,
+                      or_(Task.submitted_at.is_(None),
+                          Task.submitted_at >= start))
+    return or_(done_in, still_owed)
+
+
 def window_tasks(tasks, start: datetime, end: datetime):
     """Which tasks count towards a period's score, and which were finished in it.
 
@@ -506,6 +533,16 @@ def scoreboard(db: Session, org_id: int, start: datetime, end: datetime,
         q = q.where(Task.branch_id == branch_id)
     if doer_id:
         q = q.where(Task.doer_id == doer_id)
+    # Only the rows the window could possibly keep.
+    #
+    # This used to read EVERY task the organisation had ever had and sift
+    # them in Python — fine at a few hundred, and at ten thousand it is
+    # ten thousand objects built to produce one page of numbers, on a
+    # host with half a gigabyte of memory. The condition below is
+    # `window_tasks` own rule written in SQL, so the same rows arrive and
+    # the sifting underneath is unchanged; see the test that runs both
+    # ways and compares.
+    q = q.where(window_clause(start, end))
     all_tasks = list(db.scalars(q).all())
 
     planned, closed = window_tasks(all_tasks, start, end)

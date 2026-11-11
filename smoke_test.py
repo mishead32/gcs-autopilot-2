@@ -1170,14 +1170,43 @@ check("and not to a different branch",
       not _hol.is_holiday(_db, _org, _date(2027, 5, 5), 1))
 _db.close()
 
+# A holiday a week out, made here rather than borrowed from the seed.
+# This used to delegate onto 8 Nov 2026 because the seed had a festival
+# on it — and the day that date went by, the deadline stopped being moved
+# at all (nothing is ever moved into the past) and three checks failed
+# for the calendar rather than for the code. A holiday placed relative to
+# today cannot go stale.
+#
+# A group holiday, not a Sunday: Bodyzone and the spa work Sundays, so a
+# Sunday is not a closed day for the doer this task goes to.
+_hd = _S()
+_hol_day = _date.today() + _td(days=7)
+while _hol_day.weekday() == 6:          # not a Sunday: see above
+    _hol_day += _td(days=1)
+_hd.add(_H(org_id=1, branch_id=None, day=_hol_day,
+           name=f"SMOKE festival {RUN}"))
+_hd.commit()
+_hd.close()
+_sat_before = _hol_day - _td(days=1)
 r = admin.post("/tasks/new", data={
     "title": f"SMOKE holiday deadline {RUN}", "details": "", "doer_id": "6",
-    "branch_id": "", "priority": "medium", "due_at": "2026-11-08T18:00"})
+    "branch_id": "", "priority": "medium",
+    "due_at": _hol_day.strftime("%Y-%m-%dT18:00")})
 check("delegating onto a holiday still works", r.status_code == 200, r.status_code)
-check("and the task says the deadline moved", "Brought forward" in r.text)
-# 8 Nov 2026 is a Sunday, so the working day before it is Saturday the 7th.
-check("the new deadline is the working day BEFORE", "07 Nov 2026" in r.text)
-check("and not the day after", "09 Nov 2026" not in r.text)
+check("and the task says the deadline moved", "Brought forward" in r.text,
+      _hol_day.isoformat())
+check("the new deadline is the working day BEFORE",
+      _sat_before.strftime("%d/%m/%Y") in r.text, _sat_before.isoformat())
+check("and not the day after",
+      (_hol_day + _td(days=1)).strftime("%d/%m/%Y") not in r.text)
+# Taken away again. A holiday a week out is exactly the sort of thing
+# that quietly moves a deadline in some unrelated section three thousand
+# lines down, and a test that changes the calendar for everybody after it
+# is a test that makes other tests lie.
+_hd = _S()
+_hd.query(_H).filter(_H.name == f"SMOKE festival {RUN}").delete()
+_hd.commit()
+_hd.close()
 
 print("\n== date filters on the task lists ==")
 # Which date a window means is now the PERSON'S choice, not the tab's.
@@ -2950,8 +2979,10 @@ _planned = _wb.worksheets[0].cell(
 from datetime import datetime as _dtclass
 check("a date lands in the cell as a real date",
       isinstance(_planned.value, _dtclass), type(_planned.value).__name__)
-check("and carries a readable format", "mmm" in _planned.number_format.lower(),
-      _planned.number_format)
+# dd/mm/yyyy, like every other date this software writes — and as an
+# Excel NUMBER FORMAT, so the column still sorts and pivots as a date.
+check("and carries this office's date format", "dd/mm/yyyy"
+      in _planned.number_format.lower(), _planned.number_format)
 
 # --- a filter on the page is a filter in the file -------------------------
 _narrow = "/tasks?scope=all&status=all&date_from=2026-01-01&date_to=2026-01-02"
@@ -3822,7 +3853,7 @@ for _text, _freq, _want in [
         ({"weekdays": "Mon and Thu"}, "weekly", "Every Monday and Thursday"),
         ({"day": "Sat"}, "weekly", "Every Saturday"),
         ({"weekdays": "Tue", "anchor_on": "2027-01-05"}, "fortnightly",
-         "Every second Tuesday, counting from 05 Jan 2027"),
+         "Every second Tuesday, counting from 05/01/2027"),
         ({"day": "15"}, "monthly", "Day 15 of every month"),
         ({"weeks_of_month": "first", "weekdays": "Sat"}, "monthly",
          "The first Saturday of every month"),
@@ -3895,7 +3926,7 @@ _TRIP = [
     ("weekly", "Mon,Thu", "Every Monday and Thursday"),
     ("weekly", "Sat", "Every Saturday"),
     ("fortnightly", "Wed from 30/09/2026",
-     "Every second Wednesday, counting from 30 Sep 2026"),
+     "Every second Wednesday, counting from 30/09/2026"),
     ("monthly", "15", "Day 15 of every month"),
     ("monthly", "15,30", "Days 15 and 30 of every month"),
     ("monthly", "15th and 30th", "Days 15 and 30 of every month"),
@@ -3943,7 +3974,7 @@ def _trip_row(want):
 
 with _SLT() as _d:
     _fort = _d.scalar(_msel(_RR2).where(_RR2.title == (
-        f"TRIP {_trip_row('Every second Wednesday, counting from 30 Sep 2026')} {RUN}")))
+        f"TRIP {_trip_row('Every second Wednesday, counting from 30/09/2026')} {RUN}")))
     _hits = [x for x in (_dq(2026, 10, 1) + _tq(days=n) for n in range(60))
              if _due_q(_fort, x)]
     check("a saved fortnightly rule fires every second Wednesday",
@@ -4916,8 +4947,8 @@ for _k, _label in _sc8.PERIODS:
     check(f"the '{_label}' button is on the page", f"/?period={_k}" in _base8)
 check("the default window is the last 30 days", "last 30 days" in _base8.lower())
 check("the window is spelled out under the heading",
-      "31 Aug" in _base8 or "to 29 Sep" in _base8 or "Everything up to" in _base8
-      or _re.search(r"\d\d [A-Z][a-z]{2}", _base8) is not None)
+      "Everything up to" in _base8
+      or _re.search(r"\d\d/\d\d/\d{4}", _base8) is not None)
 
 _cust8 = doer.get("/?period=custom&date_from=2026-09-01&date_to=2026-09-15")
 check("picking dates works from the page", _cust8.status_code == 200)
@@ -5283,8 +5314,11 @@ with _slC() as _d:
     _sample = next(t for t in _allC if t.source == _SC2.DELEGATION)
     _sid, _sref = _sample.id, _sample.ref
     _sstamp = _sample.created_at.strftime("%d %b, %I:%M %p")
-    _sample_day = _sample.created_at.strftime("%d %b")
-    _sfull = _sample.created_at.strftime("%d %b %Y, %I:%M %p")
+    # Built from the same constants the pages use, so this is a check
+    # that the date is THERE rather than a second copy of the format
+    # that has to be edited every time the format changes.
+    _sample_day = _sample.created_at.strftime(_clock.DAY)
+    _sfull = _sample.created_at.strftime(_clock.WHEN)
 
 _listC = admin.get("/tasks?scope=all&status=all").text
 # Assigned is on the row, under the task's name, rather than in a column of
@@ -5393,7 +5427,7 @@ with _slD() as _d:
     check("and it is written into the task's history",
           any("Planned date moved" in n for n in _notes), _notes[:3])
     check("the note says both dates",
-          any("01 Dec 2026" in n and "15 Mar 2027" in n for n in _notes), _notes)
+          any("01/12/2026" in n and "15/03/2027" in n for n in _notes), _notes)
 
 # It must come back to the filtered list, not to the task.
 _navD = TestClient(app, follow_redirects=False)
@@ -6744,7 +6778,7 @@ check("it is watching delegation only",
 check("and starting from 3 Oct 2026",
       _detS._since() == _dateS(2026, 10, 3), _detS._since())
 check("the page says so in words",
-      _detS.scope_words() == "Delegation work finished on or after 03 Oct 2026",
+      _detS.scope_words() == "Delegation work finished on or after 03/10/2026",
       _detS.scope_words())
 
 with _slS() as _d:
@@ -6793,7 +6827,7 @@ for _n, _i, _w in _idsS:
 check("the work-type filter is not offered when only one kind is watched",
       "Work type" not in _pageS)
 check("and the page prints what it is watching",
-      "Watching Delegation work finished on or after 03 Oct 2026"
+      "Watching Delegation work finished on or after 03/10/2026"
       in " ".join(_pageS.split()))
 
 # Nothing out of scope is ever handed to the AI, whoever asks.
@@ -10181,7 +10215,7 @@ with _slQ() as _d:
           _refQ in _l1.message_body, _l1.message_body[:400])
     check("with its planned date and priority",
           "HIGH" in _l1.message_body and
-          _tkQ.due_at.strftime("%d %b") in _l1.message_body)
+          _tkQ.due_at.strftime("%d/%m/%Y") in _l1.message_body)
     check("the message is kept on the email, not copied onto every task row",
           _l1.mail is not None and _l1.body == "" and _l1.mail.body != "")
     check("and the task reads it back through the email it rode in",
@@ -13942,26 +13976,49 @@ with _slQ() as _d:
     _qsun.weekly_off = 6                 # closed Sundays, like the offices
     _qopen.weekly_off = None             # never closes, like the gym
     _d.commit()
-    # A fortnight has two Sundays in it, whatever day it starts on.
+    # A fortnight has exactly two Sundays in it, whatever day it starts
+    # on. Asserted as the DIFFERENCE between the two companies rather
+    # than as two fixed numbers: the group's own holiday calendar sits
+    # in this window too, so "fourteen" was only true in the weeks that
+    # had no festival in them — and it failed the first week one did.
     _qupto = _ck.today()
     _qfrom = _qupto - _tdQ(days=14)
     _qclosed = _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[0])
     _qalways = _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[1])
-    check("a fortnight is fourteen days for a company that never closes",
-          _qalways == 14, _qalways)
-    check("and twelve for one that is shut on Sundays",
-          _qclosed == 12, _qclosed)
-    check("which is the same fortnight, counted two different ways",
-          _qalways - _qclosed == 2)
+    check("a fortnight is at most fourteen working days for a company "
+          "that never closes", 12 <= _qalways <= 14, _qalways)
+    # The difference between them is the Sundays — but only the Sundays
+    # that were not ALREADY off for both, which a group holiday landing
+    # on a Sunday is. Diwali fell on one, and "exactly two fewer" failed
+    # for a reason that was the calendar being right.
+    _qsundays = sum(
+        1 for _n in range(1, 15)
+        if (_qupto - _tdQ(days=14 - _n)).weekday() == 6
+        and not _hoQ.holiday_name(_d, _qoid, _qupto - _tdQ(days=14 - _n)))
+    check("and the one shut on Sundays loses exactly those Sundays",
+          _qalways - _qclosed == _qsundays,
+          (_qalways, _qclosed, _qsundays))
 
     # A named holiday for one company only must not be taken off another's.
+    #
+    # On a day that company is actually OPEN. Three days ago happened to
+    # be Diwali one week, the day was already off for everybody, and a
+    # second holiday on top of it changed no count at all — a check that
+    # failed for the calendar rather than for the code.
+    _qpick = next(
+        (_qupto - _tdQ(days=_n) for _n in range(1, 14)
+         if not _hoQ.calendar(_d, _qoid).is_shut(_qupto - _tdQ(days=_n),
+                                                 _qbids[1])),
+        _qupto - _tdQ(days=3))
     _qhol = _HolQ(org_id=_qoid, branch_id=_qbids[1],
-                  day=_qupto - _tdQ(days=3), name=f"SMOKE festival {RUN}")
+                  day=_qpick, name=f"SMOKE festival {RUN}")
     _d.add(_qhol); _d.commit()
     check("one company's holiday comes off its own count",
-          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[1]) == 13)
+          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[1])
+          == _qalways - 1)
     check("and not off anybody else's",
-          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[0]) == 12)
+          _hoQ.open_days_between(_d, _qoid, _qfrom, _qupto, _qbids[0])
+          == _qclosed)
     check("a gap of nothing is nothing, not one",
           _hoQ.open_days_between(_d, _qoid, _qupto, _qupto, _qbids[1]) == 0)
     _d.delete(_qhol); _d.commit()
@@ -14271,9 +14328,9 @@ check("a single name heard almost exactly is applied, not just offered",
       len(_gotV["people"]) == 1 and _gotV["people"][0]["apply"],
       _gotV["people"])
 check("and so is a single deadline", _gotV["whens"][0]["apply"])
-check("spelled out in full, not as a bare number",
-      "Nov" in _gotV["whens"][0]["label"] or "Dec" in _gotV["whens"][0]["label"],
-      _gotV["whens"][0]["label"])
+check("spelled out in full — the whole date, not a bare number",
+      re.search(r"\d\d/\d\d/\d{4}", _gotV["whens"][0]["label"])
+      is not None, _gotV["whens"][0]["label"])
 check("with the words it came from, so a wrong one can be seen as wrong",
       _gotV["whens"][0]["phrase"], _gotV["whens"][0])
 
@@ -14519,8 +14576,13 @@ check("so is 'November 8'", _dateV("deadline November 8") == "2026-11-08T23:59")
 check("and '8 Nov 2026'", _dateV("8 Nov 2026 tak") == "2026-11-08T23:59")
 check("8/11 is read day-first, as India writes it",
       _dateV("8/11") == "2026-11-08T23:59", _dateV("8/11"))
-check("and the chip spells the month out, so that reading is visible",
-      "November" in _vcV.when_from("8/11", _nov)[0].label,
+# "8/11" is the one input that could have been read either way, so the
+# chip has to show WHICH way. The date alone cannot say — 08/11/2026 and
+# 11/08/2026 are both just numbers — so the weekday does the work: 8 Nov
+# 2026 is a Sunday and 11 Aug 2026 is a Tuesday, and a person tapping the
+# chip can tell the difference at a glance.
+check("and the chip names the weekday, so that reading can be checked",
+      _vcV.when_from("8/11", _nov)[0].label.startswith("Sun 08/11/2026"),
       _vcV.when_from("8/11", _nov)[0].label)
 check("'8 tarikh' is the 8th of this month", _dateV("8 tarikh tak")
       == "2026-11-08T23:59")
@@ -14617,6 +14679,342 @@ check("with no key at all, the card is not drawn and the route says why",
       and "GROQ_API_KEY" in admin.post("/tasks/voice", files={
           "audio": ("n.webm", _ioV.BytesIO(b"q" * 2000), "audio/webm")},
           data={"language": "", "seconds": "2"}).json()["problem"])
+
+print("\n== every date reads dd/mm/yyyy ==")
+# One shape, everywhere this software writes a date for a person: the
+# pages, the filters, the reports, the emails, the WhatsApp picture and
+# the Excel downloads. It had grown four spellings, and two of them —
+# 05/11 and 11/05 — are both real dates with neither looking wrong.
+import re as _reD
+from app.services import escalation as _esQ
+from app import clock as _ckD
+
+check("the format is written down in one place, not at each call site",
+      _ckD.DAY == "%d/%m/%Y" and _ckD.WHEN.startswith("%d/%m/%Y"),
+      (_ckD.DAY, _ckD.WHEN))
+# The safety net: a pattern written the old way anywhere, now or next
+# year, still comes out day-first, because the page filter and the
+# report writers put every pattern through this.
+check("an old month-name pattern is rewritten",
+      _ckD.fmt("%d %b %Y") == "%d/%m/%Y", _ckD.fmt("%d %b %Y"))
+check("and so is the long one", _ckD.fmt("%d %B %Y") == "%d/%m/%Y")
+check("a weekday in front of it is kept",
+      _ckD.fmt("%a %d %b %Y") == "%a %d/%m/%Y", _ckD.fmt("%a %d %b %Y"))
+check("a time after it is kept", _ckD.fmt("%d %b %Y, %I:%M %p")
+      == "%d/%m/%Y %I:%M %p", _ckD.fmt("%d %b %Y, %I:%M %p"))
+# Never a bare day and month. "05/11" is the shape the rule exists to
+# remove: without the year it is still two numbers to guess at.
+check("a pattern with no year gets one",
+      _ckD.fmt("%d %b") == "%d/%m/%Y", _ckD.fmt("%d %b"))
+check("and so does one with no year but a time",
+      _ckD.fmt("%d %b, %I:%M %p") == "%d/%m/%Y %I:%M %p",
+      _ckD.fmt("%d %b, %I:%M %p"))
+# A MACHINE format must survive untouched. Turning one of these into
+# dd/mm/yyyy would break a form, a filename or a sort key rather than
+# prettify anything.
+for _mach in ("%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y%m%d-%H%M%S", "%H:%M",
+              "%I:%M %p"):
+    check(f"the machine format {_mach} is left exactly as it is",
+          _ckD.fmt(_mach) == _mach, _ckD.fmt(_mach))
+# A month-and-year heading names a month, not a day, and nobody has ever
+# misread one. Left in words on purpose.
+check("a month heading stays a month heading",
+      _ckD.fmt("%B %Y") == "%B %Y", _ckD.fmt("%B %Y"))
+
+# And the whole site, swept. A month abbreviation sitting next to digits
+# is a date in the old shape, wherever it turns up.
+_MOND = r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b"
+_OLDD = _reD.compile(r"\d{1,2}\s+" + _MOND + r"\s+\d{4}|" + _MOND
+                     + r"\s+\d{1,2},?\s+\d{4}")
+_pagesD = ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
+           "/recurring", "/stats", "/outbox", "/admin/users", "/tasks/new",
+           "/followups", "/reports", "/reports/tasks?source=delegation",
+           "/reports/tasks?source=checklist", "/reports/followups",
+           "/reports/audit", "/reports/score", "/admin/holidays",
+           "/admin/branches", "/escalation", "/escalation/log",
+           "/escalation/quiet", "/escalation/preview", "/cmd", "/detective",
+           "/help", "/bulk"]
+_dirtyD = []
+for _u in _pagesD:
+    _rD = admin.get(_u)
+    if _rD.status_code != 200:
+        continue
+    if _OLDD.search(_rD.text):
+        _dirtyD.append((_u, sorted(set(_OLDD.findall(_rD.text)))[:3]))
+check("no page anywhere still prints a month-name date",
+      not _dirtyD, _dirtyD)
+check("and the pages were really looked at, not skipped",
+      sum(1 for _u in _pagesD if admin.get(_u).status_code == 200) >= 20)
+
+# A page that actually carries dates has to carry them in the new shape —
+# "no month names" would pass on a page with no dates at all.
+_tlD = admin.get("/tasks?scope=all&status=all").text
+check("the task list prints real dd/mm/yyyy dates",
+      _reD.search(r"\d{2}/\d{2}/\d{4}", _tlD) is not None)
+
+print("\n== including the things that leave the building ==")
+from app.services import xlsx as _xlD
+check("an Excel date cell is formatted dd/mm/yyyy",
+      _xlD.DAY_FMT == "dd/mm/yyyy"
+      and _xlD.DATE_FMT.startswith("dd/mm/yyyy"),
+      (_xlD.DAY_FMT, _xlD.DATE_FMT))
+_wbD, _ = _book(admin, "/tasks?scope=all&status=all&export=xlsx")
+_fmtsD = {c.number_format for row in _wbD.worksheets[0].iter_rows()
+          for c in row if c.number_format not in ("General", None)}
+check("and a real download comes out that way",
+      _fmtsD and all("dd/mm/yyyy" in f for f in _fmtsD), _fmtsD)
+# Excel shows a date cell in the format WRITTEN IN THE FILE, not in the
+# reader's regional setting — so a workbook opened on a laptop set to US
+# English still reads 08/11/2026.
+check("as a number format, so the column still sorts and pivots as a date",
+      not any("@" in f for f in _fmtsD), _fmtsD)
+
+with _slQ() as _d:
+    _orgD = _d.scalar(_SEL(_OgQ))
+    _gD, _subD, _txtD, _htmlD = _qf.compose(_d, _orgD, threshold=0)
+    check("the morning FMS email has no month-name date",
+          not _OLDD.search(_htmlD) and not _OLDD.search(_txtD),
+          (_OLDD.findall(_htmlD)[:2], _OLDD.findall(_txtD)[:2]))
+    check("and it does print dates",
+          _reD.search(r"\d{2}/\d{2}/\d{4}", _htmlD) is not None)
+    # Rendered INSIDE the session: the email reads each task's company
+    # and doer off the row, and a detached one cannot answer.
+    _rowsD = _esQ.overdue_tasks(_d, _orgD.id, _ck.today(), True, "chased")[:4]
+    if _rowsD:
+        _mailD = _esQ.html_message(_rowsD, "Overdue", "Dear Sir", "said", 1,
+                                   False, "https://x.test")
+        check("the escalation email has none either",
+              not _OLDD.search(_mailD), _OLDD.findall(_mailD)[:3])
+        check("and it does print dates",
+              _reD.search(r"\d{2}/\d{2}/\d{4}", _mailD) is not None)
+    else:
+        skip("the escalation email has none either",
+             "nothing is overdue today")
+
+print("\n== and the browser's own date box ==")
+# The one thing a server cannot format: <input type="date"> is drawn by
+# the BROWSER in the browser's language. A laptop set to English (United
+# States) shows 11/08/2026 in that box while the page around it says
+# 08/11/2026, and both are real dates. So the page says underneath, in
+# dd/mm/yyyy, what is really selected — on the browsers that need it.
+_baseD = admin.get("/tasks/new").text
+check("the page declares itself Indian, for browsers that honour that",
+      'lang="en-IN"' in _baseD)
+check("and every page carries the script that labels a date box",
+      "/static/datefmt.js" in _baseD)
+check("which is on the list pages and the filters too",
+      "/static/datefmt.js" in admin.get("/tasks").text
+      and "/static/datefmt.js" in admin.get("/reports/tasks?source=delegation").text)
+
+print("\n== and it has to stay quick ==")
+# Everything below counts QUERIES, not milliseconds. A stopwatch on this
+# machine says nothing about the live site: the database there is across
+# a network, so what a page costs is mostly how many times it asks — ten
+# or fifteen milliseconds each, every time, however small the answer.
+#
+# Which is why these are the numbers that went wrong. The morning
+# escalation asked whether the office was shut on every single day
+# between each task's deadline and today, one question at a time: a
+# quarter of a million round trips to build one email, and a preview
+# page that never finished loading. Nothing here was slow in itself.
+from sqlalchemy import event as _evP
+from app.db import engine as _engP
+_QP = {"n": 0}
+
+
+@_evP.listens_for(_engP, "before_cursor_execute")
+def _countP(*_a, **_k):
+    _QP["n"] += 1
+
+
+def _cost(client, url):
+    """(queries, bytes) for one page, with the first hit warmed off."""
+    client.get(url)
+    _QP["n"] = 0
+    r = client.get(url, headers={"accept-encoding": "gzip"})
+    return _QP["n"], r
+
+# A real backlog, not the handful the seed makes. Every budget below is
+# checked against this, because a page that is fine on ten rows and asks
+# a query per row is exactly the page that goes wrong in month three.
+from app.models import Task as _TkP, TaskStatus as _TsP, TaskSource as _SrP
+from datetime import timedelta as _tdP
+import random as _rndP
+
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    _bossP = _d.scalar(_SEL(_UsB).where(_UsB.email == "mis@gcs.local"))
+    _whoP = [u for u in _d.scalars(_SEL(_UsB)).all() if u.receives_work]
+    _nowP = _ck.now()
+    _rndP.seed(7)
+    _madeP = []
+    for _i in range(1200):
+        _u = _whoP[_i % len(_whoP)]
+        _due = _nowP - _tdP(days=_rndP.randint(1, 90), hours=3)
+        _madeP.append(_TkP(
+            org_id=_orgP.id, branch_id=_u.branch_id, title=f"PERF {RUN} {_i}",
+            assigner_id=_bossP.id, doer_id=_u.id, source=_SrP.DELEGATION,
+            due_at=_due, created_at=_due - _tdP(days=1),
+            status=_TsP.PENDING, requires_attachment=False))
+    _d.add_all(_madeP)
+    _d.commit()
+    _totP = _d.scalar(_SEL(_FUNF.count()).select_from(_TkP))
+check("there is a real backlog to measure against", _totP >= 1200, _totP)
+
+# The one that was broken. Counting how late a task is walks a day at a
+# time; asking the database on each of those days is what did not finish.
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    _QP["n"] = 0
+    _lateP = _escQ.overdue_tasks(_d, _orgP.id, _ck.today(), True, "all")
+    _qP = _QP["n"]
+check("the overdue list is built from a real backlog",
+      len(_lateP) >= 1000, len(_lateP))
+check("and it costs a handful of queries, not one per task per day",
+      _qP <= 40, f"{_qP} queries for {len(_lateP)} tasks")
+
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    _QP["n"] = 0
+    _gP, _skP, _nlP = _escQ.plan(_d, _orgP, _ck.today())
+    _planQ = _QP["n"]
+check("and planning the whole morning costs a handful too",
+      _planQ <= 60, f"{_planQ} queries over {len(_lateP)} tasks")
+# The real guard: it must not grow with the backlog. Twice the tasks and
+# the same number of questions is what "this will still work next year"
+# means, and no wall-clock number says it.
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    _moreP = [_TkP(org_id=_orgP.id, branch_id=_whoP[0].branch_id,
+                   title=f"PERF2 {RUN} {_i}", assigner_id=_bossP.id,
+                   doer_id=_whoP[_i % len(_whoP)].id, source=_SrP.DELEGATION,
+                   due_at=_ck.now() - _tdP(days=40 + (_i % 50)),
+                   status=_TsP.PENDING, requires_attachment=False)
+              for _i in range(1200)]
+    _d.add_all(_moreP); _d.commit()
+    _QP["n"] = 0
+    _escQ.plan(_d, _orgP, _ck.today())
+    _planQ2 = _QP["n"]
+check("twice the backlog asks no more questions than once",
+      _planQ2 <= _planQ + 5, (_planQ, _planQ2))
+
+print("\n== a budget for every page ==")
+# A page that asks more than this is asking per row, and per row is the
+# shape that stops working as the data grows.
+BUDGET = 45
+_slowP = []
+for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
+           "/recurring", "/stats", "/outbox", "/admin/users", "/tasks/new",
+           "/followups", "/reports", "/reports/tasks?source=delegation",
+           "/reports/followups", "/reports/audit", "/reports/score",
+           "/admin/holidays", "/escalation", "/escalation/log",
+           "/escalation/quiet", "/escalation/preview", "/cmd", "/detective",
+           "/help", "/bulk"]:
+    _q, _r = _cost(admin, _u)
+    if _r.status_code != 200:
+        continue
+    if _q > BUDGET:
+        _slowP.append((_u, _q))
+check(f"no page asks more than {BUDGET} questions to draw itself",
+      not _slowP, _slowP)
+
+print("\n== and not to weigh what it weighs ==")
+# Nothing was compressing these pages — not this app, and not the host,
+# which is a plain proxy. A list of five hundred rows is three quarters
+# of a megabyte of very repetitive HTML, which is the shape gzip is best
+# at: the same page goes down the wire at about a thirtieth of that.
+_qT, _rT = _cost(admin, "/tasks?scope=all&status=all")
+check("a long list is sent compressed",
+      _rT.headers.get("content-encoding") == "gzip",
+      _rT.headers.get("content-encoding"))
+_wireT = int(_rT.headers.get("content-length") or len(_rT.content))
+check("so a page of hundreds of rows crosses the wire in tens of kilobytes",
+      _wireT < 120_000, f"{_wireT} bytes on the wire")
+check("while still being the whole page at the other end",
+      len(_rT.content) > _wireT * 4,
+      (len(_rT.content), _wireT))
+
+# The stylesheet and the scripts: kept by the browser for a week, with a
+# stamp in the address so a deploy is picked up at once. Without this a
+# browser re-asks for all five on every single page — five round trips
+# before anything can be drawn, for files that have not changed.
+_cssP = admin.get("/static/app.css")
+check("the stylesheet is cached by the browser",
+      "max-age" in (_cssP.headers.get("cache-control") or ""),
+      _cssP.headers.get("cache-control"))
+check("and its address carries a stamp, so a deploy is still picked up",
+      "/static/app.css?v=" in admin.get("/tasks").text)
+
+print("\n== an email a mail client will actually show ==")
+# Gmail stops at about a hundred kilobytes and hides the rest behind
+# "Message clipped". An escalation listing a two-thousand-task backlog
+# was far past that, so the bottom of it was never read by anybody.
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    _gP, _skP, _nlP = _escQ.plan(_d, _orgP, _ck.today())
+    if _gP:
+        _bigP = max(_gP, key=lambda g: len(g["rows"]))
+        _subP, _bodyP, _htmlP, _ccP = _escQ.compose(
+            _bigP["rows"], _bigP["level"], _bigP["repeat_n"], _bigP["rule"],
+            _bigP["rungs"], "https://x.test", _bigP["below_sent"])
+        check("the biggest email is built from a real backlog",
+              len(_bigP["rows"]) > 200, len(_bigP["rows"]))
+        check("and still fits under Gmail's clipping limit",
+              len(_htmlP.encode()) < 102_000,
+              f"{len(_htmlP.encode())} bytes for {len(_bigP['rows'])} tasks")
+        # The count must stay honest: the table is the worst of them, the
+        # sentence and the subject are still about all of them.
+        check("the subject still says the true total",
+              str(len(_bigP["rows"])) in _subP, _subP)
+        check("and the email says how many were left out",
+              "more are" in _htmlP or "and " in _bodyP, _htmlP[-400:])
+    else:
+        skip("the biggest email fits under Gmail's clipping limit",
+             "nothing is being escalated today")
+
+print("\n== the calendar is read once, not once per question ==")
+from app.services import holidays as _hoP
+with _slQ() as _d:
+    _QP["n"] = 0
+    for _n in range(60):
+        _hoP.closed_reason(_d, 1, _ck.today() - _tdP(days=_n), 1)
+    check("sixty days asked about costs one read, not sixty",
+          _QP["n"] <= 4, _QP["n"])
+    # And it must not go stale inside the one session that changed it.
+    _dayP = _ck.today() + _tdP(days=400)
+    check("a day with nothing on it is open", not _hoP.is_closed(_d, 1, _dayP))
+    _d.add(_HolQ(org_id=1, branch_id=None, day=_dayP, name=f"PERF {RUN}"))
+    _d.commit()
+    check("a holiday added is seen at once, not after the cache expires",
+          _hoP.is_closed(_d, 1, _dayP))
+    _d.execute(__import__("sqlalchemy").delete(_HolQ)
+               .where(_HolQ.name == f"PERF {RUN}"))
+    _d.commit()
+    # A bulk DELETE never loads the rows it removes, so the session knows
+    # nothing about it. That is how a deleted holiday went on being
+    # observed for the rest of a request.
+    check("and one deleted with a bulk statement is gone at once too",
+          not _hoP.is_closed(_d, 1, _dayP))
+
+print("\n== the score is narrowed in SQL, and reads the same ==")
+# The scoreboard used to read every task the company had ever had and
+# sift them in Python. The sifting is unchanged; it is handed fewer rows.
+from app.services import scoring as _scP
+with _slQ() as _d:
+    _orgP = _d.scalar(_SEL(_OgQ))
+    for _days in (7, 30, 90):
+        _st, _en = _scP.resolve_window(None, None, _days)
+        _everyP = list(_d.scalars(_SEL(_TkP)
+                                  .where(_TkP.org_id == _orgP.id)).all())
+        _aP, _acP = _scP.window_tasks(_everyP, _st, _en)
+        _fewP = list(_d.scalars(_SEL(_TkP).where(
+            _TkP.org_id == _orgP.id, _scP.window_clause(_st, _en))).all())
+        _bP, _bcP = _scP.window_tasks(_fewP, _st, _en)
+        check(f"over {_days} days the narrowed query keeps fewer rows",
+              len(_fewP) < len(_everyP), (len(_fewP), len(_everyP)))
+        check(f"and the score sees exactly the same tasks over {_days} days",
+              {t.id for t in _aP} == {t.id for t in _bP}
+              and {t.id for t in _acP} == {t.id for t in _bcP})
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

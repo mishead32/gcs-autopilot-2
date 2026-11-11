@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import clock
 from ..models import (Branch, EscalationMail, Flow, FlowInstance,
@@ -88,7 +88,7 @@ class Gap:
     def since(self) -> str:
         """What the last-entry column says. Never a blank."""
         if self.last_at:
-            return self.last_at.strftime("%d %b %Y")
+            return self.last_at.strftime("%d/%m/%Y")
         return "never started here"
 
 
@@ -100,8 +100,12 @@ def covered(db: Session, org_id: int) -> list[tuple[Flow, Branch | None]]:
     out for the same reason — it was retired on purpose, and a report that
     nags about retired work teaches people to ignore it.
     """
+    # The steps come with the flows. Asking `flow.steps` inside the loop
+    # below is one query per flow, and this runs on a page and in the
+    # morning email.
     flows = db.scalars(
         select(Flow).where(Flow.org_id == org_id, Flow.active.is_(True))
+        .options(selectinload(Flow.steps))
         .order_by(Flow.name)).all()
     branches = db.scalars(
         select(Branch).where(Branch.org_id == org_id)
@@ -149,6 +153,12 @@ def gaps(db: Session, org: Organization, today: date | None = None,
     today = today or clock.today()
     limit = org.quiet_gap if threshold is None else threshold
     seen = last_entries(db, org.id)
+    # The calendar once, in memory. Counting working days per flow per
+    # company used to re-read the holiday table for every pair — twenty
+    # flows across five companies is a hundred round trips to answer one
+    # question about a calendar that does not change while the page is
+    # being built.
+    cal = holidays.calendar(db, org.id)
 
     out: list[Gap] = []
     for flow, branch in covered(db, org.id):
@@ -158,7 +168,7 @@ def gaps(db: Session, org: Organization, today: date | None = None,
         # alternative — leaving it out — hides the flow written in March
         # that nobody has used since, which is the thing most worth seeing.
         from_day = (when or flow.created_at).date()
-        days = holidays.open_days_between(db, org.id, from_day, today, bid)
+        days = cal.open_days(from_day, today, bid, holidays.MAX_GAP)
         if days >= limit:
             out.append(Gap(flow=flow, branch=branch, last_at=when, days=days))
     return sorted(out, key=lambda g: ((g.flow.name or "").lower(),
@@ -186,14 +196,14 @@ def text_report(rows: list[Gap], today: date, limit: int) -> str:
     """The plain-text version. Says everything the HTML one does."""
     if not rows:
         return (f"Every FMS has had an entry within the last {limit} "
-                f"working day(s), as at {today.strftime('%d %b %Y')}.\n")
+                f"working day(s), as at {today.strftime('%d/%m/%Y')}.\n")
     width = max(len(g.flow.name or "") for g in rows)
     width = min(max(width, 20), 40)
     wide = max((len(g.company) for g in rows), default=18)
     wide = min(max(wide, 18), 30)
     lines = [
         f"FMS with no new entry for {limit} working day(s) or more",
-        f"As at {today.strftime('%d %b %Y')}", "",
+        f"As at {today.strftime('%d/%m/%Y')}", "",
         f"{'FMS name'.ljust(width)}  {'Company'.ljust(wide)}  "
         f"{'Days'.rjust(5)}  Last entry",
         f"{'-' * width}  {'-' * wide}  {'-' * 5}  {'-' * 18}",
@@ -274,7 +284,7 @@ def html_report(rows: list[Gap], today: date, limit: int,
         f"{len(rows)} flow/company line(s)"
         + (f" across {companies} companies" if companies > 1 else "")
         + (f" · worst {worst} working days" if worst else "")
-        + f" · {today.strftime('%d %b %Y')}</div></td></tr>",
+        + f" · {today.strftime('%d/%m/%Y')}</div></td></tr>",
 
         f'<tr><td style="padding:18px 18px 6px;font-family:{_FONT};'
         f'font-size:13.5px;line-height:1.6;color:{INK}">'
@@ -309,9 +319,9 @@ def subject(rows: list[Gap], today: date) -> str:
     worst = max((g.days for g in rows), default=0)
     if not rows:
         return (f"[FMS] Every flow has had an entry — "
-                f"{today.strftime('%d %b %Y')}")
+                f"{today.strftime('%d/%m/%Y')}")
     return (f"[FMS] {len(rows)} flow/company line(s) with no entry, "
-            f"up to {worst} working day(s) — {today.strftime('%d %b %Y')}")
+            f"up to {worst} working day(s) — {today.strftime('%d/%m/%Y')}")
 
 
 def compose(db: Session, org: Organization, today: date | None = None,

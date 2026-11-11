@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .. import clock, flash, search
 import json
@@ -68,9 +68,14 @@ def _read_start_form(form) -> str | None:
 def flow_list(request: Request, export: str = "", q: str = "", company: str = "",
               user: User = Depends(current_user), db: Session = Depends(get_db)):
     text_q = search.clean(q)
+    # The steps come WITH the flows, in one more query rather than one per
+    # flow. This page prints a step count for every row, and on a host
+    # with the database across the network a query per row is most of
+    # what "the page is slow" means.
     flows = db.scalars(
         search.apply(select(Flow).where(Flow.org_id == user.org_id),
                      [Flow.name, Flow.description], text_q)
+        .options(selectinload(Flow.steps))
         .order_by(Flow.name)
     ).all()
     # The running list answers the search too, by FMS number or by what the
@@ -104,8 +109,15 @@ def flow_list(request: Request, export: str = "", q: str = "", company: str = ""
         run_q = run_q.where(FlowInstance.branch_id.is_(None))
     elif pick:
         run_q = run_q.where(FlowInstance.branch_id == int(pick))
+    # Same again for the runs: each row prints its flow's name, the step
+    # it is sitting on, its company and a progress bar read off its tasks.
+    # Left lazy that is five queries a row, fifty times over.
     running = db.scalars(
-        run_q.order_by(FlowInstance.started_at.desc()).limit(50)).all()
+        run_q.options(selectinload(FlowInstance.flow)
+                      .selectinload(Flow.steps),
+                      selectinload(FlowInstance.tasks),
+                      joinedload(FlowInstance.branch))
+        .order_by(FlowInstance.started_at.desc()).limit(50)).all()
     if xlsx.wants(export):
         # Two tabs: how the flows are built, and what is running right now.
         steps = [(fl, st) for fl in flows for st in fl.steps]

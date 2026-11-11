@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select, or_
+from sqlalchemy import event, select, or_
 from sqlalchemy.orm import Session
 
 from ..models import Holiday, Branch
@@ -84,14 +84,13 @@ def weekly_off(db: Session, branch_id: int | None) -> int | None:
 
 def closed_reason(db: Session, org_id: int, day: date,
                   branch_id: int | None = None) -> str | None:
-    """Why nobody is in that day — the holiday's name, or the weekly off."""
-    name = holiday_name(db, org_id, day, branch_id)
-    if name:
-        return name
-    off = weekly_off(db, branch_id)
-    if off is not None and day.weekday() == off:
-        return f"a {DAY_NAMES[off]}"
-    return None
+    """Why nobody is in that day — the holiday's name, or the weekly off.
+
+    Answered from this session's calendar, so asking about three hundred
+    days in a row — which several things here do — costs the one read
+    that built it and nothing after.
+    """
+    return calendar(db, org_id).closed(day, branch_id)
 
 
 def is_closed(db: Session, org_id: int, day: date,
@@ -104,6 +103,164 @@ def is_closed(db: Session, org_id: int, day: date,
 def is_holiday(db: Session, org_id: int, day: date,
                branch_id: int | None = None) -> bool:
     return is_closed(db, org_id, day, branch_id)
+
+
+# ------------------------------------------------------- the whole year ---
+# Every function above asks the database one question about one day. That
+# is right for a page that needs one answer, and ruinous for anything that
+# needs thousands.
+#
+# Counting how late one task is walks a day at a time, asking "was the
+# office shut?" on each — and the morning escalation asks that for every
+# overdue task in the system. Two thousand tasks, each up to a hundred and
+# twenty days late, is a quarter of a million SELECTs for one email. On a
+# laptop with the database in the same process that is slow; on a free host
+# with the database across the network, each one costing ten milliseconds,
+# it is not slow, it is broken — the page never finishes and the eleven
+# o'clock run never ends.
+#
+# So: read the calendar ONCE, into memory, and answer from there. One query
+# for the holidays, one for the companies, and every question after that
+# costs nothing. The answers are identical to the one-at-a-time functions —
+# `closed` below is `closed_reason` with the lookups done in advance — and
+# a Calendar is built per request and thrown away, so it can never serve a
+# holiday somebody added five minutes ago.
+
+
+class Calendar:
+    """Which days this organisation is shut, held in memory.
+
+    Build one at the top of anything that asks about more than a handful
+    of days, and pass it down. Everything it answers, it answers without
+    touching the database.
+    """
+
+    __slots__ = ("org_id", "_named", "_off", "_default_off")
+
+    def __init__(self, db: Session, org_id: int):
+        self.org_id = org_id
+        # {date: {branch_id or None: name}} — one row per holiday, kept
+        # with its branch so a Jharkhand festival is not taken off
+        # Chandigarh's count.
+        self._named: dict[date, dict[int | None, str]] = {}
+        for h in db.scalars(select(Holiday).where(Holiday.org_id == org_id)):
+            self._named.setdefault(h.day, {})[h.branch_id] = h.name
+        self._off: dict[int, int | None] = {
+            b.id: b.weekly_off
+            for b in db.scalars(select(Branch).where(Branch.org_id == org_id))
+        }
+        # Work with no company is treated as head office: closed Sunday.
+        # The safer of the two mistakes, because it errs towards doing the
+        # work early rather than expecting somebody in on their day off.
+        self._default_off = 6
+
+    def off_day(self, branch_id: int | None) -> int | None:
+        if branch_id is None:
+            return self._default_off
+        return self._off.get(branch_id, self._default_off)
+
+    def holiday(self, day: date, branch_id: int | None = None) -> str | None:
+        """The holiday's name if that day is one here, otherwise None."""
+        found = self._named.get(day)
+        if not found:
+            return None
+        # A holiday with no company covers the whole group; one with a
+        # company covers only that company.
+        return found.get(None) or (found.get(branch_id)
+                                   if branch_id is not None else None)
+
+    def closed(self, day: date, branch_id: int | None = None) -> str | None:
+        """Why nobody is in that day — the holiday's name, or the weekly off."""
+        name = self.holiday(day, branch_id)
+        if name:
+            return name
+        off = self.off_day(branch_id)
+        if off is not None and day.weekday() == off:
+            return f"a {DAY_NAMES[off]}"
+        return None
+
+    def is_shut(self, day: date, branch_id: int | None = None) -> bool:
+        return self.closed(day, branch_id) is not None
+
+    def open_days(self, after: date, upto: date,
+                  branch_id: int | None = None, cap: int = 400) -> int:
+        """Working days in (after, upto] — the counting loop, with no SQL."""
+        if upto <= after:
+            return 0
+        start = max(after + timedelta(days=1), upto - timedelta(days=cap))
+        n, d = 0, start
+        while d <= upto:
+            if not self.is_shut(d, branch_id):
+                n += 1
+            d += timedelta(days=1)
+        return n
+
+
+#: Where a session keeps the calendar it has already read. A Session is
+#: per request here (and per pass in the background loop), so this lives
+#: exactly as long as one unit of work and can never serve yesterday's
+#: calendar to tomorrow's page.
+_CACHE_KEY = "gcs_calendar"
+
+
+def calendar(db: Session, org_id: int) -> Calendar:
+    """This session's calendar, read once and then remembered.
+
+    Kept on the Session rather than anywhere longer-lived. A request is a
+    session, so the calendar is read at most once per page however many
+    times it is asked for — and it is thrown away with the request, so a
+    holiday somebody adds is in effect on the very next click.
+
+    `forget` below drops it the moment a holiday or a company is written
+    in this same session, so code that adds a holiday and then asks about
+    it gets the right answer rather than the one from eight lines ago.
+    """
+    got = db.info.get(_CACHE_KEY)
+    if got is not None and got.org_id == org_id:
+        return got
+    made = Calendar(db, org_id)
+    db.info[_CACHE_KEY] = made
+    return made
+
+
+def forget(db: Session) -> None:
+    """Drop this session's cached calendar — the dates have changed."""
+    db.info.pop(_CACHE_KEY, None)
+
+
+@event.listens_for(Session, "after_flush")
+def _calendar_changed(session, _ctx):
+    """Throw the cache away if this flush touched the calendar.
+
+    Without this, a route that adds a holiday and then works out a
+    deadline in the same breath would use the calendar as it was before
+    the holiday existed. Hooked rather than left to each caller to
+    remember, because the one that forgets is the one that is wrong.
+    """
+    for row in (list(session.new) + list(session.dirty)
+                + list(session.deleted)):
+        if isinstance(row, (Holiday, Branch)):
+            session.info.pop(_CACHE_KEY, None)
+            return
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _calendar_maybe_changed(state):
+    """And again for a DELETE or UPDATE written as a statement.
+
+    A bulk statement never loads the rows it changes, so the session's
+    new/dirty/deleted sets stay empty and the hook above sees nothing —
+    which is how a holiday deleted with `delete(Holiday)` went on being
+    observed for the rest of the request. (The older after_bulk_delete
+    hook does not fire for `session.execute(delete(...))` at all, which
+    is how this was missed the first time.)
+
+    Blunt on purpose: the cache costs one query to rebuild, so any ORM
+    write drops it rather than this trying to work out from a compiled
+    statement which table was hit.
+    """
+    if state.is_delete or state.is_update:
+        state.session.info.pop(_CACHE_KEY, None)
 
 
 #: Never count further back than this. A gap longer than a year means a
@@ -127,17 +284,7 @@ def open_days_between(db: Session, org_id: int, after: date, upto: date,
     day: this is called for every flow against every company, and a day at
     a time would be thousands of round trips to answer one email.
     """
-    if upto <= after:
-        return 0
-    start = max(after + timedelta(days=1), upto - timedelta(days=cap))
-    named = holidays_for(db, org_id, branch_id, start, upto)
-    off = weekly_off(db, branch_id)
-    n, d = 0, start
-    while d <= upto:
-        if d not in named and (off is None or d.weekday() != off):
-            n += 1
-        d += timedelta(days=1)
-    return n
+    return Calendar(db, org_id).open_days(after, upto, branch_id, cap)
 
 
 def previous_working_day(db: Session, org_id: int, day: date,

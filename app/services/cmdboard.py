@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .. import clock
 from . import chasing
@@ -148,7 +148,10 @@ def build(db: Session, org_id: int, start: datetime, end: datetime,
                            Task.source.in_([s for s, _ in SOURCES]))
     if branch_id:
         q = q.where(Task.branch_id == branch_id)
-    tasks = list(db.scalars(q).all())
+    # The rule with the task: the chasing test below asks a checklist
+    # task which rule it came from, and left lazy that is one query per
+    # task on a board that reads every task the company has.
+    tasks = list(db.scalars(q.options(joinedload(Task.rule))).unique().all())
 
     # Which open tasks were chased today, in one query rather than one per
     # task — the board has to stay fast on a few thousand rows.
@@ -254,13 +257,13 @@ def window(period: str, date_from: str = "", date_to: str = "",
     if period == "today":
         return (datetime.combine(on, datetime.min.time()),
                 datetime.combine(on, datetime.max.time()),
-                f"{on:%d %b %Y}")
+                f"{on:%d/%m/%Y}")
     if period == "this_week":
         monday = on - timedelta(days=on.weekday())
         saturday = monday + timedelta(days=5)
         return (datetime.combine(monday, datetime.min.time()),
                 datetime.combine(saturday, datetime.max.time()),
-                f"{monday:%d %b} – {saturday:%d %b %Y}")
+                f"{monday:%d/%m/%Y} – {saturday:%d/%m/%Y}")
     if period == "last_month":
         first_this = on.replace(day=1)
         last_prev = first_this - timedelta(days=1)
@@ -278,7 +281,7 @@ def window(period: str, date_from: str = "", date_to: str = "",
             b = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59)
             if b < a:
                 a, b = b, a
-            return a, b, f"{a:%d %b %Y} – {b:%d %b %Y}"
+            return a, b, f"{a:%d/%m/%Y} – {b:%d/%m/%Y}"
         except ValueError:
             pass
     first = on.replace(day=1)

@@ -6,7 +6,7 @@
 <div class="page-head">
   <div>
     <h1>What this morning would send</h1>
-    <p class="sub">{{ today.strftime('%A %d %b %Y') }} — the real check, run
+    <p class="sub">{{ today|dt('%A %d %b %Y') }} — the real check, run
       with the sending switched off. Nothing here has been recorded and
       nothing has been emailed.</p>
   </div>
@@ -65,6 +65,7 @@
   </table>
 
   <div class="esc-subject">{{ r.subject }}</div>
+  {% if r.html %}
   {# The real HTML, in a frame of its own. Not a description of the email and
      not a re-styled copy of it: the same bytes the recipient's mail client
      will be handed, rendered. srcdoc isolates it, so the email's own styles
@@ -75,6 +76,19 @@
       show the table</summary>
     <div class="esc-body" style="margin-top:8px">{{ r.body }}</div>
   </details>
+  {% else %}
+  {# Written out in full only for the first few. Each of these is a whole
+     email with a row per overdue task in it, and on a real backlog that
+     came to megabytes of HTML in one page — a page that took longer to
+     draw than the morning it was previewing takes to send. What is being
+     checked here is that the right person gets the right count at the
+     right level, and that is on the line above. #}
+  <p class="m" style="margin:10px 0 0">
+    Listed, not written out — the first {{ bodies }} above show what one
+    of these looks like in full. This one carries the same table with
+    <strong>{{ r.count }}</strong> task(s) in it.
+  </p>
+  {% endif %}
 </div>
 {% endfor %}
 

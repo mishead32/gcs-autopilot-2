@@ -1,10 +1,13 @@
 <!doctype html>
-<html lang="en">
+{# en-IN so a browser that honours the page language (Firefox does,
+   Chrome does not) draws its own date boxes day-first. The rest is
+   handled by datefmt.js at the bottom. #}
+<html lang="en-IN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ ASSET_V }}">
 </head>
 <body class="{{ 'app' if user else 'anon' }}">
 {% if user %}
@@ -216,8 +219,9 @@
   <div class="mb-body"></div>
 </dialog>
 {% endif %}
-<script src="/static/benchmark.js"></script>
-<script src="/static/upload.js"></script>
-<script src="/static/markbox.js"></script>
+<script src="/static/benchmark.js?v={{ ASSET_V }}"></script>
+<script src="/static/upload.js?v={{ ASSET_V }}"></script>
+<script src="/static/markbox.js?v={{ ASSET_V }}"></script>
+<script src="/static/datefmt.js?v={{ ASSET_V }}"></script>
 </body>
 </html>

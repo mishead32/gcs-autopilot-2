@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import clock
 from ..models import (
@@ -377,7 +377,7 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
         notify.queue(
             db, doer, "flow_step_ready", task,
             title=step.title, flow=inst.flow.name, reference=inst.reference,
-            due=task.due_at.strftime("%d %b, %I:%M %p"),
+            due=task.due_at.strftime("%d/%m/%Y %I:%M %p"),
         )
     return task
 
@@ -461,8 +461,12 @@ def _run_tasks(db: Session, inst: FlowInstance) -> list[Task]:
     opened would not see the step it had just opened — and the check for
     "did anything change" would answer no and throw the work away.
     """
+    # With the two collections `_touched` reads, so deciding whether a
+    # planned step may be removed does not cost two queries per task.
     return list(db.scalars(
-        select(Task).where(Task.flow_instance_id == inst.id)).all())
+        select(Task).where(Task.flow_instance_id == inst.id)
+        .options(selectinload(Task.comments),
+                 selectinload(Task.attachments))).all())
 
 
 def replan(db: Session, inst: FlowInstance, assigner: User) -> int:
@@ -605,7 +609,7 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
         notify.queue(
             db, t.doer, "flow_step_ready", t,
             title=step.title, flow=inst.flow.name, reference=inst.reference,
-            due=t.due_at.strftime("%d %b, %I:%M %p"),
+            due=t.due_at.strftime("%d/%m/%Y %I:%M %p"),
         )
         first = first or t
     return first
@@ -693,11 +697,20 @@ def catch_up_all(db: Session, limit: int = 200) -> int:
     are right whether or not anybody has been looking at the runs — which
     is the whole point of a report.
     """
+    # Each run's flow, its steps and its tasks, fetched with the runs.
+    #
+    # This is a background pass over every live run, every ten minutes,
+    # in the same process that serves the pages. Left lazy it was several
+    # hundred queries a tick with a dozen runs going — which on a host
+    # with the database across the network is ten seconds of the web
+    # server doing nothing but wait, every ten minutes, for ever.
     live = db.scalars(
         select(FlowInstance)
         .where(FlowInstance.completed_at.is_(None),
                FlowInstance.cancelled_at.is_(None),
                FlowInstance.held_at.is_(None))
+        .options(selectinload(FlowInstance.flow).selectinload(Flow.steps),
+                 selectinload(FlowInstance.tasks))
         .order_by(FlowInstance.id).limit(limit)
     ).all()
     changed = 0
@@ -1119,7 +1132,7 @@ def resume_run(db: Session, inst: FlowInstance, by: User,
         db.add(TaskComment(
             task_id=t.id, author_id=by.id,
             body=f"Resumed after {_span_words(paused_for)} on hold."
-                 + (f" Planned date moved to {t.due_at:%d %b %Y, %I:%M %p}."
+                 + (f" Planned date moved to {t.due_at:%d/%m/%Y %I:%M %p}."
                     if shift_deadlines else
                     " The planned date was left where it was.")))
 

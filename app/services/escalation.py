@@ -62,12 +62,13 @@ from html import escape as html_escape
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .. import clock
 from ..models import (
-    Branch, Escalation, EscalationMail, EscalationRule, Organization,
-    OutboundMessage, Priority, Task, TaskStatus, User, PARKED_STATES,
+    Branch, Escalation, EscalationMail, EscalationRule, Flow, FlowInstance,
+    Organization, OutboundMessage, Priority, Task, TaskStatus, User,
+    PARKED_STATES,
 )
 
 # The name this morning's WhatsApp goes out under, so a second run can see
@@ -88,6 +89,14 @@ MAX_DAYS = 120
 # repeat. Thirty working days of "still open" is already past the point
 # where another email is what fixes it.
 MAX_REPEATS = 30
+
+#: How many task rows one email carries. Gmail clips a message at about
+#: a hundred kilobytes, and this software writes about 1.3 KB of HTML per
+#: row, so forty rows lands near fifty — comfortably under the line with
+#: room for a long task title. A longer list was not being read anyway: see
+#: `compose`. Rows are sorted worst-first, so this keeps the ones that
+#: matter and drops the tail.
+MAX_ROWS_IN_MAIL = 40
 
 
 # ------------------------------------------------------------- the ladder --
@@ -132,12 +141,22 @@ def missing_ladders(db: Session, org_id: int) -> list[str]:
 # --------------------------------------------------------- days overdue  ---
 
 def days_overdue(db: Session, task: Task, on: date | None = None,
-                 working_days: bool = True) -> int:
+                 working_days: bool = True,
+                 cal: holidays.Calendar | None = None) -> int:
     """How many days late this task is, as of `on` (today by default).
 
     0 means not overdue yet. On working days, a day the company was shut
     does not count — so a Saturday deadline is one day overdue on Monday,
     not two.
+
+    `cal` is the organisation's calendar, read into memory once. Pass it
+    whenever this is called for more than one task: without it, the loop
+    below asks the database whether the office was shut on EVERY day
+    between the deadline and today, and a hundred-day-old task is a
+    hundred queries. Two thousand of those is a quarter of a million
+    SELECTs to build one email, which on a host with the database across
+    the network does not finish. Left out, one is built here, so a single
+    call from a page is still correct and still cheap.
     """
     on = on or clock.today()
     due = task.due_at.date()
@@ -145,14 +164,8 @@ def days_overdue(db: Session, task: Task, on: date | None = None,
         return 0
     if not working_days:
         return min((on - due).days, MAX_DAYS)
-
-    count = 0
-    day = due + timedelta(days=1)
-    while day <= on and count < MAX_DAYS:
-        if not holidays.is_closed(db, task.org_id, day, task.branch_id):
-            count += 1
-        day += timedelta(days=1)
-    return count
+    cal = cal or holidays.calendar(db, task.org_id)
+    return min(cal.open_days(due, on, task.branch_id, MAX_DAYS), MAX_DAYS)
 
 
 # ------------------------------------------------------------ which work ---
@@ -184,19 +197,35 @@ def overdue_tasks(db: Session, org_id: int, on: date | None = None,
     # Due before `on` began. A task due later today is not overdue, and a
     # task due earlier today is one the doer still has the day for — the
     # first morning it can be called late is the morning after its date.
+    # Everything the email will read off a task, fetched with the tasks.
+    #
+    # The list that comes out of here is handed straight to the table
+    # writers, which print each task's doer, its company, and — for an
+    # FMS step — "Step 2 of 5", a phrase that walks task → step → flow →
+    # all of that flow's steps. Left lazy that is five or six queries per
+    # row, and this list runs to thousands. It is the difference between
+    # an email that takes a second to build and one that does not finish.
     rows = db.scalars(
         select(Task).where(
             Task.org_id == org_id,
             Task.status.in_(OPEN),
             Task.submitted_at.is_(None),
             Task.due_at < datetime.combine(on, time.min),
+        ).options(
+            joinedload(Task.doer),
+            joinedload(Task.branch),
+            joinedload(Task.flow_step),
+            selectinload(Task.flow_instance).selectinload(FlowInstance.flow)
+            .selectinload(Flow.steps),
         )
-    ).all()
+    ).unique().all()
+    # The calendar once, not once per task per day. See days_overdue.
+    cal = holidays.calendar(db, org_id)
     out = []
     for t in rows:
         if not in_scope(t, scope):
             continue
-        n = days_overdue(db, t, on, working_days)
+        n = days_overdue(db, t, on, working_days, cal)
         if n >= 1:
             out.append((t, n))
     out.sort(key=lambda p: (-p[1], p[0].id))
@@ -416,7 +445,7 @@ def _text_row(task: Task, late: int, cols) -> str:
         # read where nobody can click to find out.
         "Task ID": task.ref_label,
         "Doer": task.doer.name if task.doer else "—",
-        "Planned": task.due_at.strftime("%d %b, %I:%M %p"),
+        "Planned": task.due_at.strftime("%d/%m/%Y %I:%M %p"),
         "Priority": task.priority.value.upper(),
         "Overdue": f"{late} day" + ("s" if late != 1 else ""),
         "Task": task.title,
@@ -568,7 +597,7 @@ def _html_row(task: Task, late: int, i: int, with_doer: bool, site: str,
         (f'<td {td}>{_esc(task.doer.name if task.doer else "—")}</td>'
          if with_doer else ""),
         f'<td {td} nowrap>'
-        f'{_esc(task.due_at.strftime("%d %b %Y"))}'
+        f'{_esc(task.due_at.strftime("%d/%m/%Y"))}'
         f'<div style="color:{MUTED};font-size:11.5px;margin-top:2px">'
         f'{_esc(task.due_at.strftime("%I:%M %p"))}</div></td>',
         f'<td {td}>{_pill(task.priority.value.upper(), bgc, fgc)}</td>',
@@ -622,10 +651,17 @@ def html_cards(rows: list[tuple[Task, int]]) -> str:
 
 def html_message(rows: list[tuple[Task, int]], heading: str, greeting: str,
                  said: str, level: int, urgent: bool, site: str = "",
-                 footnote: str = "", with_doer: bool = True) -> str:
-    """One whole email as HTML — the bar, the sentence, the table, the note."""
+                 footnote: str = "", with_doer: bool = True,
+                 total: int | None = None) -> str:
+    """One whole email as HTML — the bar, the sentence, the table, the note.
+
+    `total` is how many tasks there really are when `rows` is only the
+    worst of them — see `compose`. The bar must say the true number: an
+    email headed "60 overdue tasks" about a backlog of six hundred is a
+    worse lie than a long email.
+    """
     bar = URGENT if urgent else BRAND
-    count = len(rows)
+    count = total if total is not None else len(rows)
     worst = max((late for _t, late in rows), default=0)
     return "".join([
         '<!doctype html><html><head><meta charset="utf-8">'
@@ -707,6 +743,24 @@ def _subject(level: int, repeat_n: int, urgent: bool, count: int,
     return (f"{head} {count} overdue {what}, up to {worst} day(s) — {who}")
 
 
+def subject_line(rows: list[tuple[Task, int]], level: int, repeat_n: int,
+                 rule: EscalationRule, for_doer: str = "") -> str:
+    """Just the subject of the email `compose` would build.
+
+    For the preview, which lists far more emails than it writes out in
+    full: the subject is the one line that says who, which rung and how
+    many, and building it costs nothing while building the body costs a
+    row of HTML per overdue task.
+    """
+    count = len(rows)
+    if for_doer:
+        return (f"[Escalation L{level}] Your {count} overdue "
+                f"{'task' if count == 1 else 'tasks'} — "
+                f"reported to {rule.name}")
+    worst = max((late for _t, late in rows), default=0)
+    return _subject(level, repeat_n, rule.urgent, count, worst, rule.name)
+
+
 def compose(rows: list[tuple[Task, int]], level: int, repeat_n: int,
             rule: EscalationRule, rungs: dict[int, EscalationRule],
             site: str = "", below_sent: bool = False, who: str = "",
@@ -724,6 +778,19 @@ def compose(rows: list[tuple[Task, int]], level: int, repeat_n: int,
     count = len(rows)
     worst = max((late for _t, late in rows), default=0)
     who = who or rule.name
+
+    # The COUNT is the whole backlog; the TABLE is the worst of it.
+    #
+    # An email that lists six hundred overdue tasks is not a longer email,
+    # it is a different and worse one. Gmail stops at about a hundred
+    # kilobytes and hides the rest behind "Message clipped" — so the
+    # bottom of such a list was never read by anybody — and a person who
+    # opens it sees a wall and closes it. The sentence above still says
+    # how many there are in total, the worst ones are the ones shown
+    # (the rows are already sorted worst-first), and the link at the
+    # bottom goes to the full list where it can be sorted and filtered.
+    shown = rows[:MAX_ROWS_IN_MAIL]
+    hidden = count - len(shown)
 
     if for_doer:
         subject = (f"[Escalation L{level}] Your {count} overdue "
@@ -748,7 +815,10 @@ def compose(rows: list[tuple[Task, int]], level: int, repeat_n: int,
             _digest_message(level, top, below_sent, count)
 
     # The plain-text part, for whatever cannot show the table.
-    parts = [opening, "", said, "", table(rows, with_doer=not for_doer)]
+    parts = [opening, "", said, "", table(shown, with_doer=not for_doer)]
+    if hidden:
+        parts += ["", f"... and {hidden} more. The {count} in total are "
+                      "listed in GCS Autopilot."]
     if count == 1 and site:
         parts += ["", f"Open the task: {site.rstrip('/')}/tasks/{rows[0][0].id}"]
     elif site:
@@ -767,12 +837,17 @@ def compose(rows: list[tuple[Task, int]], level: int, repeat_n: int,
         heading = f"Escalation to {who}"
         if repeat_n:
             heading += f" — reminder {repeat_n}"
+    note = ("This copy lists only your own work. The full list went "
+            f"to {rule.name}." if for_doer else "")
+    if hidden:
+        note = ((note + " ") if note else "") + (
+            f"The {len(shown)} worst are listed here; {hidden} more are "
+            f"overdue, making {count} in all. The whole list is in GCS "
+            "Autopilot.")
     body_html = html_message(
-        rows, heading, opening, said, level,
-        rule.urgent and not for_doer, site,
-        footnote=("This copy lists only your own work. The full list went "
-                  f"to {rule.name}." if for_doer else ""),
-        with_doer=not for_doer)
+        shown, heading, opening, said, level,
+        rule.urgent and not for_doer, site, footnote=note,
+        with_doer=not for_doer, total=count)
 
     cc: list[str] = []
     if not for_doer and rule.cc_earlier:
@@ -851,6 +926,23 @@ def plan(db: Session, org: Organization, today: date) -> tuple[list, list, int]:
     skipped: list[tuple[Task, int, str]] = []
     no_ladder = 0
 
+    # Three things this loop used to ask the database about once per
+    # task: was that company shut today, what is its ladder, and what has
+    # this task already had. The first two are the same handful of
+    # answers for thousands of tasks — there are five companies — and the
+    # third is one query for the lot instead of one each.
+    #
+    # With two thousand overdue tasks that was seven thousand round trips
+    # to decide one morning's email. The decisions below are unchanged;
+    # only where the answers come from is.
+    cal = holidays.calendar(db, org.id)
+    ladders: dict[int | None, dict] = {}
+    sent_by_task: dict[int, list[Escalation]] = {}
+    for e in db.scalars(select(Escalation).where(
+            Escalation.task_id.in_([t.id for t, _ in rows]))
+            .order_by(Escalation.level, Escalation.repeat_n)) if rows else []:
+        sent_by_task.setdefault(e.task_id, []).append(e)
+
     for task, late in rows:
         # Not on a day that company is shut. A holiday on the calendar is
         # a day nobody is in to do the work OR to be chased about it, and
@@ -863,17 +955,19 @@ def plan(db: Session, org: Organization, today: date) -> tuple[list, list, int]:
         # does not drag the office in. Nothing is lost: the work is still
         # overdue the next day, and with working days switched on it is
         # not even a day later for it.
-        shut = holidays.closed_reason(db, org.id, today, task.branch_id)
+        shut = cal.closed(today, task.branch_id)
         if shut:
             skipped.append((task, late,
                             f"That company was closed today — {shut}."))
             continue
-        rungs = ladder(db, org.id, task.branch_id)
+        if task.branch_id not in ladders:
+            ladders[task.branch_id] = ladder(db, org.id, task.branch_id)
+        rungs = ladders[task.branch_id]
         if not rungs:
             no_ladder += 1
             skipped.append((task, late, "No level is set for that company."))
             continue
-        sent = already(db, task.id)
+        sent = sent_by_task.get(task.id, [])
         step = next_step(sent, late, rungs, org.esc_after_top, today,
                          org.esc_grace or 0)
         if step is None:
@@ -1027,7 +1121,7 @@ def send_whatsapp_digests(db: Session, org: Organization, today: date,
         png = cardimg.report_png(
             person.name,
             f"{len(rows)} overdue task{'' if len(rows) == 1 else 's'}"
-            f" · {today.strftime('%d %b %Y')}",
+            f" · {today.strftime('%d/%m/%Y')}",
             counts, by_kind(rows),
             "Close a task in GCS Autopilot and it stops being chased.")
         _path, url = cardimg.publish(db, org.id, png, about=person.name,
