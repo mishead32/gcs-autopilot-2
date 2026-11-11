@@ -38,8 +38,15 @@ NOTE_FONT = Font(size=9, color="64748B")
 THIN = Side(style="thin", color="D8E0E8")
 CELL_BORDER = Border(bottom=THIN)
 
-DATE_FMT = "dd mmm yyyy hh:mm AM/PM"
-DAY_FMT = "dd mmm yyyy"
+# dd/mm/yyyy, like every date this software writes. Excel's own number
+# format, not text — so the column still sorts, filters by month and
+# pivots, which is the whole reason a date goes into a workbook as a date.
+#
+# Worth knowing: Excel shows a date cell in the FORMAT WRITTEN HERE, not
+# in the reader's regional setting, so a workbook opened on a laptop set
+# to US English still reads 08/11/2026 and not 11/08/2026.
+DATE_FMT = "dd/mm/yyyy hh:mm AM/PM"
+DAY_FMT = "dd/mm/yyyy"
 
 MIN_WIDTH, MAX_WIDTH = 10, 52
 
@@ -73,7 +80,16 @@ def add_sheet(wb: Workbook, title: str, columns, rows, note: str = "",
               first: bool = False):
     """One tab: an optional title line, a note line, then the table."""
     ws = wb.active if first else wb.create_sheet()
-    ws.title = _safe_name(title)
+    # Two companies whose names agree for 31 characters would otherwise
+    # collide, and openpyxl refuses a duplicate tab name outright — the
+    # whole download fails rather than one tab being oddly named.
+    want = _safe_name(title)
+    name, n = want, 1
+    while name in wb.sheetnames and wb[name] is not ws:
+        n += 1
+        tag = f" ({n})"
+        name = want[:31 - len(tag)] + tag
+    ws.title = name
 
     top = 1
     if title:

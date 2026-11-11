@@ -354,7 +354,7 @@ def index(request: Request, user: User = Depends(current_user)):
 
 @router.get("/reports/fms-entries", response_class=HTMLResponse)
 def fms_entries(request: Request, on: str = "", gap: str = "",
-                company: str = "", export: str = "",
+                company: str = "", by: str = "company", export: str = "",
                 user: User = Depends(require_right(Right.MANAGE_USER)),
                 db: Session = Depends(get_db)):
     """Flows with no new entry — as at today, or as at any past day.
@@ -393,18 +393,36 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
         pick = ""
 
     if xlsx.wants(export):
-        return xlsx.one(
-            f"fms-entries-{day.isoformat()}", "FMS with no new entry", [
-                ("FMS name", lambda g: g.flow.name),
-                ("Company", lambda g: g.company),
-                ("Working days with no entry", lambda g: g.days),
-                ("Last entry", lambda g: g.last_at.date() if g.last_at else ""),
-                ("Ever started here", lambda g: "Yes" if g.ever else "No"),
-            ], rows,
-            f"As at {day:%d/%m/%Y} · {limit} working day(s) or more with "
-            "nothing entered. One row per flow and company; working days "
-            "for that company, so its own Sundays and holidays are not "
-            "counted.")
+        # One tab per company, with everything together on the first.
+        #
+        # The point of the file is that it gets forwarded: the person who
+        # runs one office should be sent their own tab, not a list of
+        # eighty-six lines of which four are theirs. The first tab stays
+        # whole so the group picture is not lost.
+        note = (f"As at {day:%d/%m/%Y} · {limit} working day(s) or more "
+                "with nothing entered. One row per flow and company; "
+                "working days for that company, so its own Sundays and "
+                "holidays are not counted.")
+        cols = [
+            ("FMS name", lambda g: g.flow.name),
+            ("Company", lambda g: g.company),
+            ("Working days with no entry", lambda g: g.days),
+            ("Last entry", lambda g: g.last_at.date() if g.last_at else ""),
+            ("Ever started here", lambda g: "Yes" if g.ever else "No"),
+        ]
+        every = sorted(rows, key=lambda g: (g.company.lower(), -g.days,
+                                            (g.flow.name or "").lower()))
+        sheets = [("All companies", cols, every, note)]
+        for name, lines in quietflows.by_company(rows):
+            # The company is the tab's name, so repeating it in every row
+            # of that tab is a column of the same word eighty times.
+            sheets.append((name, [c for c in cols if c[0] != "Company"],
+                           lines,
+                           f"{name} — {len(lines)} FMS with no entry. "
+                           + note))
+        name = ("fms-no-entry" if day == today
+                else f"fms-no-entry-as-at-{day:%d-%m-%Y}")
+        return xlsx.book(name, sheets)
 
     branches = db.scalars(
         select(Branch).where(Branch.org_id == user.org_id)
@@ -418,9 +436,11 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
         subject, body, body_html = quietflows.compose(
             db, org, day, threshold=limit)[1:]
     to, cc = quietflows.recipients(org)
+    grouped = "flow" if by == "flow" else "company"
     return templates.TemplateResponse(request, "report_fms_entries.html", {
-        "user": user, "org": org, "rows": rows,
-        "groups": quietflows.by_flow(rows),
+        "user": user, "org": org, "rows": rows, "by": grouped,
+        "groups": (quietflows.by_flow(rows) if grouped == "flow"
+                   else quietflows.by_company(rows)),
         "subject": subject, "body": body, "body_html": body_html,
         "to": to, "cc": cc, "today": today, "day": day, "on": day.isoformat(),
         "is_today": day == today, "threshold": limit,

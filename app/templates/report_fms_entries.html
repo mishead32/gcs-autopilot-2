@@ -16,7 +16,8 @@
   <div>
     {{ excel_btn('/reports/fms-entries?export=xlsx&on=' ~ on ~ '&gap=' ~
                  threshold ~ '&company=' ~ company,
-                 title='Download these lines') }}
+                 title='Download these lines — one tab per company, '
+                       'and everything together on the first') }}
     <a class="btn ghost" href="/escalation">Settings &amp; email</a>
   </div>
 </div>
@@ -59,7 +60,7 @@
     <input name="on" type="date" value="{{ on }}" max="{{ today.isoformat() }}">
   </div>
   <div class="fb-f">
-    <label>Working days with no entry</label>
+    <label>Not started for at least (working days)</label>
     <input name="gap" type="number" min="1" max="90" value="{{ threshold }}">
   </div>
   <div class="fb-f">
@@ -69,6 +70,13 @@
       {% for b in branches %}
       <option value="{{ b.id }}" {{ 'selected' if company == b.id|string }}>{{ b.name }}</option>
       {% endfor %}
+    </select>
+  </div>
+  <div class="fb-f">
+    <label>Group by</label>
+    <select name="by">
+      <option value="company" {{ 'selected' if by == 'company' }}>Company</option>
+      <option value="flow" {{ 'selected' if by == 'flow' }}>FMS name</option>
     </select>
   </div>
   <div class="acts">
@@ -88,14 +96,16 @@
 </form>
 
 {% if rows %}
-<h2>What it says, flow by flow</h2>
+<h2>{{ 'What it says, company by company' if by == 'company'
+       else 'What it says, flow by flow' }}</h2>
 {% for name, lines in groups %}
 <h3 class="cogroup">{{ name }} <span class="m">({{ lines|length }})</span></h3>
 <div class="table-wrap"><table>
-  <tr><th>Company</th><th>Days with no entry</th><th>Last entry</th></tr>
+  <tr><th>{{ 'FMS name' if by == 'company' else 'Company' }}</th>
+      <th>Days with no entry</th><th>Last entry</th></tr>
   {% for g in lines %}
   <tr>
-    <td><strong>{{ g.company }}</strong></td>
+    <td><strong>{{ g.flow.name if by == 'company' else g.company }}</strong></td>
     {# Red past a working week: by then it is not a slow week, it is a
        process that has stopped. #}
     <td class="{{ 'overdue' if g.days >= 5 }}">{{ g.days_label }}</td>

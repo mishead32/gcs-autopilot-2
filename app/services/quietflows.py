@@ -201,6 +201,26 @@ def by_flow(rows: list[Gap]) -> list[tuple[str, list[Gap]]]:
     return out
 
 
+def by_company(rows: list[Gap]) -> list[tuple[str, list[Gap]]]:
+    """The same gaps, grouped under the company instead of the flow.
+
+    The other way round matters because the two questions are different.
+    "Which process has stopped" is answered flow by flow; "which office
+    has stopped working" is answered company by company, and reading it
+    out of seventeen one-line tables is not reading it at all. The worst
+    company comes first, and inside it the longest silence comes first,
+    so the top of the page is where to start.
+    """
+    buckets: dict[str, list[Gap]] = {}
+    for g in rows:
+        buckets.setdefault(g.company, []).append(g)
+    for lines in buckets.values():
+        lines.sort(key=lambda g: (-g.days, (g.flow.name or "").lower()))
+    return sorted(buckets.items(),
+                  key=lambda kv: (-max(g.days for g in kv[1]),
+                                  -len(kv[1]), kv[0].lower()))
+
+
 # ------------------------------------------------------------- the email --
 # Same discipline as the escalation mail: inline styles, table layout,
 # nothing fetched from the network. A mail client is not a browser, and the

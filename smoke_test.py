@@ -14204,6 +14204,63 @@ check("the lines download as Excel",
       admin.get("/reports/fms-entries?export=xlsx").headers["content-type"]
       .startswith("application/vnd.openxmlformats"))
 
+print("\n== organised so it can be read and forwarded ==")
+# Grouped by company by default. Eighty-six lines under seventeen
+# one-row flow headings is a list, not a report; "which office has
+# stopped" is the question somebody actually asks of it.
+_qco = admin.get("/reports/fms-entries?gap=1")
+check("company by company is what it opens as",
+      "company by company" in _qco.text)
+check("and the flow name is the column inside each company",
+      "<th>FMS name</th>" in _qco.text
+      and "<th>Company</th>" not in _qco.text,
+      [l for l in _qco.text.splitlines() if "<th>" in l][:3])
+check("the other way round is still one click away",
+      "flow by flow" in admin.get("/reports/fms-entries?gap=1&by=flow").text)
+check("and nonsense in the grouping box falls back to company",
+      "company by company" in
+      admin.get("/reports/fms-entries?gap=1&by=sideways").text)
+
+import io as _ioQ
+from openpyxl import load_workbook as _lwbQ
+_qx = admin.get("/reports/fms-entries?export=xlsx&gap=1")
+_qwb = _lwbQ(_ioQ.BytesIO(_qx.content))
+check("the workbook leads with everything together",
+      _qwb.sheetnames[0] == "All companies", _qwb.sheetnames)
+# Every company named on the first tab must have a tab of its own, so
+# the file can be forwarded one office at a time.
+_qseen = {r[1] for r in _qwb["All companies"].iter_rows(
+    min_row=6, values_only=True) if r[1]}
+check("and then gives every company its own tab",
+      _qseen and {c[:31] for c in _qseen} == set(_qwb.sheetnames[1:]),
+      (sorted(_qseen), _qwb.sheetnames))
+_qtab = _qwb[_qwb.sheetnames[1]]
+_qhdr = [c for c in next(_qtab.iter_rows(min_row=5, max_row=5,
+                                         values_only=True)) if c]
+check("a company's own tab does not repeat its name in every row",
+      "Company" not in _qhdr, _qhdr)
+check("while the first tab does, because it mixes them",
+      "Company" in [c for c in next(_qwb["All companies"].iter_rows(
+          min_row=5, max_row=5, values_only=True)) if c])
+check("the name says plainly what it is",
+      "fms-no-entry" in _qx.headers["content-disposition"],
+      _qx.headers["content-disposition"])
+check("and a past day says which day, rather than only today's stamp",
+      "as-at" in admin.get(
+          f"/reports/fms-entries?export=xlsx&on={_qback.isoformat()}")
+      .headers["content-disposition"])
+
+# Two companies whose names agree for 31 characters would collide, and
+# openpyxl refuses a duplicate tab outright — the whole file fails.
+from openpyxl import Workbook as _WbQ
+from app.services import xlsx as _xlQ
+_qwb2 = _WbQ()
+for _n, _t in enumerate(["A company with a very long name indeed",
+                         "A company with a very long name also"]):
+    _xlQ.add_sheet(_qwb2, _t, [("X", lambda r: r)], [1], first=(_n == 0))
+check("two near-identical company names still make two tabs",
+      len(set(_qwb2.sheetnames)) == 2, _qwb2.sheetnames)
+
 print("\n== a briefing file is not the doer's proof ==")
 # Found while building dictation, and worth its own section because it was
 # live. The new-task form offered an Attachments field, read the file,
