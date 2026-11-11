@@ -5,7 +5,7 @@ Three screens, and the split between them is deliberate:
     /escalation          the ladders and the group-wide switches
     /escalation/log      every escalation ever raised, filterable
     /escalation/preview  what this morning WOULD send, sending nothing
-    /escalation/quiet    the other report: flows nobody is starting
+    /reports/fms-entries the other report: flows nobody is starting
 
 The preview is the one that earns its place. The first question anybody
 sensible asks before switching this on is "who is about to be emailed, and
@@ -17,6 +17,8 @@ the CMD's inbox is where the testing happens.
 from __future__ import annotations
 
 from datetime import date
+
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -179,33 +181,20 @@ def send_test(request: Request, user: User = Depends(manage)):
 # work that was never created — a flow that has quietly stopped being
 # followed at one company raises no overdue task, because no task exists.
 
-@router.get("/quiet", response_class=HTMLResponse)
-def quiet_page(request: Request, gap: str = "",
-               user: User = Depends(manage), db: Session = Depends(get_db)):
-    """The report as it stands right now, with nothing sent.
+@router.get("/quiet")
+def quiet_page(gap: str = ""):
+    """Moved. This report now lives under Reports, where it can be read for
+    any past day as well as today.
 
-    The same answer the eleven o'clock email would give, on the screen, so
-    the first question — "what is this actually going to tell people" — is
-    answered without anybody's inbox being used to find out.
+    The redirect stays because the link is in old bookmarks and in the
+    escalation page's own text, and because a report that answers "and what
+    did it look like last Tuesday" belongs beside the other reports rather
+    than inside a settings screen.
     """
-    org = _org(db, user)
-    try:
-        threshold = max(1, min(90, int(str(gap).strip()))) if gap else None
-    except ValueError:
-        threshold = None
-    today = clock.today()
-    rows, subject, body, body_html = quietflows.compose(
-        db, org, today, threshold=threshold)
-    to, cc = quietflows.recipients(org)
-    return templates.TemplateResponse(request, "escalation_quiet.html", {
-        "user": user, "org": org, "rows": rows,
-        "groups": quietflows.by_flow(rows),
-        "subject": subject, "body": body, "body_html": body_html,
-        "to": to, "cc": cc, "today": today,
-        "threshold": threshold if threshold is not None else org.quiet_gap,
-        "covered": len(quietflows.covered(db, org.id)),
-        "mail_on": mail.enabled(), "mail_status": mail.status(),
-    })
+    where = "/reports/fms-entries"
+    if str(gap).strip():
+        where += "?gap=" + quote(str(gap).strip())
+    return RedirectResponse(where, status_code=307)
 
 
 @router.post("/quiet/test")
@@ -223,10 +212,10 @@ def quiet_test(request: Request, user: User = Depends(manage),
         flash.set(request, "error",
                   "Your own account has no email address, so there is "
                   "nowhere to send the test.")
-        return RedirectResponse("/escalation/quiet", status_code=303)
+        return RedirectResponse("/reports/fms-entries", status_code=303)
     if not mail.enabled():
         flash.set(request, "error", mail.status())
-        return RedirectResponse("/escalation/quiet", status_code=303)
+        return RedirectResponse("/reports/fms-entries", status_code=303)
     got = quietflows.send_report(db, org, send=True, to=[user.email], cc=[],
                                  mark=False)
     if got["sent"]:
@@ -238,7 +227,7 @@ def quiet_test(request: Request, user: User = Depends(manage),
     else:
         flash.set(request, "error",
                   "It did not send: " + (got["why"] or "unknown reason"))
-    return RedirectResponse("/escalation/quiet", status_code=303)
+    return RedirectResponse("/reports/fms-entries", status_code=303)
 
 
 @router.post("/quiet/send")
@@ -248,7 +237,7 @@ def quiet_send_now(request: Request, user: User = Depends(manage),
     org = _org(db, user)
     if not mail.enabled():
         flash.set(request, "error", mail.status())
-        return RedirectResponse("/escalation/quiet", status_code=303)
+        return RedirectResponse("/reports/fms-entries", status_code=303)
     got = quietflows.send_report(db, org, send=True)
     if got["sent"]:
         flash.set(request, "saved",
@@ -259,7 +248,7 @@ def quiet_send_now(request: Request, user: User = Depends(manage),
     else:
         flash.set(request, "error",
                   got["why"] or "It did not send, and said no more than that.")
-    return RedirectResponse("/escalation/quiet", status_code=303)
+    return RedirectResponse("/reports/fms-entries", status_code=303)
 
 
 @router.post("/test-whatsapp")

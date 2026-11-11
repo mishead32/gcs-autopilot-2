@@ -33,12 +33,12 @@ from sqlalchemy.orm import Session
 from .. import clock
 from .. import search
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Branch, Followup,
     AuditState, AUDIT_LABELS, Priority, PRIORITY_ORDER, PARKED_STATES,
 )
-from ..services import scoring, xlsx
+from ..services import mail, scoring, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -177,11 +177,11 @@ class Filters:
     def summary(self) -> str:
         bits = []
         if self.date_from and self.date_to:
-            bits.append(f"{self.date_from:%d %b %Y} to {self.date_to:%d %b %Y}")
+            bits.append(f"{self.date_from:%d/%m/%Y} to {self.date_to:%d/%m/%Y}")
         elif self.date_from:
-            bits.append(f"from {self.date_from:%d %b %Y}")
+            bits.append(f"from {self.date_from:%d/%m/%Y}")
         elif self.date_to:
-            bits.append(f"up to {self.date_to:%d %b %Y}")
+            bits.append(f"up to {self.date_to:%d/%m/%Y}")
         else:
             bits.append("all dates")
         if self.branch_id:
@@ -327,7 +327,7 @@ REPORT_CARDS = [
     # work that does not — a flow whose start form nobody has filled in.
     # Behind the same right as the ladder, because it is read by the people
     # the ladder is read by and names no individual doer at all.
-    {"key": "quiet", "url": "/escalation/quiet", "manage_user": True,
+    {"key": "quiet", "url": "/reports/fms-entries", "manage_user": True,
      "title": "7 · FMS nobody is starting",
      "desc": "Flows with no new entry, company by company — the report "
              "emailed each morning."},
@@ -343,6 +343,91 @@ def index(request: Request, user: User = Depends(current_user)):
                   or user.can_see_all_reports or user.can_follow_up)]
     return templates.TemplateResponse(request, "reports_index.html",
                                       {"user": user, "cards": cards})
+
+
+# ============================================ 7 · FMS nobody is starting ===
+# The odd one out, and the reason it sits here rather than with the
+# escalation settings it was first built beside: every other report on
+# this menu counts work that EXISTS, and people looked for this one here.
+# It counts work that does not — a flow whose start form nobody has
+# filled in, which raises no overdue task because no task was created.
+
+@router.get("/reports/fms-entries", response_class=HTMLResponse)
+def fms_entries(request: Request, on: str = "", gap: str = "",
+                company: str = "", export: str = "",
+                user: User = Depends(require_right(Right.MANAGE_USER)),
+                db: Session = Depends(get_db)):
+    """Flows with no new entry — as at today, or as at any past day.
+
+    The date is the point of having it as a report rather than only as
+    an email. The email says what this morning looks like and is gone;
+    this answers "what did it look like on the 4th", which is the
+    question asked in a meeting a week later. Runs started after that
+    day are ignored and a flow that did not exist yet is left out, so
+    the page gives the answer the report WOULD have given, not today's
+    answer with an old date written at the top.
+    """
+    from ..services import quietflows
+    from ..models import Organization
+
+    org = db.scalar(select(Organization).where(Organization.id == user.org_id))
+    today = clock.today()
+    try:
+        day = date.fromisoformat(on) if on else today
+    except ValueError:
+        day = today
+    # Not into the future: there is nothing to say about a day that has
+    # not happened, and a date typed with the wrong year reads as a bug.
+    day = min(day, today)
+    try:
+        threshold = max(1, min(90, int(str(gap).strip()))) if gap else None
+    except ValueError:
+        threshold = None
+    limit = org.quiet_gap if threshold is None else threshold
+
+    rows = quietflows.gaps(db, org, day, limit)
+    pick = (company or "").strip()
+    if pick.isdigit():
+        rows = [g for g in rows if g.branch and g.branch.id == int(pick)]
+    else:
+        pick = ""
+
+    if xlsx.wants(export):
+        return xlsx.one(
+            f"fms-entries-{day.isoformat()}", "FMS with no new entry", [
+                ("FMS name", lambda g: g.flow.name),
+                ("Company", lambda g: g.company),
+                ("Working days with no entry", lambda g: g.days),
+                ("Last entry", lambda g: g.last_at.date() if g.last_at else ""),
+                ("Ever started here", lambda g: "Yes" if g.ever else "No"),
+            ], rows,
+            f"As at {day:%d/%m/%Y} · {limit} working day(s) or more with "
+            "nothing entered. One row per flow and company; working days "
+            "for that company, so its own Sundays and holidays are not "
+            "counted.")
+
+    branches = db.scalars(
+        select(Branch).where(Branch.org_id == user.org_id)
+        .order_by(Branch.name)).all()
+    # The email text is only built for today. On a past day there is
+    # nothing to send — an email about the 4th would arrive claiming to
+    # be this morning's — so building it would cost a second pass over
+    # every flow to produce something the page then hides.
+    subject = body = body_html = ""
+    if day == today:
+        subject, body, body_html = quietflows.compose(
+            db, org, day, threshold=limit)[1:]
+    to, cc = quietflows.recipients(org)
+    return templates.TemplateResponse(request, "report_fms_entries.html", {
+        "user": user, "org": org, "rows": rows,
+        "groups": quietflows.by_flow(rows),
+        "subject": subject, "body": body, "body_html": body_html,
+        "to": to, "cc": cc, "today": today, "day": day, "on": day.isoformat(),
+        "is_today": day == today, "threshold": limit,
+        "branches": branches, "company": pick,
+        "covered": len(quietflows.covered(db, user.org_id)),
+        "mail_on": mail.enabled(), "mail_status": mail.status(),
+    })
 
 
 # ================================================= 1-3 · tasks by source ===
@@ -736,15 +821,15 @@ def score_behind(request: Request, doer: int, source: str = "delegation",
         """One sentence per task, so nothing has to be worked out by hand."""
         handed = scoring.handed_in(t)
         if kind == "late":
-            return (f"Handed in {handed.strftime('%d %b, %I:%M %p')} \u2014 after "
-                    f"its planned {t.due_at.strftime('%d %b, %I:%M %p')}")
+            return (f"Handed in {handed.strftime('%d/%m/%Y %I:%M %p')} \u2014 after "
+                    f"its planned {t.due_at.strftime('%d/%m/%Y %I:%M %p')}")
         if handed is None:
             if t.due_at < start:
                 return ("Still not handed in. It was due before these dates and "
                         "was still open when they began, so it is carried in.")
             return "Still not handed in."
         if handed > end:
-            return (f"Handed in {handed.strftime('%d %b %Y, %I:%M %p')} \u2014 "
+            return (f"Handed in {handed.strftime('%d/%m/%Y %I:%M %p')} \u2014 "
                     f"AFTER these dates. Done now, but not inside this window.")
         return "Counted elsewhere."
 

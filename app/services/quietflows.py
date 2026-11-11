@@ -126,19 +126,28 @@ def covered(db: Session, org_id: int) -> list[tuple[Flow, Branch | None]]:
     return out
 
 
-def last_entries(db: Session, org_id: int) -> dict[tuple[int, int | None],
-                                                   datetime]:
+def last_entries(db: Session, org_id: int, upto: date | None = None
+                 ) -> dict[tuple[int, int | None], datetime]:
     """{(flow id, company id): when it was last started} — in one query.
 
     One query rather than one per pair: twenty flows across four companies
     is eighty lookups, and eighty round trips to write one email is how a
     nightly job becomes something that times out on a free host.
+
+    `upto` makes the answer historical: runs started AFTER that day are
+    ignored, so asking about last Tuesday gives the answer the report
+    would have given on last Tuesday — not today's answer with an old
+    date written at the top. A report nobody can reproduce is not a
+    report, and this one is read in a meeting a week after the fact.
     """
+    q = (select(FlowInstance.flow_id, FlowInstance.branch_id,
+                func.max(FlowInstance.started_at))
+         .where(FlowInstance.org_id == org_id))
+    if upto is not None:
+        q = q.where(FlowInstance.started_at
+                    <= datetime.combine(upto, datetime.max.time()))
     rows = db.execute(
-        select(FlowInstance.flow_id, FlowInstance.branch_id,
-               func.max(FlowInstance.started_at))
-        .where(FlowInstance.org_id == org_id)
-        .group_by(FlowInstance.flow_id, FlowInstance.branch_id)).all()
+        q.group_by(FlowInstance.flow_id, FlowInstance.branch_id)).all()
     return {(f, b): when for f, b, when in rows if when is not None}
 
 
@@ -152,7 +161,9 @@ def gaps(db: Session, org: Organization, today: date | None = None,
     """
     today = today or clock.today()
     limit = org.quiet_gap if threshold is None else threshold
-    seen = last_entries(db, org.id)
+    # Bounded by the day being asked about, so looking back at a Tuesday
+    # shows what Tuesday looked like.
+    seen = last_entries(db, org.id, today)
     # The calendar once, in memory. Counting working days per flow per
     # company used to re-read the holiday table for every pair — twenty
     # flows across five companies is a hundred round trips to answer one
@@ -162,6 +173,10 @@ def gaps(db: Session, org: Organization, today: date | None = None,
 
     out: list[Gap] = []
     for flow, branch in covered(db, org.id):
+        # A flow that did not exist yet on the day being asked about
+        # cannot have been going quiet on it.
+        if flow.created_at.date() > today:
+            continue
         bid = branch.id if branch else None
         when = seen.get((flow.id, bid))
         # Never started here: counted from the day the flow was made. The

@@ -89,6 +89,15 @@
       <span class="ic">☑</span><span class="lb">Checklist report</span></a>
     <a href="/reports/tasks?source=fms" title="FMS report">
       <span class="ic">⇉</span><span class="lb">FMS report</span></a>
+    {# Directly after the FMS report, because it answers the question the FMS
+       report cannot: not "how is the work going" but "which flows is nobody
+       starting at all". Only somebody who can see every branch's flows is
+       shown it, which is the same right the page itself requires. #}
+    {% if user.has_manage_user %}
+    <a class="{{ 'active' if p == '/reports/fms-entries' }}"
+       href="/reports/fms-entries" title="FMS with no entries">
+      <span class="ic">⌛</span><span class="lb">FMS inactivity</span></a>
+    {% endif %}
     {% if user.can_see_all_reports or user.can_follow_up %}
     <a class="{{ 'active' if p == '/reports/followups' }}" href="/reports/followups" title="Follow-up report">
       <span class="ic">☎</span><span class="lb">Follow-up report</span></a>

@@ -3,14 +3,22 @@
 {% block title %}FMS nobody is starting · {{ APP_NAME }}{% endblock %}
 {% block content %}
 
+{% from "_export.html" import excel_btn %}
 <div class="page-head">
   <div>
     <h1>FMS nobody is starting</h1>
     <p class="sub">Every flow whose start form has had no entry for
       {{ threshold }} working day(s) or more — at each company separately.
-      Nothing on this page sends anything.</p>
+      {% if is_today %}As at today.{% else %}<strong>As at
+      {{ day|dt('%d/%m/%Y') }}</strong> — what this report would have said
+      that day.{% endif %}</p>
   </div>
-  <a class="btn ghost" href="/escalation">← Escalation</a>
+  <div>
+    {{ excel_btn('/reports/fms-entries?export=xlsx&on=' ~ on ~ '&gap=' ~
+                 threshold ~ '&company=' ~ company,
+                 title='Download these lines') }}
+    <a class="btn ghost" href="/escalation">Settings &amp; email</a>
+  </div>
 </div>
 
 {# Why this exists at all, said once. Somebody opening it for the first
@@ -40,21 +48,41 @@
     <div class="m">working days with nothing entered</div></div>
 </div>
 
-<form method="get" action="/escalation/quiet" class="card searchbar"
+{# The date is the reason this is a report and not only an email. The
+   email says what this morning looks like and is gone; this answers
+   "what did it look like on the 4th", which is the question asked in a
+   meeting a week later. #}
+<form method="get" action="/reports/fms-entries" class="card searchbar"
       style="margin-top:14px">
   <div class="fb-f">
-    <label>Try a different threshold</label>
+    <label>As at</label>
+    <input name="on" type="date" value="{{ on }}" max="{{ today.isoformat() }}">
+  </div>
+  <div class="fb-f">
+    <label>Working days with no entry</label>
     <input name="gap" type="number" min="1" max="90" value="{{ threshold }}">
   </div>
+  <div class="fb-f">
+    <label>Company</label>
+    <select name="company">
+      <option value="">Every company</option>
+      {% for b in branches %}
+      <option value="{{ b.id }}" {{ 'selected' if company == b.id|string }}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
   <div class="acts">
-    <button class="btn ghost">Show</button>
-    {% if threshold != org.quiet_gap %}
-    <a class="btn ghost" href="/escalation/quiet">Back to {{ org.quiet_gap }}</a>
+    <button class="btn">Show</button>
+    {% if not is_today or threshold != org.quiet_gap or company %}
+    <a class="btn ghost" href="/reports/fms-entries">Back to today</a>
     {% endif %}
   </div>
   <p class="m" style="flex-basis:100%;margin:8px 0 0">
-    This only changes what is on the screen. The saved setting is
-    <strong>{{ org.quiet_gap }}</strong> working day(s) —
+    Runs started after the date chosen are ignored, and a flow made after
+    it is left out — so an older date gives the answer this report would
+    have given that day, not today's answer under an old heading. The
+    saved setting the morning email uses is
+    <strong>{{ org.quiet_gap }}</strong> working day(s);
     <a href="/escalation">change it on the escalation page</a>.
   </p>
 </form>
@@ -78,8 +106,9 @@
 {% endfor %}
 {% else %}
 <div class="empty">
-  Every active flow has had an entry at every company within the last
-  {{ threshold }} working day(s). Nothing would be sent this morning.
+  Every active flow had an entry at every company within the
+  {{ threshold }} working day(s) before {{ day|dt('%d/%m/%Y') }}.
+  {% if is_today %}Nothing would be sent this morning.{% endif %}
 </div>
 {% endif %}
 
@@ -114,6 +143,7 @@
   {% endif %}
 </div>
 
+{% if is_today %}
 <div class="card">
   <strong>Send it now</strong>
   <p class="m" style="margin:8px 0 12px">
@@ -135,7 +165,20 @@
       title="Send to the real list this minute instead of waiting">
       Send to the list now</button></form>
 </div>
+{% else %}
+<div class="card">
+  <p class="m" style="margin:0">Looking at a past day, so there is nothing
+    to send — an email about {{ day|dt('%d/%m/%Y') }} would arrive saying
+    it was today's. <a href="/reports/fms-entries">Back to today</a> to
+    send.</p>
+</div>
+{% endif %}
 
+{# Only for today. The email is this morning's message; there is no such
+   thing as the email for a day that has gone, so on a past date the
+   message is not built at all and this section is not drawn — an empty
+   frame under the heading reads as a page that failed to load. #}
+{% if is_today %}
 <h2>The email itself</h2>
 <div class="card">
   <div class="esc-subject">{{ subject }}</div>
@@ -146,4 +189,5 @@
   </details>
 </div>
 {{ email_frame_script() }}
+{% endif %}
 {% endblock %}

@@ -14140,20 +14140,69 @@ with _slQ() as _d:
           _qf.send_report(_d, _qorg)["why"].startswith("Nobody is listed"))
 
 print("\n== the page that shows it before anybody is emailed ==")
-_qpage = admin.get("/escalation/quiet")
-check("the preview page opens", _qpage.status_code == 200, _qpage.status_code)
+# It lives under Reports now, not inside the escalation settings screen,
+# because the question it answers ("which flows is nobody starting, and
+# what did that look like last Tuesday") is a reporting question.
+_qpage = admin.get("/reports/fms-entries")
+check("the report page opens", _qpage.status_code == 200, _qpage.status_code)
 check("it names the flow and the company",
       f"SMOKE bill to payment {RUN}" in _qpage.text and _qnames[0] in _qpage.text)
-check("and says plainly that nothing on it sends anything",
-      "Nothing on this page sends anything" in _qpage.text)
+check("and says which day it is answering for", "As at" in _qpage.text)
 check("a different threshold can be tried without saving it",
-      admin.get("/escalation/quiet?gap=30").status_code == 200)
+      admin.get("/reports/fms-entries?gap=30").status_code == 200)
 check("the report is listed on the reports page",
       "FMS nobody is starting" in admin.get("/reports").text)
+check("and has its own place in the menu",
+      "/reports/fms-entries" in _qpage.text and "FMS inactivity" in _qpage.text)
 check("a doer cannot open it", login("amit@gcs.local").get(
-      "/escalation/quiet").status_code == 403)
+      "/reports/fms-entries").status_code == 403)
 check("nor is it offered to them",
       "FMS nobody is starting" not in login("amit@gcs.local").get("/reports").text)
+check("nor is the menu item drawn for them",
+      "FMS inactivity" not in login("amit@gcs.local").get("/reports").text)
+
+# The old address is in bookmarks and in the escalation page's own text.
+_qold = admin.get("/escalation/quiet", follow_redirects=False)
+check("the old address still works, by moving you",
+      _qold.status_code in (307, 308) and
+      _qold.headers["location"] == "/reports/fms-entries", _qold.status_code)
+check("and carries a threshold across with it",
+      admin.get("/escalation/quiet?gap=30", follow_redirects=False)
+      .headers["location"] == "/reports/fms-entries?gap=30")
+check("the escalation page points at the new address",
+      "/reports/fms-entries" in admin.get("/escalation").text)
+
+print("\n== and for a day that has already been ==")
+# This is the part that makes it a report. An older date must give the
+# answer the report WOULD have given that day: runs entered since then
+# cannot un-quiet it, and a flow made after it cannot appear at all.
+_qnow = _ck.today()
+_qback = _qnow - _tdQ(days=400)
+_qpast = admin.get(f"/reports/fms-entries?on={_qback.isoformat()}&gap=1")
+check("a past day opens", _qpast.status_code == 200, _qpast.status_code)
+check("and says so rather than pretending to be today",
+      _qback.strftime("%d/%m/%Y") in _qpast.text)
+check("a flow that did not exist yet is not listed as quiet",
+      f"SMOKE bill to payment {RUN}" not in _qpast.text)
+check("and there is nothing to send about a past day",
+      "Back to today" in _qpast.text and
+      "Send to the list now" not in _qpast.text)
+# An empty email frame under a heading reads as a page that half-loaded.
+check("nor an empty email frame under a heading",
+      "The email itself" not in _qpast.text)
+check("while today still shows the email it would send",
+      "The email itself" in _qpage.text)
+_qfut = admin.get("/reports/fms-entries?on="
+                  + (_qnow + _tdQ(days=30)).isoformat())
+check("a date in the future is pulled back to today",
+      _qfut.status_code == 200 and "Send to the list now" in _qfut.text)
+check("and nonsense in the box does not break it",
+      admin.get("/reports/fms-entries?on=31/02/2026&gap=x").status_code == 200)
+check("one company can be picked out",
+      admin.get(f"/reports/fms-entries?company={_qbids[0]}").status_code == 200)
+check("the lines download as Excel",
+      admin.get("/reports/fms-entries?export=xlsx").headers["content-type"]
+      .startswith("application/vnd.openxmlformats"))
 
 print("\n== a briefing file is not the doer's proof ==")
 # Found while building dictation, and worth its own section because it was
@@ -14732,7 +14781,7 @@ _pagesD = ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
            "/reports/tasks?source=checklist", "/reports/followups",
            "/reports/audit", "/reports/score", "/admin/holidays",
            "/admin/branches", "/escalation", "/escalation/log",
-           "/escalation/quiet", "/escalation/preview", "/cmd", "/detective",
+           "/reports/fms-entries", "/escalation/preview", "/cmd", "/detective",
            "/help", "/bulk"]
 _dirtyD = []
 for _u in _pagesD:
@@ -14908,7 +14957,7 @@ for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
            "/followups", "/reports", "/reports/tasks?source=delegation",
            "/reports/followups", "/reports/audit", "/reports/score",
            "/admin/holidays", "/escalation", "/escalation/log",
-           "/escalation/quiet", "/escalation/preview", "/cmd", "/detective",
+           "/reports/fms-entries", "/escalation/preview", "/cmd", "/detective",
            "/help", "/bulk"]:
     _q, _r = _cost(admin, _u)
     if _r.status_code != 200:
