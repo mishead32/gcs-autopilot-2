@@ -695,7 +695,7 @@ async def create_task(
                    else f"it is {moved_from}")
             db.add(TaskComment(
                 task_id=task.id, author_id=user.id,
-                body=f"Brought forward to {due_dt:%d %b %Y, %I:%M %p} — nobody "
+                body=f"Brought forward to {due_dt:%d/%m/%Y %I:%M %p} — nobody "
                      f"is in on the day you picked ({why}), so it is due the "
                      "working day before rather than being late the day after."))
 
@@ -706,7 +706,7 @@ async def create_task(
     db.commit()
     if len(made) == 1:
         flash.set(request, "assigned",
-                  f"{doers[0].name} — due {made[0].due_at:%d %b, %I:%M %p}")
+                  f"{doers[0].name} — due {made[0].due_at:%d/%m/%Y %I:%M %p}")
         return RedirectResponse(f"/tasks/{made[0].id}", status_code=303)
 
     # Several people: there is no single task to land on, so the assigner is
@@ -872,11 +872,11 @@ def move_due(task_id: int, request: Request, due_at: str = Form(...),
         task.due_at = new_due
         db.add(TaskComment(
             task_id=task.id, author_id=user.id,
-            body=f"Planned date moved: {was:%d %b %Y, %I:%M %p} → "
-                 f"{new_due:%d %b %Y, %I:%M %p}."))
+            body=f"Planned date moved: {was:%d/%m/%Y %I:%M %p} → "
+                 f"{new_due:%d/%m/%Y %I:%M %p}."))
         db.commit()
         flash.set(request, "saved",
-                  f"{task.ref or task.title} — now due {new_due:%d %b, %I:%M %p}")
+                  f"{task.ref or task.title} — now due {new_due:%d/%m/%Y %I:%M %p}")
     return RedirectResponse(
         _safe_return(return_to, lastview.url(request, f"/tasks/{task_id}")),
         status_code=303)
@@ -910,7 +910,7 @@ def edit_task(task_id: int, title: str = Form(...), details: str = Form(""),
     may_move = user.has(Right.CHANGE_DUE_DATE)
     new_due = datetime.fromisoformat(due_at) if (due_at and may_move) else task.due_at
     if may_move and task.due_at != new_due:
-        changes.append(f"due → {new_due.strftime('%d %b %Y, %I:%M %p')}")
+        changes.append(f"due → {new_due.strftime('%d/%m/%Y %I:%M %p')}")
     if task.priority != Priority(priority):
         changes.append(f"priority → {priority}")
 

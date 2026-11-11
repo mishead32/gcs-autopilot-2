@@ -212,8 +212,8 @@ def run_spawn(db: Session, today: date | None = None) -> int:
                                                      rule.branch_id) or "a closed day"
                         db.add(TaskComment(
                             task_id=task.id, author_id=rule.assigner_id,
-                            body=f"This is the {covers:%A %d %b} job, brought "
-                                 f"forward because {covers:%d %b} is {why}."))
+                            body=f"This is the {covers:%A %d/%m/%Y} job, brought "
+                                 f"forward because {covers:%d/%m/%Y} is {why}."))
 
                     notify.queue_task_assigned(db, task)
             except IntegrityError:

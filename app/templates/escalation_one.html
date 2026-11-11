@@ -7,7 +7,7 @@
   <div>
     <h1><span class="chip lvl">{{ esc.label }}</span>
       {{ task.ref or esc.task_id if task else esc.task_id }}</h1>
-    <p class="sub">{{ esc.day.strftime('%A %d %b %Y') }} ·
+    <p class="sub">{{ esc.day|dt('%A %d %b %Y') }} ·
       {{ esc.days_overdue }} day(s) overdue at the time ·
       <span class="chip {{ esc.delivery }}">{{ esc.delivery }}</span></p>
   </div>

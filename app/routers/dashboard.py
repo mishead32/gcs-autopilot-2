@@ -163,7 +163,7 @@ def _team_block(db: Session, user: User) -> dict:
         "awaiting_total": len(awaiting),
         "audit_pending": audit_pending,
         "fu_due": fu_due, "fu_done": fu_done, "fu_missed": fu_due - fu_done,
-        "window": f"{start:%d %b} – {end:%d %b %Y}",
+        "window": f"{start:%d/%m/%Y} – {end:%d/%m/%Y}",
     }
 
 
@@ -219,9 +219,9 @@ def stats(request: Request, date_from: str = "", date_to: str = "",
         from .reports import _score_columns
         return xlsx.book("performance", [
             ("Person-wise", _score_columns(board, "Employee"),
-             board["people"], f"{start:%d %b %Y} to {end:%d %b %Y}"),
+             board["people"], f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"),
             ("Branch-wise", _score_columns(board, "Branch"),
-             board["branches"], f"{start:%d %b %Y} to {end:%d %b %Y}"),
+             board["branches"], f"{start:%d/%m/%Y} to {end:%d/%m/%Y}"),
         ])
 
     all_doers = scoring.selectable_doers(db, user, None)

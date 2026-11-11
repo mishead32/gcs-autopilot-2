@@ -70,7 +70,7 @@
         {% for t in recent %}
         <tr>
           <td class="refcell"><a class="refid" href="/tasks/{{ t.id }}">{{ t.ref or '—' }}</a></td>
-          <td class="whencell">{{ (t.covers_day or t.due_at.date()).strftime('%d %b %Y') }}</td>
+          <td class="whencell">{{ (t.covers_day or t.due_at.date())|dt('%d %b %Y') }}</td>
           <td>{{ t.doer.name }}</td>
           <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}</span></td>
           <td><span class="chip {{ t.status.value }}">{{ t.status.value.replace('_',' ') }}</span></td>

@@ -550,11 +550,14 @@ def when_from(text: str, now: datetime | None = None) -> list[When]:
                 stamp = when.strftime("%Y-%m-%dT%H:%M")
                 if any(w.value == stamp for w in out):
                     return
-                shown = when.strftime("%-d %B") if hasattr(when, "strftime") \
-                    else ""
+                # The date, once. Every other chip here names a day in
+                # words — "tomorrow", "Friday" — and puts the real date
+                # after it; a chip for a date somebody said outright has
+                # no such word, and printing 08/11/2026 twice reads as a
+                # mistake rather than as emphasis.
                 out.append(When(
-                    label=(shown + (f", {hour_word}" if hour_word else ""))
-                          + f" — {when:%a %d %b %Y, %I:%M %p}",
+                    label=((hour_word + " — ") if hour_word else "")
+                          + f"{when:%a %d/%m/%Y %I:%M %p}",
                     value=stamp, phrase=phrase))
                 return
 
@@ -566,7 +569,7 @@ def when_from(text: str, now: datetime | None = None) -> list[When]:
         if any(w.value == stamp for w in out):
             return
         shown = label + (f", {hour_word}" if hour_word else "")
-        out.append(When(label=f"{shown} — {when:%a %d %b, %I:%M %p}",
+        out.append(When(label=f"{shown} — {when:%a %d/%m/%Y %I:%M %p}",
                         value=stamp, phrase=phrase))
 
     if re.search(r"\b(today|aaj|aj)\b", low):

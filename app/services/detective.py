@@ -116,7 +116,7 @@ def scope_words() -> str:
              TaskSource.RECURRING: "Checklist", TaskSource.FLOW: "FMS"}
     kinds = " and ".join(names.get(s, s.value) for s in WATCHED) or "nothing"
     start = _since()
-    return (f"{kinds} work finished on or after {start:%d %b %Y}"
+    return (f"{kinds} work finished on or after {start:%d/%m/%Y}"
             if start else f"{kinds} work")
 
 
@@ -255,7 +255,7 @@ def _task_brief(task: Task) -> str:
     if task.details:
         bits.append(f"WHAT IT ASKED FOR: {task.details}")
     bits.append(f"KIND OF WORK: {task.source.value}")
-    bits.append(f"PLANNED FOR: {task.due_at:%d %b %Y, %I:%M %p}")
+    bits.append(f"PLANNED FOR: {task.due_at:%d/%m/%Y %I:%M %p}")
     bits.append("PROOF WAS: " + ("required" if task.requires_attachment
                                  else "not required"))
     note = (task.completion_note or "").strip()

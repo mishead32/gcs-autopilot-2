@@ -67,7 +67,7 @@ def cmd_board(request: Request, period: str = "this_month",
             ("DEL delayed", lambda r: r[1].timing["delegation"].delayed),
             ("CL on time", lambda r: r[1].timing["recurring"].on_time),
             ("CL delayed", lambda r: r[1].timing["recurring"].delayed),
-        ], rows, f"Position on {today:%d %b %Y} · period {label} · counts of "
+        ], rows, f"Position on {today:%d/%m/%Y} · period {label} · counts of "
                  f"tasks, not score weight")
 
     return templates.TemplateResponse(request, "cmd.html", {

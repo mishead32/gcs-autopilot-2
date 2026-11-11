@@ -391,7 +391,7 @@
         <tr>
           <td style="width:84px"><span class="chip lvl">{{ e.label }}</span></td>
           <td><strong>{{ e.to_name or '—' }}</strong>
-            <div class="m rowsub">{{ e.day.strftime('%d %b %Y') }} ·
+            <div class="m rowsub">{{ e.day|dt('%d %b %Y') }} ·
               {{ e.days_overdue }} day(s) overdue then</div></td>
           <td style="text-align:right">
             <span class="chip {{ e.delivery }}">{{ e.delivery }}</span>

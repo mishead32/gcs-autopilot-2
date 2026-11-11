@@ -27,6 +27,7 @@ columns timezone-aware and convert at the edges. Until then, one office, one
 clock, one function.
 """
 import os
+import re
 from datetime import date, datetime, time, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -48,9 +49,89 @@ def today() -> date:
     return now().date()
 
 
-def stamp(fmt: str = "%d %b %Y, %I:%M %p") -> str:
+# ------------------------------------------------------- how a date reads --
+# One answer, in one place: **dd/mm/yyyy**, everywhere this software writes
+# a date for a person to read.
+#
+# It had grown four spellings — "05 Nov 2026", "Thu 05 Nov", "2026-11-05",
+# "11/05/2026" from the browser's own date box — and the last two are the
+# dangerous pair, because 05/11 and 11/05 are both real dates and neither
+# looks wrong. Somebody reading a deadline has to be able to glance at it
+# and be right, and in this office that means day first.
+#
+# Every display format below is built from these. A format written out by
+# hand at a call site is a format that drifts, so `fmt()` exists to turn
+# any older month-name pattern into its numeric equivalent, and the page
+# filter runs everything through it — including anything added later by
+# somebody who has not read this comment.
+
+DAY = "%d/%m/%Y"                    # 05/11/2026
+WHEN = "%d/%m/%Y %I:%M %p"          # 05/11/2026 06:30 PM
+TIME = "%I:%M %p"                   # 06:30 PM
+#: With the weekday in front, for the few places where which DAY of the
+#: week it falls on is the point — a deadline, a holiday, a roster.
+DAY_NAMED = "%a %d/%m/%Y"
+WHEN_NAMED = "%a %d/%m/%Y %I:%M %p"
+
+#: A month-and-year heading — "November 2026" — is NOT a date and is
+#: left in words. Nobody misreads a month name for a day; the whole point
+#: of the rule below is 05/11 against 11/05, and a heading has neither.
+_MONTH_HEADING = ("%B %Y", "%b %Y")
+
+
+def fmt(pattern: str) -> str:
+    """Any display pattern, rewritten so the date reads dd/mm/yyyy.
+
+    The safety net under the rule above. A call site that still says
+    "%d %b %Y" — or one added next year by somebody who has not read this
+    — comes out as 05/11/2026 regardless, because this is what the page
+    filter and the report writers put every pattern through.
+
+    Two things are deliberately left alone.
+
+    A MACHINE format: "%Y-%m-%d" is what an <input type="date">, a
+    filename and a sort key all require, and quietly turning one of those
+    into dd/mm/yyyy would break the form rather than prettify it.
+
+    A MONTH HEADING: "November 2026" names a month, not a day, and no
+    reader has ever taken it for one.
+    """
+    if not pattern or not any(w in pattern for w in ("%b", "%B")):
+        return pattern
+    if pattern.strip() in _MONTH_HEADING:
+        return pattern
+    out = pattern
+    for month in ("%B", "%b"):
+        for dd in ("%d", "%-d"):
+            out = out.replace(f"{dd} {month} %Y", DAY)
+            out = out.replace(f"{dd} {month}, %Y", DAY)
+            out = out.replace(f"{dd} {month}", DAY)      # year added below
+        out = out.replace(f"{month} %d, %Y", DAY)
+        out = out.replace(f"{month} %d", DAY)
+        out = out.replace(month, "%m")
+    # Never a bare day and month. "05/11" is the shape this rule exists to
+    # get rid of: without the year it is still two numbers somebody has to
+    # guess at, and the four characters it saves are not worth that.
+    out = re.sub(r"%d/%m(?!/%Y)", DAY, out)
+    # "05/11/2026, 06:30 PM" — the comma was there to separate a month
+    # name from a time and reads as clutter between two numbers.
+    out = out.replace("%Y, %I", "%Y %I")
+    return out
+
+
+def day(value) -> str:
+    """A date, as this office reads one. "" for nothing."""
+    return value.strftime(DAY) if value is not None else ""
+
+
+def when(value) -> str:
+    """A date and a time, as this office reads one. "" for nothing."""
+    return value.strftime(WHEN) if value is not None else ""
+
+
+def stamp(pattern: str = WHEN) -> str:
     """Current IST time, formatted — for 'last updated' lines."""
-    return now().strftime(fmt)
+    return now().strftime(fmt(pattern))
 
 
 # --------------------------------------------------------------- spans ----

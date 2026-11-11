@@ -28,7 +28,7 @@
   <div class="kpi {{ 'bad' if grand.missed else 'ok' }}"><div class="n">{{ grand.missed }}</div>
     <div class="l">Follow-up pending</div></div>
   <div class="kpi total"><div class="n">{{ grand.rate }}%</div>
-    <div class="l">Chased</div><div class="m">{{ start.strftime('%d %b') }} – {{ end.strftime('%d %b %Y') }}</div></div>
+    <div class="l">Chased</div><div class="m">{{ start|dt('%d %b') }} – {{ end|dt('%d %b %Y') }}</div></div>
 </div>
 
 <h2>By desk</h2>
@@ -62,7 +62,7 @@
     <th></th></tr>
   {% for r in days %}
   <tr>
-    <td><a href="/followups?day={{ r.day.isoformat() }}">{{ r.day.strftime('%a %d %b') }}</a></td>
+    <td><a href="/followups?day={{ r.day.isoformat() }}">{{ r.day|dt('%a %d %b') }}</a></td>
     {% for k in desks %}
     <td>{{ r.desks[k].due }}</td>
     <td class="good-n">{{ r.desks[k].done }}</td>

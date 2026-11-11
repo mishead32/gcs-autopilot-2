@@ -40,7 +40,7 @@
     <span class="m">
       {% if span > 1 %}Showing <strong>{{ span }} days</strong> as a summary.
         Pick a single day — the same date in both boxes — to tick tasks off.
-      {% else %}Showing <strong>{{ 'today' if is_today else day.strftime('%a %d %b %Y') }}</strong>.
+      {% else %}Showing <strong>{{ 'today' if is_today else day|dt('%a %d %b %Y') }}</strong>.
         Widen the dates to see a day-by-day summary.{% endif %}
     </span>
     <span class="fb-sp"></span>
@@ -113,7 +113,7 @@
       <th>Chased by</th><th></th></tr>
   {% for r in range_rows %}
   <tr>
-    <td><strong>{{ r.day.strftime('%a %d %b %Y') }}</strong></td>
+    <td><strong>{{ r.day|dt('%a %d %b %Y') }}</strong></td>
     <td>{{ r.due }}</td>
     <td class="good-n">{{ r.done }}</td>
     <td class="{{ 'overdue' if r.missed }}">{{ r.missed }}</td>
@@ -126,7 +126,7 @@
 
 {% else %}
 <div class="sect">
-  <div class="sect-head"><h2>{{ cfg.label }} — {{ day.strftime('%d %b %Y') }}</h2>
+  <div class="sect-head"><h2>{{ cfg.label }} — {{ day|dt('%d %b %Y') }}</h2>
     <span class="count {{ 'bad' if show == 'pending' and tasks }}">
       {{ tasks|length }}{% if tasks|length != total %} of {{ total }}{% endif %}</span>
     {% if show != 'all' or when != 'all' %}

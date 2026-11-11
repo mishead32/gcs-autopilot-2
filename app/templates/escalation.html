@@ -146,7 +146,7 @@
       web process, or pressing the button by hand cannot send the same
       morning twice.
       {% if org.esc_last_run %}
-      Last run <strong>{{ org.esc_last_run.strftime('%d %b %Y') }}</strong>.
+      Last run <strong>{{ org.esc_last_run|dt('%d %b %Y') }}</strong>.
       {% else %}It has not run yet.{% endif %}
     </div>
 
@@ -211,7 +211,7 @@
       Later than the escalation hour is usually right, so the two arrive in
       order: what is overdue first, then what was never started.
       {% if org.quiet_last_run %}
-      Last sent <strong>{{ org.quiet_last_run.strftime('%d %b %Y') }}</strong>.
+      Last sent <strong>{{ org.quiet_last_run|dt('%d %b %Y') }}</strong>.
       {% else %}It has not run yet.{% endif %}
     </div>
 
@@ -301,7 +301,7 @@
           <td><a href="/escalation/mail/{{ e.id }}">{{ e.to_name }}</a>
             {% if e.to_doer %}<span class="chip">own work</span>{% endif %}</td>
           <td class="m">{{ e.task_count }} task(s)</td>
-          <td class="m">{{ e.day.strftime('%d %b') }}</td>
+          <td class="m">{{ e.day|dt('%d %b') }}</td>
           <td><span class="chip {{ e.status }}">{{ e.status }}</span></td>
         </tr>
         {% endfor %}

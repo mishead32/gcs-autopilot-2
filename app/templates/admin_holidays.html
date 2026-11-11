@@ -36,13 +36,13 @@
       <tr><th>Date</th><th>Day</th><th>Holiday</th><th>Applies to</th><th></th></tr>
       {% for h in holidays %}
       <tr class="{{ 'past' if h.day < today }}">
-        <td style="white-space:nowrap"><strong>{{ h.day.strftime('%d %b %Y') }}</strong></td>
-        <td>{{ h.day.strftime('%A') }}</td>
+        <td style="white-space:nowrap"><strong>{{ h.day|dt('%d %b %Y') }}</strong></td>
+        <td>{{ h.day|dt('%A') }}</td>
         <td>{{ h.name }}</td>
         <td>{% if h.branch %}<span class="chip">{{ h.branch.name }}</span>
             {% else %}<span class="chip normal">All branches</span>{% endif %}</td>
         <td><form method="post" action="/admin/holidays/{{ h.id }}/delete"
-                  onsubmit="return confirm('Remove {{ h.name }} on {{ h.day.strftime('%d %b %Y') }}?')">
+                  onsubmit="return confirm('Remove {{ h.name }} on {{ h.day|dt('%d %b %Y') }}?')">
               <button class="btn sm ghost">Remove</button></form></td>
       </tr>
       {% endfor %}

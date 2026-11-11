@@ -208,7 +208,7 @@ def _draw(draw, title, subtitle, counts, sections, note) -> int:
                 draw.text((x, ty), str(task.ref_label or task.id),
                           font=f_mono, fill=BRAND)
                 x += COLS[0].width + 12
-                draw.text((x, ty), task.due_at.strftime("%d %b %Y"),
+                draw.text((x, ty), task.due_at.strftime("%d/%m/%Y"),
                           font=f_cell, fill=INK)
                 draw.text((x, ty + f_cell.size + 4),
                           task.due_at.strftime("%I:%M %p"), font=f_small,

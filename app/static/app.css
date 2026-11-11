@@ -1507,3 +1507,9 @@ table.fmsboard .fmsb-when{white-space:nowrap}
   padding:0 8px;background:#f1f5f9}
 .att .thumb.file.sound audio{width:100%;height:36px}
 .vn-done{margin-top:10px;color:var(--ok);font-weight:600}
+
+/* What a browser's own date box really holds, said in dd/mm/yyyy under it.
+   Only drawn on a browser that is not already day-first — see datefmt.js. */
+.datefmt{font-size:11px;margin-top:3px;letter-spacing:.2px}
+.datefmt:empty{display:none}
+.datefmt.advice{color:var(--warn);white-space:nowrap;cursor:help}

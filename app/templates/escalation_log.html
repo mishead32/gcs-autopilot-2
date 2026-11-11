@@ -65,7 +65,7 @@
     <th>Overdue</th><th>Went to</th><th>Delivery</th><th></th></tr>
   {% for e in rows %}
   <tr>
-    <td style="white-space:nowrap">{{ e.day.strftime('%d %b %Y') }}</td>
+    <td style="white-space:nowrap">{{ e.day|dt('%d %b %Y') }}</td>
     <td><span class="chip lvl">{{ e.label }}</span></td>
     <td class="refcell"><a class="refid" href="/tasks/{{ e.task_id }}">
       {{ e.task.ref or e.task_id if e.task else e.task_id }}</a></td>
@@ -103,7 +103,7 @@
     <th>Delivery</th><th></th></tr>
   {% for m in mails %}
   <tr>
-    <td style="white-space:nowrap">{{ m.day.strftime('%d %b %Y') }}
+    <td style="white-space:nowrap">{{ m.day|dt('%d %b %Y') }}
       <div class="m rowsub">{{ m.created_at|dt('%I:%M %p') }}</div></td>
     <td><span class="chip lvl">{{ m.label }}</span></td>
     <td><a href="/escalation/mail/{{ m.id }}"><strong>{{ m.to_name or '—' }}</strong></a>

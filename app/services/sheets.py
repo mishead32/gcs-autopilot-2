@@ -201,7 +201,7 @@ def _scores(db: Session, org_id: int):
             cells += [s.not_done_penalty, s.late_penalty, s.subtotal]
         cells += [c.false_penalty, c.total_penalty, c.score,
                   c.planned, c.completed, c.overdue_now,
-                  f"{start:%d %b} – {end:%d %b %Y}"]
+                  f"{start:%d/%m/%Y} – {end:%d/%m/%Y}"]
         out.append(cells)
     return head, out
 

@@ -6,7 +6,7 @@
 <div class="page-head">
   <div>
     <h1><span class="chip lvl">{{ mail.label }}</span> {{ mail.to_name or '—' }}</h1>
-    <p class="sub">{{ mail.day.strftime('%A %d %b %Y') }} ·
+    <p class="sub">{{ mail.day|dt('%A %d %b %Y') }} ·
       {{ mail.task_count }} task(s) ·
       <span class="chip {{ mail.status }}">{{ mail.status }}</span>
       {% if mail.to_doer %} · their own work only{% endif %}</p>

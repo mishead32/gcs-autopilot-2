@@ -1385,7 +1385,7 @@ class Task(Base):
     @property
     def covers_label(self) -> str:
         """"Sunday 04 Oct" — the day this one is actually for."""
-        return f"{self.covers_day:%A %d %b}" if self.covers_day else ""
+        return f"{self.covers_day:%A %d/%m/%Y}" if self.covers_day else ""
 
     @property
     def was_on_time(self) -> bool | None:
@@ -1874,7 +1874,7 @@ class RecurringRule(Base):
             return f"Every {self.weekday_words}"
         if f == Recurrence.FORTNIGHTLY:
             every = f"Every second {self.weekday_words}"
-            return (f"{every}, counting from {self.anchor_on:%d %b %Y}"
+            return (f"{every}, counting from {self.anchor_on:%d/%m/%Y}"
                     if self.anchor_on else every)
         if f in (Recurrence.MONTHLY, Recurrence.QUARTERLY):
             if self.month_mode == MonthMode.WEEKDAY:

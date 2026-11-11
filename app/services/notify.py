@@ -46,5 +46,5 @@ def queue_task_assigned(db: Session, task: Task) -> None:
         db, task.doer, "task_assigned", task,
         title=task.title,
         priority=task.priority.value.upper(),
-        due=task.due_at.strftime("%d %b %Y, %I:%M %p"),
+        due=task.due_at.strftime("%d/%m/%Y %I:%M %p"),
     )

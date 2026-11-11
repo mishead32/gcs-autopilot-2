@@ -628,7 +628,7 @@ def add_holiday(day: str = Form(...), name: str = Form(...),
         Holiday.branch_id.is_(None) if bid is None else Holiday.branch_id == bid))
     if clash:
         raise HTTPException(
-            400, f"{d:%d %b %Y} is already marked as '{clash.name}' for that scope.")
+            400, f"{d:%d/%m/%Y} is already marked as '{clash.name}' for that scope.")
 
     db.add(Holiday(org_id=user.org_id, branch_id=bid, day=d, name=name))
     db.commit()
