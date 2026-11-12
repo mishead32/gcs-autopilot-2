@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import clock
 from ..models import (
     CONTEXT_PEOPLE,
+    Branch,
     Department, Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus,
     TaskSource, User
 )
@@ -247,6 +248,53 @@ def missing_positions(db: Session, flow: Flow, branch_id: int | None) -> list[st
         if step.doer_dept not in gaps:
             gaps.append(step.doer_dept)
     return gaps
+
+
+def start_blockers(db: Session, flow: Flow, branch_id: int | None) -> list[str]:
+    """Why this flow cannot be started for this company, in plain sentences.
+
+    One place, because there are three ways into a run — the form, a
+    spreadsheet, and a live Google Sheet — and for a long time only the
+    form asked. The other two called start_flow directly, so a run whose
+    Accounts step nobody at that company holds was created anyway and the
+    step fell to whoever started it. On screen the step still read
+    "whoever is in Accounts", which is how an Accounts step ends up with
+    somebody who has never been in Accounts and nothing anywhere says so.
+
+    Returned rather than raised so each caller can use it its own way: the
+    form refuses with it, the spreadsheet marks the row with it before
+    anything exists, and start_flow raises on it as the backstop that
+    makes the other two impossible to forget.
+    """
+    bad: list[str] = []
+    company = db.get(Branch, branch_id) if branch_id else None
+    name = company.name if company else "That company"
+
+    # A decision has to come down to ONE person: two people choosing two
+    # different outcomes is a flow that must go two ways at once.
+    for step in flow.steps:
+        if not (step.is_decision and step.doer_dept):
+            continue
+        holders = dept_people(db, flow.org_id, branch_id, step.doer_dept)
+        if len(holders) > 1:
+            bad.append(
+                f"Step {step.position} ({step.title}) is a decision step, "
+                f"and {name} has {len(holders)} people in {step.doer_dept}: "
+                + ", ".join(h.name for h in holders) +
+                ". Two of them could choose two different outcomes, so the "
+                "flow would have to go both ways at once. Either give that "
+                "step one person by name, or leave one person in that "
+                "department at this company.")
+
+    gaps = missing_positions(db, flow, branch_id)
+    if gaps:
+        bad.append(
+            f"{name} has nobody in {', '.join(gaps)}. Either add the person "
+            "under Setup → Users with that company and department, or — if "
+            f"somebody at another company already does {name} as well — "
+            f"open their record and tick {name} under \u201cAlso covers "
+            "these companies\u201d.")
+    return bad
 
 
 def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep,
@@ -595,6 +643,43 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
             return None
         return _open_step(db, inst, step, fallback, assigner)
 
+    # A step given to a POSITION was planned when the run started, and
+    # people move. Who holds it is asked again here, at the moment the
+    # step actually opens, because the plan can be weeks old: the company
+    # may have hired its own accountant since, or the person the plan
+    # names may have left that department altogether. Without this the
+    # step opens for whoever was planned and still calls itself Accounts,
+    # which is an Accounts step sitting with somebody who is not in
+    # Accounts and nothing anywhere saying so.
+    #
+    # Only rows that are still WAITING and untouched are re-pointed —
+    # anything somebody has already started belongs to them.
+    if step.doer_dept:
+        held = {u.id for u in step_people(db, inst, step)}
+        stale = [t for t in live
+                 if t.flow_waiting and not _touched(t)
+                 and t.doer_id not in held]
+        if held and stale and not any(t.doer_id in held for t in live):
+            for t in stale:
+                db.delete(t)
+            db.flush()
+            return _open_step(db, inst, step, fallback, assigner)
+        if not held and stale:
+            # Nobody is in it now. The work stays where it was planned
+            # rather than being moved for the sake of it, but the person
+            # holding it is told, once.
+            said = f"meant for whoever is in {step.doer_dept}"
+            for t in stale:
+                if any(said in (c.body or "") for c in t.comments):
+                    continue
+                db.add(TaskComment(
+                    task_id=t.id, author_id=assigner.id,
+                    body=(f"This step is {said} at this company, and right "
+                          "now nobody is. It has stayed with you because "
+                          "that is who the run planned it for. Put somebody "
+                          f"in {step.doer_dept} under Setup → Users and "
+                          "later runs will go to them.")))
+
     first = None
     for t in live:
         if not t.flow_waiting:
@@ -796,6 +881,14 @@ def start_flow(db: Session, flow: Flow, reference: str, starter: User,
     if not flow.steps:
         raise ValueError("This flow has no steps configured.")
 
+    # The backstop. The form asks this before it gets here, but the
+    # spreadsheet and the live sheet used to call straight through, and a
+    # run started with an unfilled position hands that step to whoever
+    # started it while still calling it the position's work.
+    blocked = start_blockers(db, flow, branch_id or flow.branch_id)
+    if blocked:
+        raise ValueError(" ".join(blocked))
+
     reference = (reference or "").strip() or reference_from(flow, context)
 
     inst = FlowInstance(
@@ -849,11 +942,25 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
         people = [db.get(User, override)]
     else:
         people = step_people(db, inst, step)
+    handed_over = ""
     if not people:
         # A step assigned to a position should never get here — the run was
         # refused at the start if the company had nobody in it. If it does
         # (somebody left, mid-run), the work still has to go somewhere, and
         # the person in front of it is a better answer than nowhere.
+        #
+        # Said out loud on the task, though. Silently it reads as an
+        # Accounts step sitting with somebody who has never been in
+        # Accounts, and the person holding it has no way to know it was
+        # meant for somebody else — which is how work gets done by the
+        # wrong person for weeks and nobody can say why.
+        if step.doer_dept:
+            handed_over = (
+                f"This step is meant for whoever is in {step.doer_dept} at "
+                "this company, and right now nobody is. It has come to you "
+                "because you had the step before it. Put somebody in "
+                f"{step.doer_dept} under Setup → Users and later runs will "
+                "go to them.")
         people = [fallback]
 
     # A decision step comes down to ONE person. Two people choosing two
@@ -879,6 +986,10 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
         return made
 
     made = [_spawn_step_task(db, inst, step, p, assigner) for p in people]
+    if handed_over:
+        for t in made:
+            db.add(TaskComment(task_id=t.id, author_id=assigner.id,
+                               body=handed_over))
     return made[0]
 
 

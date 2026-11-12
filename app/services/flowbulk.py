@@ -334,6 +334,10 @@ def read_rows(db: Session, flow: Flow, heads: dict, raw_rows, first: int
 
     branches = {b.name.strip().lower(): b for b in db.scalars(
         select(Branch).where(Branch.org_id == flow.org_id)).all()}
+    # Four hundred rows for the same company ask the same question four
+    # hundred times otherwise, and the answer cannot change mid-file.
+    from .flows import start_blockers
+    _cannot: dict[int, list[str]] = {}
 
     for n, raw in enumerate(raw_rows, start=first):
         if not raw or all(_cell(v) == "" for v in raw):
@@ -392,6 +396,18 @@ def read_rows(db: Session, flow: Flow, heads: dict, raw_rows, first: int
         if row.people:
             row.context[CONTEXT_PEOPLE] = dict(row.people)
         row.name = _name_for(flow, row.context)
+
+        # Can this row's company actually staff this flow? Asked here, on
+        # the check page, rather than left to start_flow — the whole point
+        # of a separate check is that four hundred rows are resolved,
+        # including WHO each step goes to, before any of it exists. A row
+        # whose company has nobody in Accounts is a row that would hand an
+        # Accounts step to whoever uploaded the file.
+        if not row.problems and (row.branch_id or flow.branch_id):
+            key = row.branch_id or flow.branch_id
+            if key not in _cannot:
+                _cannot[key] = start_blockers(db, flow, key)
+            row.problems.extend(_cannot[key])
         out.rows.append(row)
 
     return out

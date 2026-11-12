@@ -1302,33 +1302,9 @@ async def start_flow(flow_id: int, request: Request,
     # A decision step has to come down to ONE person: two people choosing
     # two different outcomes is a flow that must go two ways at once. With a
     # position that is only knowable now, when the company is.
-    for step in flow.steps:
-        if not (step.is_decision and step.doer_dept):
-            continue
-        holders = flow_svc.dept_people(db, flow.org_id, run_branch,
-                                       step.doer_dept)
-        if len(holders) > 1:
-            company = db.get(Branch, run_branch)
-            raise HTTPException(
-                400, f"Step {step.position} ({step.title}) is a decision "
-                     f"step, and {company.name if company else 'that company'} "
-                     f"has {len(holders)} people in {step.doer_dept}: "
-                     + ", ".join(h.name for h in holders) +
-                     ". Two of them could choose two different outcomes, so "
-                     "the flow would have to go both ways at once. Either "
-                     "give that step one person by name, or leave one person "
-                     "in that department at this company.")
-    gaps = flow_svc.missing_positions(db, flow, run_branch)
-    if gaps:
-        company = db.get(Branch, run_branch)
-        raise HTTPException(
-            400, f"{company.name if company else 'That company'} has nobody "
-                 f"in {', '.join(gaps)}. Either add the person under "
-                 f"Setup → Users with that company and department, or — if "
-                 f"somebody at another company already does "
-                 f"{company.name if company else 'it'} as well — open their "
-                 f"record and tick {company.name if company else 'this company'} "
-                 "under “Also covers these companies”.")
+    blocked = flow_svc.start_blockers(db, flow, run_branch)
+    if blocked:
+        raise HTTPException(400, " ".join(blocked))
 
     # Whatever this particular flow asks for at the start — a bill number, a
     # member name — goes straight into the run's context, where every later

@@ -9082,6 +9082,43 @@ check("the refusal now mentions ticking an existing person instead",
                                   data={"reference": f"SMOKE POS GONE {RUN}",
                                         "run_branch": str(_brDid)}).text)
 
+print("\n== and the form is not the only way in ==")
+# Reported from the live site: a Bill to Payment step that reads "whoever
+# is in Accounts" was sitting with somebody who is not in Accounts, on run
+# after run. The form refused a company with nobody in the position; the
+# spreadsheet and the live Google Sheet called start_flow directly and
+# never asked. So the run was created, the step found nobody, and the
+# fallback handed it to whoever started it — still labelled Accounts.
+from sqlalchemy import select as _selP
+from app.models import (Flow as _FlP, FlowInstance as _FIP, User as _UsP)
+with _slQ() as _d:
+    _runsBefore = len(_d.scalars(
+        _selP(_FIP).where(_FIP.flow_id == _pFid)).all())
+try:
+    with _slQ() as _d:
+        _fl = _d.get(_FlP, _pFid)
+        _me = _d.scalar(_selP(_UsP).where(_UsP.email == "mis@gcs.local"))
+        _fsvP.start_flow(_d, _fl, "", _me, context={}, branch_id=_brDid)
+        _d.commit()
+    _bulkRefused = False
+except ValueError as _exc:
+    _bulkRefused = "nobody in" in str(_exc)
+check("starting one straight from code is refused the same way",
+      _bulkRefused, "a run was created with the position unfilled")
+with _slQ() as _d:
+    check("and nothing was created by the attempt",
+          len(_d.scalars(_selP(_FIP).where(_FIP.flow_id == _pFid)).all())
+          == _runsBefore)
+with _slQ() as _d:
+    _fl = _d.get(_FlP, _pFid)
+    check("the reason is one sentence, not a stack trace",
+          _fsvP.start_blockers(_d, _fl, _brDid)
+          and "nobody in" in _fsvP.start_blockers(_d, _fl, _brDid)[0],
+          _fsvP.start_blockers(_d, _fl, _brDid))
+    check("and a company that CAN staff it is not blocked",
+          _fsvP.start_blockers(_d, _fl, _brCid) == [],
+          _fsvP.start_blockers(_d, _fl, _brCid))
+
 
 print("\n== the whole run is planned out the moment the form is submitted ==")
 # The complaint: a four-step flow showed step 1 and nothing else. The person
@@ -11108,15 +11145,36 @@ with _slP() as _d:
 
     _casesP = [
         ("every step names a person", "named", _bipsIdP, False),
+        # Not provisional any more, and that is the point of the fix: a
+        # run cannot START with the position unfilled, so a position step
+        # always has a real person on it when the plan is drawn. The
+        # holder leaving afterwards leaves the plan pointing at them —
+        # the step is re-pointed when it actually opens, which is the
+        # section below.
         ("steps 2-8 name a position nobody holds there", "position",
-         _bipsIdP, True),
+         _bipsIdP, False),
         ("steps 2-8 name nobody at all", "nobody", _bipsIdP, True),
     ]
     for _labelP, _howP, _branchP, _provP in _casesP:
         _flowP = _build8(_d, f"SMOKE 8-step {_howP} {RUN}", _howP, _k1P,
                          extra=_k2P)
+        # A run can no longer be STARTED for a company that has nobody in
+        # a position the flow needs — that was the live bug: the form
+        # refused it, the spreadsheet did not, and the step then fell to
+        # whoever uploaded the file while still reading "Accounts". The
+        # state this section is about is reached the other way, which is
+        # the way it happens in an office: staffed at the start, and the
+        # person leaves while the run is still going.
+        if _howP == "position":
+            _k1P.set_extra_branches([_branchP])
+            _d.commit()
         _instP = _fsvP.start_flow(_d, _flowP, f"SMOKE {_howP} {RUN}", _bossP,
                                   branch_id=_branchP)
+        if _howP == "position":
+            _k1P.set_extra_branches([])
+            _d.commit()
+            _fsvP.replan(_d, _instP, _bossP)
+            _d.commit()
         _rowsP = _d.scalars(_SELP(_TkP).where(
             _TkP.flow_instance_id == _instP.id)).all()
         _posP = sorted({t.flow_step.position for t in _rowsP})
@@ -11160,6 +11218,125 @@ with _slP() as _d:
                           for t in _laterP))
         if _howP == "nobody":
             _instNobodyP = _instP.id
+
+# ------------------------------- and when the holder leaves mid-run ------
+# The run was staffed when it started, so the plan names a real person.
+# If they stop covering that company before the step opens, the work still
+# has to go somewhere — but the person it lands on must be TOLD, or an
+# Accounts step sits with somebody who has never been in Accounts and
+# nothing anywhere says why.
+with _slP() as _d:
+    _brGapP = _BrP(org_id=_bossP.org_id, name=f"SMOKE gap co {RUN}")
+    _d.add(_brGapP); _d.flush()
+    _depGapP = _DpP(org_id=_bossP.org_id, branch_id=_brGapP.id,
+                    name=f"SMOKE GAPDEPT {RUN}")
+    _d.add(_depGapP); _d.flush()
+    _holderP = _d.scalar(_SELP(_UsP).where(_UsP.email == "amit@gcs.local"))
+    _wasDeptP, _wasExtraP = _holderP.department_id, _holderP.also_branch_ids
+    _holderP.department_id = _depGapP.id
+    _holderP.set_extra_branches([_brGapP.id])
+    _d.commit()
+
+    _gapFlowP = _FlP(org_id=_bossP.org_id, name=f"SMOKE gap flow {RUN}",
+                     active=True, branch_id=None)
+    _d.add(_gapFlowP); _d.flush()
+    _d.add(_FsP(flow_id=_gapFlowP.id, position=1, title="First",
+                priority=_PrP.MEDIUM, tat_unit="days", tat_value=1,
+                default_doer_id=_k1P.id, requires_attachment=False))
+    _d.add(_FsP(flow_id=_gapFlowP.id, position=2, title="The position one",
+                priority=_PrP.MEDIUM, tat_unit="days", tat_value=1,
+                doer_dept=_depGapP.name, requires_attachment=False))
+    _d.commit()
+
+    _gapInstP = _fsvP.start_flow(_d, _gapFlowP, f"SMOKE gap {RUN}", _bossP,
+                                 branch_id=_brGapP.id)
+    _d.commit()
+    check("a run starts while the position is held",
+          _gapInstP is not None)
+
+    # Now the holder stops covering that company, before step 2 opens.
+    _holderP.set_extra_branches([])
+    _holderP.department_id = _wasDeptP
+    _d.commit()
+    _step1P = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _gapInstP.id)).all()
+        if t.flow_step.position == 1][0]
+    _step1P.status = _StP.COMPLETED
+    _d.flush()
+    _fsvP.advance_flow(_d, _step1P)
+    _d.commit()
+    _step2P = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _gapInstP.id)).all()
+        if t.flow_step.position == 2 and not t.flow_waiting]
+    check("step 2 still opens rather than vanishing", bool(_step2P),
+          "the run stalled when the position emptied")
+    if _step2P:
+        _noteP = " ".join(c.body for c in _step2P[0].comments)
+        check("and the person it fell to is told why they have it",
+              _depGapP.name in _noteP and "nobody is" in _noteP,
+              _noteP[:160] or "(no comment on the task)")
+    _holderP.also_branch_ids = _wasExtraP
+    _d.commit()
+
+# The other way round: the company hires its own while the run is going.
+# The plan names the stand-in; the step must open for the new person, not
+# for whoever was written down three weeks ago.
+with _slP() as _d:
+    _brHireP = _BrP(org_id=_bossP.org_id, name=f"SMOKE hire co {RUN}")
+    _d.add(_brHireP); _d.flush()
+    _depHireP = _DpP(org_id=_bossP.org_id, branch_id=_brHireP.id,
+                     name=f"SMOKE HIREDEPT {RUN}")
+    _d.add(_depHireP); _d.flush()
+    _standinP = _d.scalar(_SELP(_UsP).where(_UsP.email == "meena@gcs.local"))
+    _standinWasP = (_standinP.department_id, _standinP.also_branch_ids)
+    _standinP.department_id = _depHireP.id
+    _standinP.set_extra_branches([_brHireP.id])
+    _d.commit()
+
+    _hireFlowP = _FlP(org_id=_bossP.org_id, name=f"SMOKE hire flow {RUN}",
+                      active=True, branch_id=None)
+    _d.add(_hireFlowP); _d.flush()
+    _d.add(_FsP(flow_id=_hireFlowP.id, position=1, title="First",
+                priority=_PrP.MEDIUM, tat_unit="days", tat_value=1,
+                default_doer_id=_k1P.id, requires_attachment=False))
+    _d.add(_FsP(flow_id=_hireFlowP.id, position=2, title="The position one",
+                priority=_PrP.MEDIUM, tat_unit="days", tat_value=1,
+                doer_dept=_depHireP.name, requires_attachment=False))
+    _d.commit()
+    _hireInstP = _fsvP.start_flow(_d, _hireFlowP, f"SMOKE hire {RUN}",
+                                  _bossP, branch_id=_brHireP.id)
+    _d.commit()
+    _planned2P = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _hireInstP.id)).all()
+        if t.flow_step.position == 2]
+    check("the plan names the stand-in while they are the only one",
+          all(t.doer_id == _standinP.id for t in _planned2P),
+          [t.doer.name for t in _planned2P])
+
+    # The company hires its own, and the stand-in stops covering it.
+    _ownP = _UsP(org_id=_bossP.org_id, name=f"SMOKE Own Acct {RUN}",
+                 email=f"own.acct.{RUN}@gcs.local", branch_id=_brHireP.id,
+                 department_id=_depHireP.id, active=True,
+                 password_hash=_hpP("gcs1234"), role=_RoP.DOER)
+    _ownP.set_rights([])
+    _d.add(_ownP); _d.commit()
+
+    _s1hP = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _hireInstP.id)).all()
+        if t.flow_step.position == 1][0]
+    _s1hP.status = _StP.COMPLETED
+    _d.flush()
+    _fsvP.advance_flow(_d, _s1hP)
+    _d.commit()
+    _live2P = [t for t in _d.scalars(_SELP(_TkP).where(
+        _TkP.flow_instance_id == _hireInstP.id)).all()
+        if t.flow_step.position == 2 and not t.flow_waiting
+        and t.status in (_StP.PENDING, _StP.IN_PROGRESS)]
+    check("and when it opens it goes to the company's own person",
+          bool(_live2P) and all(t.doer_id == _ownP.id for t in _live2P),
+          [t.doer.name for t in _live2P] or "step 2 did not open")
+    _standinP.department_id, _standinP.also_branch_ids = _standinWasP
+    _d.commit()
 
 # A provisional task is the software's own guesswork, not somebody's work,
 # so the plan must still be free to re-date it and to drop it when a
