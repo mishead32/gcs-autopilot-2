@@ -5,7 +5,7 @@ existing midap.db keeps its data across upgrades. Runs automatically on
 startup. (Swap for Alembic when the schema starts changing in ways that need
 real up/down migrations.)
 """
-from sqlalchemy import text, inspect
+from sqlalchemy import bindparam, text, inspect
 from sqlalchemy import Enum as SAEnum
 
 from .db import engine, Base
@@ -508,6 +508,7 @@ def run() -> list[str]:
         # number their submission has just been given.
         applied += _number_runs(conn, inspect(conn), existing_tables)
         applied += _dedupe_checklist_tasks(conn, existing_tables)
+        applied += _cancel_phantom_flow_steps(conn, existing_tables)
 
     applied += _lock_checklist_days(existing_tables)
     return applied
@@ -524,6 +525,71 @@ TASK_CHILDREN = [
     ("outbound_messages", "task_id", "NULL"),
     ("help_tickets", "task_id", "NULL"),
 ]
+
+
+def _cancel_phantom_flow_steps(conn, existing_tables: set) -> list[str]:
+    """Clear the copies left behind by the replan bug.
+
+    Any step of a run may be marked early, and people do — step 5 gets
+    done on Monday because the paperwork is in front of them. Redrawing
+    the plan asked "does this step have a task?" and counted only LIVE
+    work, so a step somebody had finished looked unplanned and was given
+    a fresh task: pending, new deadline, for work that was done. Again
+    every time the run moved. Fixed in replan; this clears what it made.
+
+    Deliberately narrow, because the one thing worse than a phantom task
+    is deleting a real one:
+
+      * same run, same step, SAME PERSON — a second doer's task is their
+        own work, not a copy of somebody else's
+      * both rows still sitting on the PLAN (flow_waiting) — a step the
+        run has already walked through and come back to is a rework
+        loop, and its new task is real
+      * the finished one really is finished, and the copy is untouched:
+        nothing handed in, nothing closed, no note, no auditor, no
+        comment, no file
+
+    Cancelled rather than deleted. A cancelled task is parked: it chases
+    nobody, reddens nothing and counts against no score, but the row is
+    still there to be looked at if anybody asks what happened.
+    """
+    if "tasks" not in existing_tables:
+        return []
+    cols = {c["name"] for c in inspect(conn).get_columns("tasks")}
+    if not {"flow_instance_id", "flow_step_id", "flow_waiting"} <= cols:
+        return []
+
+    rows = conn.execute(text(
+        "SELECT t.id FROM tasks t "
+        "WHERE t.flow_instance_id IS NOT NULL "
+        "  AND t.flow_step_id IS NOT NULL "
+        "  AND t.flow_waiting = :yes "
+        "  AND UPPER(CAST(t.status AS VARCHAR)) IN ('PENDING', 'IN_PROGRESS') "
+        "  AND t.submitted_at IS NULL AND t.closed_at IS NULL "
+        "  AND t.completion_note IS NULL AND t.auditor_id IS NULL "
+        "  AND NOT EXISTS (SELECT 1 FROM task_comments c "
+        "                  WHERE c.task_id = t.id) "
+        "  AND NOT EXISTS (SELECT 1 FROM attachments a "
+        "                  WHERE a.task_id = t.id) "
+        "  AND EXISTS (SELECT 1 FROM tasks d "
+        "              WHERE d.flow_instance_id = t.flow_instance_id "
+        "                AND d.flow_step_id = t.flow_step_id "
+        "                AND d.doer_id = t.doer_id "
+        "                AND d.id <> t.id "
+        "                AND d.flow_waiting = :yes "
+        "                AND UPPER(CAST(d.status AS VARCHAR)) "
+        "                    IN ('COMPLETED', 'SUBMITTED'))"),
+        {"yes": True}).all()
+    if not rows:
+        return []
+    ids = [r[0] for r in rows]
+    for n in range(0, len(ids), 200):
+        chunk = ids[n:n + 200]
+        conn.execute(
+            text("UPDATE tasks SET status = 'CANCELLED' WHERE id IN :ids")
+            .bindparams(bindparam("ids", expanding=True)), {"ids": chunk})
+    return [f"{len(ids)} duplicate FMS step task(s) cancelled — the step "
+            "was already finished by the same person"]
 
 
 def _dedupe_checklist_tasks(conn, existing_tables: set) -> list[str]:

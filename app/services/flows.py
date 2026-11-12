@@ -30,8 +30,8 @@ from .. import clock
 from ..models import (
     CONTEXT_PEOPLE,
     Branch,
-    Department, Flow, FlowStep, FlowInstance, Task, TaskComment, TaskStatus,
-    TaskSource, User
+    Department, Flow, FlowStep, FlowInstance, PARKED_STATES, Task,
+    TaskComment, TaskStatus, TaskSource, User
 )
 from . import notify, holidays
 
@@ -554,8 +554,28 @@ def replan(db: Session, inst: FlowInstance, assigner: User) -> int:
     prev_due = max((t.due_at for t in live), default=clock.now())
 
     for step in ahead:
+        # Does this step already have a row on the plan?
+        #
+        # Live work counts, obviously. So does work somebody has already
+        # FINISHED while it was still only planned — and that is the part
+        # this used to miss. Every step of a run exists from the moment
+        # the form is submitted and any of them may be marked, which is
+        # deliberate; somebody who does step 5 on Monday because the
+        # paperwork happened to be in front of them is working ahead, not
+        # breaking anything. But a completed task is not in the live list,
+        # so the next time the run moved, replan decided step 5 had no row
+        # and made a fresh one — pending, with a new deadline, for work
+        # that was done. It came back every time the run moved, and the
+        # person who did it was then chased for it.
+        #
+        # flow_waiting is what separates that from a rework loop: a step
+        # the run has already passed through has flow_waiting False, and
+        # when a decision sends the run back it genuinely does need
+        # planning again.
         mine = [t for t in rows
-                if t.flow_step_id == step.id and t.status in _LIVE_TASK_STATES]
+                if t.flow_step_id == step.id
+                and t.status not in PARKED_STATES
+                and (t.status in _LIVE_TASK_STATES or t.flow_waiting)]
         if mine:
             # Already planned. Re-date whatever is still waiting and
             # untouched, so a late step moves what comes after it.

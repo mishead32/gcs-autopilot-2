@@ -6160,6 +6160,81 @@ with _engK.begin() as _c:
 check("the removed copies take their comments with them", _cmtK == 0, _cmtK)
 _engK.dispose()
 
+print("\n-- and the phantom FMS steps the same shape of bug left behind --")
+# Replan used to make a fresh pending task for a step somebody had
+# already finished early, every time the run moved. The code no longer
+# does it; this clears the copies already sitting in people's lists.
+import sqlalchemy as _saQ
+_engQ = _saQ.create_engine("sqlite://")
+with _engQ.begin() as _c:
+    _c.execute(_txK(
+        "CREATE TABLE tasks (id INTEGER PRIMARY KEY, flow_instance_id INTEGER,"
+        " flow_step_id INTEGER, doer_id INTEGER, flow_waiting BOOLEAN,"
+        " status VARCHAR, submitted_at DATETIME, closed_at DATETIME,"
+        " completion_note TEXT, auditor_id INTEGER)"))
+    _c.execute(_txK("CREATE TABLE attachments (id INTEGER PRIMARY KEY, task_id INTEGER)"))
+    _c.execute(_txK("CREATE TABLE task_comments (id INTEGER PRIMARY KEY, task_id INTEGER)"))
+
+    def _mk(i, inst, step, doer, waiting, status, **kw):
+        cols = dict(id=i, flow_instance_id=inst, flow_step_id=step,
+                    doer_id=doer, flow_waiting=waiting, status=status,
+                    submitted_at=None, closed_at=None, completion_note=None,
+                    auditor_id=None)
+        cols.update(kw)
+        _c.execute(_txK(
+            "INSERT INTO tasks (id, flow_instance_id, flow_step_id, doer_id,"
+            " flow_waiting, status, submitted_at, closed_at, completion_note,"
+            " auditor_id) VALUES (:id, :flow_instance_id, :flow_step_id,"
+            " :doer_id, :flow_waiting, :status, :submitted_at, :closed_at,"
+            " :completion_note, :auditor_id)"), cols)
+
+    # The bug: Amit finished step 4 early, and got it again. Twice.
+    _mk(1, 90, 4, 11, True, "COMPLETED", closed_at="2027-01-05")
+    _mk(2, 90, 4, 11, True, "IN_PROGRESS")
+    _mk(3, 90, 4, 11, True, "PENDING")
+    # A SECOND person on the same step. Their work is theirs.
+    _mk(4, 90, 4, 12, True, "PENDING")
+    # Another step of the same run, untouched and nobody has finished it.
+    _mk(5, 90, 5, 11, True, "PENDING")
+    # A rework loop: the run walked through step 2 and came back to it.
+    _mk(6, 90, 2, 11, False, "COMPLETED", closed_at="2027-01-04")
+    _mk(7, 90, 2, 11, True, "PENDING")
+    # A copy somebody has actually started writing on is never touched.
+    _mk(8, 91, 3, 11, True, "COMPLETED", closed_at="2027-01-05")
+    _mk(9, 91, 3, 11, True, "PENDING")
+    _c.execute(_txK("INSERT INTO task_comments (id, task_id) VALUES (1, 9)"))
+    _mk(10, 91, 6, 11, True, "COMPLETED", closed_at="2027-01-05")
+    _mk(11, 91, 6, 11, True, "PENDING")
+    _c.execute(_txK("INSERT INTO attachments (id, task_id) VALUES (1, 11)"))
+    # Delegation work has no run at all.
+    _mk(12, None, None, 11, False, "PENDING")
+
+with _engQ.begin() as _c:
+    _saidQ = _migK._cancel_phantom_flow_steps(
+        _c, {"tasks", "attachments", "task_comments"})
+with _engQ.begin() as _c:
+    _goneQ = {r[0] for r in _c.execute(_txK(
+        "SELECT id FROM tasks WHERE status = 'CANCELLED'")).all()}
+    _countQ = _c.execute(_txK("SELECT COUNT(*) FROM tasks")).scalar()
+check("both copies of the step he already finished are cleared",
+      _goneQ == {2, 3}, sorted(_goneQ))
+check("nothing is deleted, only parked", _countQ == 12, _countQ)
+check("the finished one is left exactly as it is", 1 not in _goneQ)
+check("a second person on the same step keeps their own task",
+      4 not in _goneQ)
+check("a step nobody has finished is left alone", 5 not in _goneQ)
+check("a rework loop is not mistaken for a duplicate", 7 not in _goneQ)
+check("nor is a copy somebody has written on", 9 not in _goneQ)
+check("nor one with proof attached to it", 11 not in _goneQ)
+check("and delegation work is never in scope", 12 not in _goneQ)
+check("what it did is reported",
+      "duplicate FMS step task" in " ".join(_saidQ), _saidQ)
+with _engQ.begin() as _c:
+    check("running it again finds nothing left to do",
+          _migK._cancel_phantom_flow_steps(
+              _c, {"tasks", "attachments", "task_comments"}) == [])
+_engQ.dispose()
+
 print("\n== an FMS step never falls due on a closed day ==")
 # The same rule as the checklist, on the other kind of work: a step whose
 # deadline lands on a Sunday or a holiday is due on the working day before
@@ -9282,6 +9357,74 @@ with _slK() as _d:
     check("and step 4 is live now",
           not [t for t in _allW if t.flow_step.position == 4][0].flow_waiting)
     check("still four tasks in all, one per step", len(_allW) == 4, len(_allW))
+
+print("\n== and got on with early from FURTHER ahead ==")
+# Reported from the live site: people marking FMS steps and the step
+# coming back at them as pending, overdue, chased.
+#
+# The case above only covers the step one place ahead, because by the
+# time the run moves that step is behind it and is never replanned. Mark
+# a step that is still TWO or more ahead and the plan is redrawn with it
+# still in front: a completed task is not live work, replan decided the
+# step had no row, and made a fresh one. Pending, new deadline, for work
+# that was done — and again every time the run moved after that.
+_flowE = f"SMOKE early far {RUN}"
+admin.post("/flows/new", data={
+    "name": _flowE, "description": "", "branch_id": "",
+    "sf_label": [""], "sf_type": ["text"], "sf_required": [""],
+    "sf_options": [""],
+    "step_title": ["One", "Two", "Three", "Four"],
+    "step_doer": [str(i) for i in _fourW], "step_doers": ["", "", "", ""],
+    "step_tat_unit": ["days"] * 4, "step_tat": ["1"] * 4,
+    "step_priority": ["medium"] * 4, "step_instructions": [""] * 4,
+    "step_howto": [""] * 4, "step_fields": [""] * 4, "step_audit": [""] * 4})
+with _slK() as _d:
+    _fidE = _d.scalar(_spK(_FlW.id).where(_FlW.name == _flowE))
+admin.post(f"/flows/{_fidE}/start", data={"reference": f"SMOKE EARLY {RUN}"})
+with _slK() as _d:
+    _iEid = _d.scalar(_spK(_FIW.id).where(_FIW.flow_id == _fidE))
+    _rowsE = sorted(_d.scalars(_spK(_TW).where(
+        _TW.flow_instance_id == _iEid)).all(),
+        key=lambda t: t.flow_step.position)
+    _t4E, _em4E = _rowsE[3].id, _d.get(_UW, _rowsE[3].doer_id).email
+    _t1E, _em1E = _rowsE[0].id, _d.get(_UW, _rowsE[0].doer_id).email
+    _t2Eid = _rowsE[1].id
+
+# Step 4, while the run is still on step 1 — three places ahead.
+_c4E = TestClient(app)
+_c4E.post("/login", data={"email": _em4E, "password": "gcs1234"})
+submit(_c4E, _t4E, completion_note="done it now")
+_c1E = TestClient(app)
+_c1E.post("/login", data={"email": _em1E, "password": "gcs1234"})
+submit(_c1E, _t1E, completion_note="done")
+with _slK() as _d:
+    _afterE = _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iEid)).all()
+    check("the step finished three places ahead does not come back",
+          len([t for t in _afterE if t.flow_step.position == 4]) == 1,
+          [(t.id, t.status.value, t.flow_waiting) for t in _afterE
+           if t.flow_step.position == 4])
+    check("and the run still has one task per step", len(_afterE) == 4,
+          [(t.flow_step.position, t.status.value) for t in _afterE])
+    check("nor is the finished one quietly reopened",
+          all(t.status == _TSW.COMPLETED for t in _afterE
+              if t.flow_step.position == 4),
+          [(t.status.value, t.flow_waiting, bool(t.submitted_at))
+           for t in _afterE if t.flow_step.position == 4])
+
+# And it must not come back on the NEXT move either, which is how one
+# person ended up with the same step three times.
+_c2E = TestClient(app)
+with _slK() as _d:
+    _em2E = _d.get(_UW, _d.get(_TW, _t2Eid).doer_id).email
+_c2E.post("/login", data={"email": _em2E, "password": "gcs1234"})
+submit(_c2E, _t2Eid, completion_note="done")
+with _slK() as _d:
+    _afterE2 = _d.scalars(_spK(_TW).where(_TW.flow_instance_id == _iEid)).all()
+    check("nor after the run moves again", len(_afterE2) == 4,
+          [(t.flow_step.position, t.status.value) for t in _afterE2])
+    check("and the person who did it is not chased for it",
+          not [t for t in _afterE2 if t.flow_step.position == 4
+               and t.status in (_TSW.PENDING, _TSW.IN_PROGRESS)])
 
 
 print("\n== a decision redraws the plan ==")
