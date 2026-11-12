@@ -15470,5 +15470,140 @@ with _slQ() as _d:
               {t.id for t in _aP} == {t.id for t in _bP}
               and {t.id for t in _acP} == {t.id for t in _bcP})
 
+# ==========================================================================
+# Nothing impossible is left in the database
+# ==========================================================================
+print("\n== and afterwards, nothing impossible is left behind ==")
+# Written after two bugs of the same shape reached the office before they
+# reached this file: a rule that held on one code path and not on another,
+# each found only because somebody complained. Both left a STATE that
+# could not be right — the same person asked twice for one step; a
+# position step held by somebody not in the position.
+#
+# So rather than another test per bug, this sweeps everything the whole
+# suite has just built and asks what could not possibly be true. It does
+# not care how a bad row got there, which is the point: the next bug of
+# this shape is caught by the state it leaves, not by somebody thinking
+# to write a test for a path they forgot existed.
+from sqlalchemy import select as _selZ
+from app.db import SessionLocal as _slZ
+from app.models import (Flow as _FlZ, FlowInstance as _FiZ, Task as _TkZ,
+                        TaskStatus as _TsZ, PARKED_STATES as _ParkZ)
+
+_OPEN_Z = (_TsZ.PENDING, _TsZ.IN_PROGRESS, _TsZ.REJECTED, _TsZ.REOPENED)
+
+with _slZ() as _d:
+    _allZ = _d.scalars(_selZ(_TkZ).where(_TkZ.flow_instance_id.isnot(None))).all()
+    _runsZ = {i.id: i for i in _d.scalars(_selZ(_FiZ)).all()}
+    _flowsZ = {f.id: f for f in _d.scalars(_selZ(_FlZ)).all()}
+    print(f"  (sweeping {len(_allZ)} FMS task(s) across {len(_runsZ)} run(s))")
+
+    # 1. The plan has ONE slot per person per step. Two rows still
+    #    sitting on the plan for the same person on the same step is the
+    #    bug the office reported — one finished, one fresh and pending —
+    #    and it is impossible however it was made. A rework loop does not
+    #    trip it: a step the run has walked through is no longer waiting,
+    #    so its second pass is a live row, not a second planned one.
+    #
+    #    Written against the STATE and not against statuses, because the
+    #    first version of this check asked for two OPEN rows and sailed
+    #    straight past the real bug, where one of the two was completed.
+    _planZ, _openZ = {}, {}
+    for t in _allZ:
+        key = (t.flow_instance_id, t.flow_step_id, t.doer_id)
+        if t.flow_waiting and t.status not in _ParkZ:
+            _planZ.setdefault(key, []).append(t.id)
+        if t.status in _OPEN_Z:
+            _openZ.setdefault(key, []).append(t.id)
+    _twiceZ = {k: v for k, v in _planZ.items() if len(v) > 1}
+    check("one person has one slot on the plan for one step",
+          not _twiceZ, list(_twiceZ.items())[:3])
+    _openTwiceZ = {k: v for k, v in _openZ.items() if len(v) > 1}
+    check("and is never holding the same step of a run twice at once",
+          not _openTwiceZ, list(_openTwiceZ.items())[:3])
+
+    # 1b. And nobody is asked again for a step they already finished on
+    #     this pass — the complaint in the words it was made in.
+    _doneZ = {(t.flow_instance_id, t.flow_step_id, t.doer_id)
+              for t in _allZ
+              if t.flow_waiting and t.status in (_TsZ.COMPLETED, _TsZ.SUBMITTED)}
+    _againZ = [t.id for t in _allZ
+               if t.status in _OPEN_Z and t.flow_waiting
+               and (t.flow_instance_id, t.flow_step_id, t.doer_id) in _doneZ]
+    check("nobody is chased for a step they have already finished",
+          not _againZ, _againZ[:5])
+
+    # 1c. And the residue, after the run has closed over it.
+    #
+    #     A phantom does not stay visible: when the run finishes, every
+    #     planned row still standing is parked, so by the end the extra
+    #     copy looks like an ordinary cancelled task and the checks above
+    #     — which ignore parked work — sail past it. This is what one
+    #     looks like once it has been tidied away: a cancelled slot on
+    #     the plan beside a FINISHED slot on the plan, same person, same
+    #     step. A decision dropping a step it is not taking cannot make
+    #     that shape, because the person never finished it.
+    _finPlanZ = {(t.flow_instance_id, t.flow_step_id, t.doer_id)
+                 for t in _allZ
+                 if t.flow_waiting
+                 and t.status in (_TsZ.COMPLETED, _TsZ.SUBMITTED)}
+    _residueZ = [t.id for t in _allZ
+                 if t.flow_waiting and t.status in _ParkZ
+                 and (t.flow_instance_id, t.flow_step_id,
+                      t.doer_id) in _finPlanZ]
+    check("and no closed run is hiding a copy it parked on the way out",
+          not _residueZ, _residueZ[:5])
+
+    # 2. A run that is over is over. An open task on a finished or
+    #    cancelled run is work nobody can ever clear.
+    _zombieZ = [t.id for t in _allZ
+                if t.status in _OPEN_Z
+                and (_runsZ.get(t.flow_instance_id) is None
+                     or _runsZ[t.flow_instance_id].completed_at is not None
+                     or _runsZ[t.flow_instance_id].cancelled_at is not None)]
+    check("no open task is left on a run that has finished or stopped",
+          not _zombieZ, _zombieZ[:5])
+
+    # 3. Every step belongs to the flow its run is of. A task pointing at
+    #    another flow's step is a run that cannot be read.
+    _strayZ = [t.id for t in _allZ
+               if t.flow_step is not None
+               and _runsZ.get(t.flow_instance_id) is not None
+               and t.flow_step.flow_id != _runsZ[t.flow_instance_id].flow_id]
+    check("every step a task points at belongs to that run's own FMS",
+          not _strayZ, _strayZ[:5])
+
+    # 4. A live run is standing on a step its flow actually has.
+    _lostZ = []
+    for inst in _runsZ.values():
+        if inst.completed_at or inst.cancelled_at:
+            continue
+        flow = _flowsZ.get(inst.flow_id)
+        if flow and inst.current_position not in {s.position for s in flow.steps}:
+            _lostZ.append((inst.id, inst.current_position))
+    check("every running FMS is standing on a step that exists",
+          not _lostZ, _lostZ[:5])
+
+    # 5. Nothing is still waiting its turn on a run that has none left.
+    _waitZ = [t.id for t in _allZ
+              if t.flow_waiting and t.status not in _ParkZ
+              and _runsZ.get(t.flow_instance_id) is not None
+              and _runsZ[t.flow_instance_id].completed_at is not None]
+    check("no step is still waiting its turn on a finished run",
+          not _waitZ, _waitZ[:5])
+
+# One rule, four copies. They agree today; the day one of them is edited
+# on its own, a task is open on one screen and finished on another, and
+# that is exactly how the last two bugs started.
+from app.routers import tasks as _tkR, reports as _rpR, followups as _fuR
+from app.services import cmdboard as _cbS
+check("the four definitions of 'still open' have not drifted apart",
+      _tkR.OPEN_STATES == _rpR.OPEN_STATES == _fuR.OPEN_STATES
+      == _cbS.OPEN_STATES,
+      [_tkR.OPEN_STATES, _rpR.OPEN_STATES, _fuR.OPEN_STATES, _cbS.OPEN_STATES])
+check("and so do the two definitions of 'finished'",
+      _tkR.FINISHED_STATES == _rpR.FINISHED_STATES,
+      [_tkR.FINISHED_STATES, _rpR.FINISHED_STATES])
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
