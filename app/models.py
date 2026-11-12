@@ -1322,6 +1322,22 @@ class Task(Base):
         return f"{base} · Step {self.flow_step.position}"
 
     @property
+    def source_label(self) -> str:
+        """What this task came from, named rather than categorised.
+
+        A list of FMS steps that all say "flow" tells the doer nothing: the
+        word is the same on every row, and the one thing they need — which
+        process this step belongs to — is the one thing missing. The
+        step's title says what to do and "Step 5 of 8" says where it sits,
+        but neither says it is the hiring process rather than the purchase
+        process. So for an FMS step this is the flow's own name, and for
+        everything else it stays the source word it always was.
+        """
+        if self.flow_instance is not None and self.flow_instance.flow:
+            return self.flow_instance.flow.name or self.source.value
+        return self.source.value
+
+    @property
     def step_label(self) -> str:
         """'Step 2 of 4' for an FMS step, empty for anything else.
 

@@ -19,7 +19,9 @@
     <h3>{{ task.title }}</h3>
     <p class="sub">
       <span class="chip {{ task.priority.value }}">{{ task.priority.value }} {{ task.weight_label }}</span>
-      <span class="chip">{{ task.source.value }}</span>
+      {# Named, not categorised: the doer finishing a step here needs to
+         know which FMS it belongs to. See Task.source_label. #}
+      <span class="chip">{{ task.source_label }}</span>
       <span class="{{ 'overdue' if task.is_overdue }}">Planned {{ task.due_at|dt('%d %b, %I:%M %p') }}
         · {{ task.due_at|due }}</span>
     </p>

@@ -4358,6 +4358,19 @@ with _sl4() as _d:
           all(t.step_label.startswith("Step ") for t in _steps4
               if t.flow_step_id),
           [t.step_label for t in _steps4][:3])
+    # "Step 5 of 8" says where it sits; it does not say of WHAT. A doer
+    # looking at six rows all labelled "flow" cannot tell the hiring
+    # process from the purchase process, which is the one thing they need.
+    check("and which FMS it belongs to, by name",
+          all(t.source_label == _d.get(_FI4, t.flow_instance_id).flow.name
+              for t in _steps4 if t.flow_instance_id),
+          [t.source_label for t in _steps4][:3])
+    check("while anything that is not a step keeps its source word",
+          all(t.source_label == t.source.value
+              for t in _all if t.flow_instance_id is None),
+          [(t.source_label, t.source.value) for t in _all
+           if t.flow_instance_id is None
+           and t.source_label != t.source.value][:3])
     # Number plus position is what an escalation email shows, because it is
     # read where nobody can click to find out which row is which. It narrows
     # FMS-12 from four tasks to one step of one submission — not always to
@@ -9349,6 +9362,17 @@ _rep = admin.get("/reports/tasks?source=fms").text
 for _tab in ("Due today", "Upcoming", "With the auditor"):
     check(f"the FMS report has a '{_tab}' tab", _tab in _rep)
 check("and pending says how it splits", "overdue ·" in _rep and "ahead" in _rep)
+# On the page itself, not only on the model: the row must name the FMS
+# rather than saying "flow", which every FMS row would say.
+check("every FMS row on the page names its FMS",
+      ">flow ·" not in _rep and ">flow<" not in _rep,
+      [l.strip() for l in _rep.splitlines() if ">flow" in l][:2])
+from app.models import Flow as _FlNm
+from sqlalchemy import select as _selNm
+with _slQ() as _d:
+    _fnames = [f.name for f in _d.scalars(_selNm(_FlNm)).all() if f.name]
+check("and the name shown is a real FMS name",
+      any(n in _rep for n in _fnames), _fnames[:5])
 
 # A step the doer has submitted and nobody has checked yet.
 _flowR = f"SMOKE audited step {RUN}"
@@ -15015,6 +15039,10 @@ for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
            "/reports/followups", "/reports/audit", "/reports/score",
            "/admin/holidays", "/escalation", "/escalation/log",
            "/reports/fms-entries", "/escalation/preview", "/cmd", "/detective",
+           # FMS rows now name their flow, which is a second table to
+           # reach for; the delegation report above would never catch a
+           # per-row read of it, because delegation has no flow at all.
+           "/reports/tasks?source=fms", "/reports/score/behind",
            "/help", "/bulk"]:
     _q, _r = _cost(admin, _u)
     if _r.status_code != 200:

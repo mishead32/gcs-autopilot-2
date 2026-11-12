@@ -52,7 +52,7 @@
   <tr>
     <td class="refcell"><a href="/tasks/{{ t.id }}" class="refid">{{ t.ref or '—' }}</a></td>
     <td><a href="/tasks/{{ t.id }}"><strong>{{ t.title }}</strong></a>
-      <div class="m rowsub">{{ t.source.value }}{% if t.branch %} ·
+      <div class="m rowsub">{{ t.source_label }}{% if t.branch %} ·
         {{ t.branch.name }}{% endif %}</div></td>
     <td><span class="chip {{ t.priority.value }}">{{ t.priority.value }}
       {{ t.weight_label }}</span></td>

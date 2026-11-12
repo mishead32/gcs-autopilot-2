@@ -27,7 +27,8 @@
             out early because nobody is in that day. Today's own copy of this
             job is the other row.">for {{ t.covers_label }}</span>
       {% endif %}
-      <div class="m rowsub">{{ t.source.value }}{% if t.branch %} ·
+      {# The FMS's own name, not the word "flow" — see Task.source_label. #}
+      <div class="m rowsub">{{ t.source_label }}{% if t.branch %} ·
         {{ t.branch.name }}{% endif %} · assigned
         {{ t.created_at|dt('%d %b') }}, {{ t.created_at|ago }}</div>
     </td>

@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select, or_, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import clock
 from .. import search
@@ -37,6 +37,7 @@ from ..deps import current_user, require_right
 from ..models import (
     Task, TaskStatus, TaskSource, User, Role, Right, Branch, Followup,
     AuditState, AUDIT_LABELS, Priority, PRIORITY_ORDER, PARKED_STATES,
+    Flow, FlowInstance,
 )
 from ..services import mail, scoring, xlsx
 from ..templating import templates
@@ -470,7 +471,19 @@ def task_report(request: Request, source: str = "delegation",
                        "all"):
         f.state = "pending"
 
-    base = _apply_common(_scoped(user, select(Task)).where(Task.source == src), f)
+    # Every row prints its doer, its branch and — for an FMS step — the
+    # name of the flow it belongs to and how many steps that flow has.
+    # Fetched here in four queries; left to the template it was two per
+    # row, which on the FMS report with a few hundred steps was 218
+    # questions to draw one page.
+    base = _apply_common(
+        _scoped(user, select(Task)).where(Task.source == src)
+        .options(selectinload(Task.doer), selectinload(Task.branch),
+                 selectinload(Task.flow_step),
+                 selectinload(Task.flow_instance)
+                 .selectinload(FlowInstance.flow)
+                 .selectinload(Flow.steps)),
+        f)
 
     # Both halves are filtered on the SAME date — whichever the person chose,
     # planned by default. It used to filter pending work on its planned date
