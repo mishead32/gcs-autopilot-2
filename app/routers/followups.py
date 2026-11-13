@@ -116,7 +116,16 @@ def _open_tasks(db: Session, user: User, sources, day: date,
     # row — a hundred and fifty on a busy day's desk, and the dashboard
     # builds this list for every desk it shows.
     rows = list(db.scalars(
-        _visible(user, q, desk_right).options(joinedload(Task.rule))
+        _visible(user, q, desk_right).options(joinedload(Task.rule),
+                                              # The desk prints who owes
+                                              # each task and where they
+                                              # are. Left lazy that was
+                                              # twenty-two separate reads
+                                              # for one screen, and every
+                                              # one is a trip to the
+                                              # database in Mumbai.
+                                              joinedload(Task.doer),
+                                              joinedload(Task.branch))
     ).unique().all())
     # Work the desk is not expected to chase leaves the list ENTIRELY, not
     # just the pending column. A desk that can never reach 100% because the

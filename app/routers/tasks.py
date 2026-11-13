@@ -7,7 +7,7 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, Request, Form,
 from fastapi.responses import (RedirectResponse, HTMLResponse, FileResponse,
                                JSONResponse)
 from sqlalchemy import select, or_, update, case, func, delete as sa_delete
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..config import UPLOAD_DIR
 from .. import flash
@@ -20,7 +20,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
     HelpTicket, HelpStatus, REF_PREFIX, VoiceNote,
-    Followup, Escalation
+    Followup, Escalation, Flow, FlowInstance
 )
 from ..services import (attach, notify, flows as flow_svc, storage, holidays,
                         xlsx, detective, shrink, voice)
@@ -413,7 +413,19 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         return xlsx.one(f"tasks-{source or 'all'}-{status}", "Tasks",
                         xlsx.task_columns(), rows, note)
 
-    tasks = db.scalars(q.order_by(*order).limit(500)).all()
+    # Everything a row prints, fetched with the rows. Each one of these
+    # left lazy is a separate trip to the database PER ROW, and the
+    # database is not on the same machine as the website: on a 500-row
+    # screen that is the difference between one page load and a wait.
+    # The flow and its steps are here because an FMS row names the FMS
+    # it belongs to and says which step of how many it is.
+    tasks = db.scalars(
+        q.order_by(*order).limit(500).options(
+            selectinload(Task.doer), selectinload(Task.branch),
+            selectinload(Task.flow_step),
+            selectinload(Task.flow_instance)
+            .selectinload(FlowInstance.flow)
+            .selectinload(Flow.steps))).unique().all()
     people = db.scalars(
         select(User).where(User.org_id == user.org_id, User.active.is_(True))
         .order_by(User.name)).all()

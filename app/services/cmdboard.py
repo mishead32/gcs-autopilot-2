@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from .. import clock
@@ -136,28 +136,61 @@ def _in_period(t: Task, start: datetime, end: datetime) -> bool:
     return start <= t.due_at <= end
 
 
+def rows_for(db: Session, org_id: int, start: datetime,
+             end: datetime) -> list[Task]:
+    """The only tasks the board can possibly need, read once.
+
+    Two things were wrong with reading them inside build().
+
+    It had no date bound at all: every delegation and checklist task the
+    company had EVER created came back, so the board got slower every
+    month and would have gone on doing that for ever. A board needs
+    exactly two sets — what is open right now, whatever its date, and
+    what falls in the period being looked at. Everything else is history
+    it does not use.
+
+    And build() was called once for the group and once more for every
+    company, so the whole lot was read eight or nine times over to draw
+    one page. Read here instead, once, and sliced per company in memory.
+
+    The rule comes with the task: the chasing test asks a checklist task
+    which rule it came from, and left lazy that is one query per task.
+    """
+    return list(db.scalars(
+        select(Task)
+        .where(Task.org_id == org_id,
+               Task.source.in_([s for s, _ in SOURCES]),
+               or_(Task.due_at.between(start, end),
+                   Task.status.in_(OPEN_STATES)))
+        .options(joinedload(Task.rule))).unique().all())
+
+
+def chased_on(db: Session, org_id: int, day: date) -> set:
+    """Which tasks were chased on this day — one query, not one per task."""
+    return {r for r in db.scalars(
+        select(Followup.task_id).where(Followup.org_id == org_id,
+                                       Followup.day == day)).all()}
+
+
 def build(db: Session, org_id: int, start: datetime, end: datetime,
-          branch_id: int | None = None, day: date | None = None) -> Board:
-    """Every number on the board, from one pass over the tasks."""
+          branch_id: int | None = None, day: date | None = None,
+          rows: list[Task] | None = None, chased: set | None = None) -> Board:
+    """Every number on the board, from one pass over the tasks.
+
+    `rows` and `chased` let a caller drawing several boards read the data
+    once and hand the same lists to each — see by_branch. Left out, this
+    reads them itself, so a single board is still one call.
+    """
     day = day or clock.today()
     now = clock.now()
     today_start = datetime.combine(day, datetime.min.time())
     today_end = datetime.combine(day, datetime.max.time())
 
-    q = select(Task).where(Task.org_id == org_id,
-                           Task.source.in_([s for s, _ in SOURCES]))
+    tasks = rows_for(db, org_id, start, end) if rows is None else rows
     if branch_id:
-        q = q.where(Task.branch_id == branch_id)
-    # The rule with the task: the chasing test below asks a checklist
-    # task which rule it came from, and left lazy that is one query per
-    # task on a board that reads every task the company has.
-    tasks = list(db.scalars(q.options(joinedload(Task.rule))).unique().all())
-
-    # Which open tasks were chased today, in one query rather than one per
-    # task — the board has to stay fast on a few thousand rows.
-    chased = {r for r in db.scalars(
-        select(Followup.task_id).where(Followup.org_id == org_id,
-                                       Followup.day == day)).all()}
+        tasks = [t for t in tasks if t.branch_id == branch_id]
+    if chased is None:
+        chased = chased_on(db, org_id, day)
 
     board = Board().blank()
     for t in tasks:
@@ -217,7 +250,9 @@ def build(db: Session, org_id: int, start: datetime, end: datetime,
 
 
 def by_branch(db: Session, org_id: int, start: datetime, end: datetime,
-              day: date | None = None) -> list[tuple[Branch | None, Board]]:
+              day: date | None = None, rows: list[Task] | None = None,
+              chased: set | None = None
+              ) -> list[tuple[Branch | None, Board]]:
     """The same board, one per company, worst first.
 
     Ordered by overdue work: the point of the table is to show which unit
@@ -225,9 +260,16 @@ def by_branch(db: Session, org_id: int, start: datetime, end: datetime,
     """
     branches = {b.id: b for b in db.scalars(
         select(Branch).where(Branch.org_id == org_id)).all()}
+    # Read once for every company rather than once per company. With
+    # eight companies this was nine passes over the same table.
+    if rows is None:
+        rows = rows_for(db, org_id, start, end)
+    if chased is None:
+        chased = chased_on(db, org_id, day or clock.today())
     out = []
     for bid, branch in branches.items():
-        board = build(db, org_id, start, end, branch_id=bid, day=day)
+        board = build(db, org_id, start, end, branch_id=bid, day=day,
+                      rows=rows, chased=chased)
         if any(b.total for b in board.position.values()) or \
            any(board.total_in_period.values()):
             out.append((branch, board))

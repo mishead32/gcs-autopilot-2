@@ -31,8 +31,15 @@ def cmd_board(request: Request, period: str = "this_month",
     start, end, label = cmdboard.window(period, date_from, date_to)
     today = clock.today()
 
-    board = cmdboard.build(db, user.org_id, start, end, day=today)
-    branches = cmdboard.by_branch(db, user.org_id, start, end, day=today)
+    # Once for the whole page. The group board and the company table are
+    # the same rows counted two ways, and reading them twice doubled the
+    # heaviest query in the software for nothing.
+    rows = cmdboard.rows_for(db, user.org_id, start, end)
+    chased = cmdboard.chased_on(db, user.org_id, today)
+    board = cmdboard.build(db, user.org_id, start, end, day=today,
+                           rows=rows, chased=chased)
+    branches = cmdboard.by_branch(db, user.org_id, start, end, day=today,
+                                  rows=rows, chased=chased)
 
     if xlsx.wants(export):
         # One row per company, plus the group on top, so the figures can be

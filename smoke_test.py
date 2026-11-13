@@ -15453,7 +15453,7 @@ check("twice the backlog asks no more questions than once",
 print("\n== a budget for every page ==")
 # A page that asks more than this is asking per row, and per row is the
 # shape that stops working as the data grows.
-BUDGET = 45
+BUDGET = 30
 _slowP = []
 for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
            "/recurring", "/stats", "/outbox", "/admin/users", "/tasks/new",
@@ -15473,6 +15473,62 @@ for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
         _slowP.append((_u, _q))
 check(f"no page asks more than {BUDGET} questions to draw itself",
       not _slowP, _slowP)
+
+# Queries are what a page costs TODAY. Rows are what it will cost in a
+# year — and the CMD board was reading every delegation and checklist
+# task the company had ever created, then reading the whole lot again
+# once per company to fill the table underneath. Nine passes over a
+# table that only grows. It is the one page whose cost has to be bounded
+# by the question asked, not by how long the office has been open.
+print("\n== and the heaviest page is bounded by the question, not by history ==")
+from sqlalchemy import select as _selP2, func as _fnP2
+from app.services import cmdboard as _cbP
+from app.models import (Branch as _BrP2, Task as _TkP2,
+                        TaskStatus as _TsP2)
+from app.db import SessionLocal as _slP2
+_sP, _eP, _ = _cbP.window("this_month")
+with _slP2() as _d:
+    _everyP2 = _d.scalar(_selP2(_fnP2.count(_TkP2.id))
+                         .where(_TkP2.source.in_([x for x, _ in _cbP.SOURCES])))
+    _readP = len(_cbP.rows_for(_d, 1, _sP, _eP))
+    check("the board reads less than the whole history of the company",
+          _readP < _everyP2, (_readP, _everyP2))
+    # Something closed long ago, outside the window, cannot change any
+    # number on the board — so it must not be read.
+    _oldClosed = _d.scalars(_selP2(_TkP2).where(
+        _TkP2.source.in_([x for x, _ in _cbP.SOURCES]),
+        _TkP2.status == _TsP2.COMPLETED,
+        _TkP2.due_at < _sP).limit(1)).all()
+    if _oldClosed:
+        check("and finished work from before the period is left where it is",
+              _oldClosed[0].id not in {t.id for t in _cbP.rows_for(
+                  _d, 1, _sP, _eP)})
+
+# One pass for the group AND every company, not one per company.
+_passes = {"n": 0}
+from sqlalchemy import event as _evP
+@_evP.listens_for(_engQ2 := __import__("app.db", fromlist=["engine"]).engine,
+                  "after_cursor_execute")
+def _countTaskReads(conn, cur, stmt, params, ctx, many):
+    if "FROM tasks" in stmt and "count(" not in stmt:
+        _passes["n"] += 1
+
+with _slP2() as _d:
+    _rowsP2 = _cbP.rows_for(_d, 1, _sP, _eP)
+    _chP = _cbP.chased_on(_d, 1, _ckT.today())
+    _passes["n"] = 0
+    _cbP.build(_d, 1, _sP, _eP, rows=_rowsP2, chased=_chP)
+    _cbP.by_branch(_d, 1, _sP, _eP, rows=_rowsP2, chased=_chP)
+    _howMany = _d.scalar(_selP2(_fnP2.count(_BrP2.id))
+                         .where(_BrP2.org_id == 1))
+check("the board and its company table are built from ONE read, not one each",
+      _passes["n"] == 0, (_passes["n"], f"{_howMany} companies"))
+_evP.remove(_engQ2, "after_cursor_execute", _countTaskReads)
+
+# And the page as a whole does not read them twice over either.
+_qCmd, _rCmd = _cost(admin, "/cmd")
+check("so the whole board page is a handful of questions", _qCmd <= 8,
+      _qCmd)
 
 print("\n== and not to weigh what it weighs ==")
 # Nothing was compressing these pages — not this app, and not the host,

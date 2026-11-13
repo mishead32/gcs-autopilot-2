@@ -290,6 +290,14 @@ INDEXES = [
     ("escalation_mails", "ix_escalation_mails_org_day", "(org_id, day)"),
     ("followups", "ix_followups_org_day", "(org_id, day)"),
     ("outbound_messages", "ix_outbound_org_made", "(org_id, created_at)"),
+    # The CMD board reads one window: what is open now, plus what falls
+    # in the period. Both halves start from the org and the kind of work,
+    # so this is the index that keeps the heaviest page off a full scan
+    # as the history grows.
+    ("tasks", "ix_tasks_org_source_due", "(org_id, source, due_at)"),
+    ("tasks", "ix_tasks_org_source_status", "(org_id, source, status)"),
+    # "Who has been holding work for a month" — open work, oldest first.
+    ("tasks", "ix_tasks_org_status_due", "(org_id, status, due_at)"),
 ]
 
 
