@@ -45,37 +45,45 @@ def cmd_board(request: Request, period: str = "this_month",
         # One row per company, plus the group on top, so the figures can be
         # pasted into a review pack without anybody retyping them.
         rows = [(None, board)] + branches
-        return xlsx.one("cmd-board", "CMD board", [
-            ("Company", lambda r: r[0].name if r[0] else "WHOLE GROUP"),
-            ("DEL overdue", lambda r: r[1].position["delegation"].overdue),
-            ("DEL today", lambda r: r[1].position["delegation"].today),
-            ("DEL upcoming", lambda r: r[1].position["delegation"].upcoming),
-            ("CL overdue", lambda r: r[1].position["recurring"].overdue),
-            ("CL today", lambda r: r[1].position["recurring"].today),
-            ("CL upcoming", lambda r: r[1].position["recurring"].upcoming),
-            ("DEL tasks in period", lambda r: r[1].total_in_period["delegation"]),
+        # Columns generated from the same list the page uses, in the
+        # same order, for the same reason: a kind of work added to the
+        # board has to turn up in the file without anybody remembering
+        # to add fourteen more lambdas here.
+        def _col(key, part, field):
+            return lambda r: getattr(getattr(r[1], part)[key], field)
+
+        def _tot(key):
+            return lambda r: r[1].total_in_period[key]
+
+        cols = [("Company", lambda r: r[0].name if r[0] else "WHOLE GROUP")]
+        SHORT = {"delegation": "DEL", "recurring": "CL", "flow": "FMS"}
+        for src, _label in cmdboard.SOURCES:
+            k, tag = src.value, SHORT[src.value]
+            cols += [(f"{tag} overdue", _col(k, "position", "overdue")),
+                     (f"{tag} today", _col(k, "position", "today")),
+                     (f"{tag} upcoming", _col(k, "position", "upcoming"))]
+        for src, _label in cmdboard.SOURCES:
+            k, tag = src.value, SHORT[src.value]
             # Needs-audit and not-finished-yet are exported too, so the
             # sheet adds up the same way the page does: needs audit =
             # not finished yet + done + pending.
-            ("DEL needs audit", lambda r: r[1].audit["delegation"].total),
-            ("DEL not finished yet", lambda r: r[1].audit["delegation"].waiting),
-            ("DEL audit done", lambda r: r[1].audit["delegation"].done),
-            ("DEL audit pending", lambda r: r[1].audit["delegation"].pending),
-            ("CL tasks in period", lambda r: r[1].total_in_period["recurring"]),
-            ("CL needs audit", lambda r: r[1].audit["recurring"].total),
-            ("CL not finished yet", lambda r: r[1].audit["recurring"].waiting),
-            ("CL audit done", lambda r: r[1].audit["recurring"].done),
-            ("CL audit pending", lambda r: r[1].audit["recurring"].pending),
-            ("DEL follow-up done", lambda r: r[1].chase["delegation"].done),
-            ("DEL follow-up pending", lambda r: r[1].chase["delegation"].pending),
-            ("CL follow-up done", lambda r: r[1].chase["recurring"].done),
-            ("CL follow-up pending", lambda r: r[1].chase["recurring"].pending),
-            ("DEL on time", lambda r: r[1].timing["delegation"].on_time),
-            ("DEL delayed", lambda r: r[1].timing["delegation"].delayed),
-            ("CL on time", lambda r: r[1].timing["recurring"].on_time),
-            ("CL delayed", lambda r: r[1].timing["recurring"].delayed),
-        ], rows, f"Position on {today:%d/%m/%Y} · period {label} · counts of "
-                 f"tasks, not score weight")
+            cols += [(f"{tag} tasks in period", _tot(k)),
+                     (f"{tag} needs audit", _col(k, "audit", "total")),
+                     (f"{tag} not finished yet", _col(k, "audit", "waiting")),
+                     (f"{tag} audit done", _col(k, "audit", "done")),
+                     (f"{tag} audit pending", _col(k, "audit", "pending"))]
+        for src, _label in cmdboard.SOURCES:
+            k, tag = src.value, SHORT[src.value]
+            cols += [(f"{tag} follow-up done", _col(k, "chase", "done")),
+                     (f"{tag} follow-up pending", _col(k, "chase", "pending"))]
+        for src, _label in cmdboard.SOURCES:
+            k, tag = src.value, SHORT[src.value]
+            cols += [(f"{tag} on time", _col(k, "timing", "on_time")),
+                     (f"{tag} delayed", _col(k, "timing", "delayed"))]
+        return xlsx.one(
+            "cmd-board", "CMD board", cols, rows,
+            f"Position on {today:%d/%m/%Y} · period {label} · "
+            "counts of tasks, not score weight")
 
     # Who is holding work that has been owed a month or more. Read now
     # rather than for the chosen period: "pending for a month" is a fact
@@ -84,6 +92,11 @@ def cmd_board(request: Request, period: str = "this_month",
     stale = cmdboard.stale(db, user.org_id)
     return templates.TemplateResponse(request, "cmd.html", {
         "user": user, "board": board, "branches": branches,
+        # One list for every section and for the company table, so a
+        # kind of work can never be shown in some of them and not others.
+        "KINDS": [(src.value, label, cmdboard.QUERY_NAME[src.value])
+                  for src, label in cmdboard.SOURCES],
+        "SHORT": {"delegation": "DEL", "recurring": "CL", "flow": "FMS"},
         "stale": stale, "stale_days": cmdboard.STALE_DAYS,
         "stale_total": sum(r.count for r in stale),
         "people_shown": cmdboard.STALE_PEOPLE,

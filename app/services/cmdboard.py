@@ -33,8 +33,21 @@ from ..models import (AuditState, Branch, Followup, PARKED_STATES, Task,
 
 # The two kinds of work this board is about. FMS is deliberately left out —
 # it was not asked for, and a flow's steps answer a different question.
+# The three kinds of work, in the order they appear everywhere else.
+#
+# FMS was left out of this board at first, on the grounds that a flow's
+# steps answer a different question. They do not: an FMS step is work
+# somebody owes on a date, exactly like a delegation task, and leaving
+# it out meant the board that is supposed to show the group's position
+# was silent about most of the group's work.
 SOURCES = [(TaskSource.DELEGATION, "Delegation"),
-           (TaskSource.RECURRING, "Checklist")]
+           (TaskSource.RECURRING, "Checklist"),
+           (TaskSource.FLOW, "FMS")]
+
+# What each one is called in a URL, for the links under every figure.
+QUERY_NAME = {TaskSource.DELEGATION.value: "delegation",
+              TaskSource.RECURRING.value: "checklist",
+              TaskSource.FLOW.value: "fms"}
 
 OPEN_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
                TaskStatus.REJECTED, TaskStatus.REOPENED)
@@ -201,7 +214,15 @@ def build(db: Session, org_id: int, start: datetime, end: datetime,
         # --- live position: what is owed right now ----------------------
         if _open(t):
             pos = board.position[key]
-            if t.due_at < today_start:
+            if t.flow_waiting:
+                # An FMS step whose turn has not come. Its date is a
+                # PLAN, shown so people can see work coming, and a slow
+                # run can leave that plan weeks in the past. Calling it
+                # overdue would tell CMD somebody is late for a step
+                # nobody has asked them for — the same rule the task's
+                # own colour follows, and the follow-up desk with it.
+                pos.upcoming += 1
+            elif t.due_at < today_start:
                 pos.overdue += 1
             elif t.due_at <= today_end:
                 pos.today += 1

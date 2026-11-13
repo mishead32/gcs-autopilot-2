@@ -6619,6 +6619,38 @@ check("it says it is counting tasks, not weight", "not score weight" in _pageB)
 check("all four blocks are there",
       all(x in _pageB for x in ("Where the work stands", "Audit",
                                 "Follow-ups", "On time vs delayed")))
+
+# FMS was left off this board on the grounds that a flow's steps answer
+# a different question. They do not: a step is work somebody owes on a
+# date, like any other, and leaving it out meant the board that shows
+# the group's position was silent about most of the group's work.
+check("FMS is on the board, beside Delegation and Checklist",
+      _cbB.TaskSource.FLOW in [s2 for s2, _ in _cbB.SOURCES]
+      if hasattr(_cbB, "TaskSource") else True)
+from app.models import TaskSource as _TSrc
+check("all three kinds of work are counted",
+      {s2 for s2, _ in _cbB.SOURCES} == {_TSrc.DELEGATION, _TSrc.RECURRING,
+                                         _TSrc.FLOW},
+      [s2.value for s2, _ in _cbB.SOURCES])
+# In EVERY section, not just the first. The follow-up block had its own
+# hand-written list and was missing FMS while the figures behind it were
+# already being counted — the desk was chasing work the board hid.
+# Sliced on the section HEADINGS, not on bare words: "Audit" also
+# appears twice in the menu, and a slice taken on that reads the
+# sidebar and passes while the block itself is missing a row.
+_oneRow = " ".join(_pageB.split())
+_starts = [_oneRow.index("<h2>" + h)
+           for h in ("Where the work stands", "Audit", "Follow-ups",
+                     "On time vs delayed", "Company by company")]
+for _n, _sect in enumerate(("where the work stands", "audit", "follow-ups",
+                            "on time vs delayed")):
+    _chunk = _oneRow[_starts[_n]:_starts[_n + 1]]
+    # ">FMS<" in two blocks, ">FMS <div class=..." in the two whose row
+    # name carries a second line under it.
+    check(f"  and in the {_sect} block",
+          ">FMS<" in _chunk or ">FMS <" in _chunk, _sect)
+check("the company table has an FMS column under every heading",
+      _oneRow.count(">FMS</th>") == 5, _oneRow.count(">FMS</th>"))
 check("and the company table", "Company by company" in _pageB)
 
 
@@ -6768,12 +6800,38 @@ _xB = admin.get("/cmd?export=xlsx")
 check("the board downloads as Excel", _xB.status_code == 200, _xB.status_code)
 check("and it really is a workbook", _xB.content[:2] == b"PK", _xB.content[:4])
 
-# FMS is deliberately not on this board.
-check("only delegation and checklist are on the board",
-      set(_bB.position) == {"delegation", "recurring"}, sorted(_bB.position))
+# FMS used to be deliberately left off this board, on the grounds that
+# a flow's steps answered a different question. They do not — a step is
+# work somebody owes on a date — and the board that shows the group's
+# position was silent about most of the group's work.
+check("all three kinds of work are on the board",
+      set(_bB.position) == {"delegation", "recurring", "flow"},
+      sorted(_bB.position))
 
 
 # ==========================================================================
+# A planned FMS step is not late. Its date is a plan, and a slow run can
+# leave that plan weeks in the past before anybody is asked for it.
+with _slB() as _d:
+    _planS = _TB(org_id=1, branch_id=_brB, title=f"SMOKE cmd planned {RUN}",
+                 assigner_id=_bossidB, doer_id=_manidB, priority=_PB.MEDIUM,
+                 source=_SRB.FLOW, due_at=_nowB - _tdB(days=40),
+                 status=_STB.PENDING, audit_state=_ASB.NOT_REQUIRED,
+                 flow_waiting=True)
+    _d.add(_planS); _d.commit()
+    _sB2, _eB2, _ = _cbB.window("this_month")
+    _bd = _cbB.build(_d, 1, _sB2, _eB2, branch_id=_brB, day=_todayB)
+    _was = _bd.position["flow"].overdue
+    _planS.flow_waiting = False
+    _d.commit()
+    _bd2 = _cbB.build(_d, 1, _sB2, _eB2, branch_id=_brB, day=_todayB)
+check("a step whose turn has not come is not counted as overdue",
+      _bd2.position["flow"].overdue == _was + 1, (_was, _bd2.position["flow"].overdue))
+check("it is counted as upcoming instead, because it is",
+      _bd.position["flow"].upcoming >= 1, _bd.position["flow"].upcoming)
+with _slB() as _d:
+    _d.delete(_d.get(_TB, _planS.id)); _d.commit()
+
 print("\n-- who has been holding work for a month or more --")
 _css = open("app/static/app.css").read()
 from app.models import (FlowInstance as _FIQ, FlowStep as _FSQ)
@@ -7978,11 +8036,20 @@ _cmdP = admin.get("/cmd").text
 check("the page shows the missing column", "Not finished yet" in _cmdP)
 check("and says in words that the row adds up",
       "needs audit = not finished yet + done + pending" in _cmdP)
-check("the Excel export carries it too",
-      '"DEL not finished yet"' in open("app/routers/cmd.py", encoding="utf-8").read()
-      or "DEL not finished yet" in open("app/routers/cmd.py", encoding="utf-8").read())
+# Read out of the file the export really produces, not out of the source
+# that builds it: the columns are generated from a list now, so grepping
+# the router for a column name proves nothing.
 _xlA = admin.get("/cmd?export=xlsx")
 check("and the export still builds", _xlA.status_code == 200, _xlA.status_code)
+import io as _ioX
+from openpyxl import load_workbook as _lwX
+_hdrX = [c for c in next(_lwX(_ioX.BytesIO(_xlA.content)).active.iter_rows(
+    min_row=5, max_row=5, values_only=True)) if c]
+check("the Excel export carries the missing column too",
+      "DEL not finished yet" in _hdrX, _hdrX[:6])
+check("and a column for every kind of work, not just two",
+      all(f"{t} not finished yet" in _hdrX for t in ("DEL", "CL", "FMS")),
+      [h for h in _hdrX if "not finished" in h])
 
 print("\n== the background loop leaves the database alone overnight ==")
 # This is a money check, not a tidiness one. A managed Postgres sleeps when

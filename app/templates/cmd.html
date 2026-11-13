@@ -29,8 +29,8 @@
        looking at — the figures below are all "right now". #}
     <div class="cmd-date">{{ today|dt('%A %d %B %Y') }}</div>
     <p class="sub readable">The group's position in plain counts — number of
-      tasks, not score weight. Delegation and Checklist are kept apart because
-      they go wrong for different reasons.</p>
+      tasks, not score weight. Delegation, Checklist and FMS are kept apart
+      because they go wrong for different reasons.</p>
   </div>
   <div class="ph-right">
     {# The notice, up here beside the heading and STAYING here. It was a
@@ -97,8 +97,7 @@
     <div class="mcell"><div class="l">Upcoming</div></div>
     <div class="mcell"><div class="l">Open in all</div></div>
   </div>
-  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
-                          ('recurring', 'Checklist', 'checklist')] %}
+  {% for key, name, q in KINDS %}
   {% set p = board.position[key] %}
   <div class="mrow">
     <div class="mname">{{ name }}</div>
@@ -137,8 +136,7 @@
     <div class="mcell"><div class="l">Audit pending</div></div>
     <div class="mcell"><div class="l">Cleared</div></div>
   </div>
-  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
-                          ('recurring', 'Checklist', 'checklist')] %}
+  {% for key, name, q in KINDS %}
   {% set a = board.audit[key] %}
   <div class="mrow">
     <div class="mname">{{ name }}</div>
@@ -178,8 +176,14 @@
     <div class="mcell"><div class="l">Not yet chased</div></div>
     <div class="mcell"><div class="l">Covered</div></div>
   </div>
+  {# Which desk chases which work, as the follow-up desk itself has it:
+     the EA takes delegation, the PC takes the checklist AND the flows.
+     FMS was missing from this block while its figures existed and were
+     already counted — the desk was chasing work the board never showed
+     anybody. #}
   {% for key, name, desk in [('delegation', 'Delegation', 'ea'),
-                             ('recurring', 'Checklist', 'pc')] %}
+                             ('recurring', 'Checklist', 'pc'),
+                             ('flow', 'FMS', 'pc')] %}
   {% set c = board.chase[key] %}
   <div class="mrow">
     <div class="mname">{{ name }}
@@ -211,8 +215,7 @@
     <div class="mcell"><div class="l">Delayed</div></div>
     <div class="mcell"><div class="l">On-time rate</div></div>
   </div>
-  {% for key, name, q in [('delegation', 'Delegation', 'delegation'),
-                          ('recurring', 'Checklist', 'checklist')] %}
+  {% for key, name, q in KINDS %}
   {% set t = board.timing[key] %}
   <div class="mrow">
     <div class="mname">{{ name }}</div>
@@ -237,36 +240,44 @@
 {% if branches %}
 <div class="table-wrap">
 <table class="cmdtable">
+  {# Built from the same list the sections above use, so a kind of work
+     added to the board can never again be left out of this table. #}
   <tr>
     <th rowspan="2">Company</th>
-    <th colspan="2">Overdue now</th>
-    <th colspan="2">Due today</th>
-    <th colspan="2">Audit pending</th>
-    <th colspan="2">Not chased today</th>
-    <th colspan="2">Delayed in period</th>
+    {% for heading in ['Overdue now', 'Due today', 'Audit pending',
+                       'Not chased today', 'Delayed in period'] %}
+    <th colspan="{{ KINDS|length }}">{{ heading }}</th>
+    {% endfor %}
   </tr>
   <tr class="sub2">
-    <th>DEL</th><th>CL</th><th>DEL</th><th>CL</th><th>DEL</th><th>CL</th>
-    <th>DEL</th><th>CL</th><th>DEL</th><th>CL</th>
+    {% for heading in ['Overdue now', 'Due today', 'Audit pending',
+                       'Not chased today', 'Delayed in period'] %}
+      {% for key, name, q in KINDS %}<th>{{ SHORT[key] }}</th>{% endfor %}
+    {% endfor %}
   </tr>
   {% for branch, b in branches %}
   <tr>
     <td><strong>{{ branch.name if branch else '—' }}</strong></td>
-    <td class="{{ 'hot' if b.position['delegation'].overdue }}">{{ b.position['delegation'].overdue }}</td>
-    <td class="{{ 'hot' if b.position['recurring'].overdue }}">{{ b.position['recurring'].overdue }}</td>
-    <td>{{ b.position['delegation'].today }}</td>
-    <td>{{ b.position['recurring'].today }}</td>
-    <td class="{{ 'warm' if b.audit['delegation'].pending }}">{{ b.audit['delegation'].pending }}</td>
-    <td class="{{ 'warm' if b.audit['recurring'].pending }}">{{ b.audit['recurring'].pending }}</td>
-    <td class="{{ 'warm' if b.chase['delegation'].pending }}">{{ b.chase['delegation'].pending }}</td>
-    <td class="{{ 'warm' if b.chase['recurring'].pending }}">{{ b.chase['recurring'].pending }}</td>
-    <td class="{{ 'hot' if b.timing['delegation'].delayed }}">{{ b.timing['delegation'].delayed }}</td>
-    <td class="{{ 'hot' if b.timing['recurring'].delayed }}">{{ b.timing['recurring'].delayed }}</td>
+    {% for key, name, q in KINDS %}
+    <td class="{{ 'hot' if b.position[key].overdue }}">{{ b.position[key].overdue }}</td>
+    {% endfor %}
+    {% for key, name, q in KINDS %}
+    <td>{{ b.position[key].today }}</td>
+    {% endfor %}
+    {% for key, name, q in KINDS %}
+    <td class="{{ 'warm' if b.audit[key].pending }}">{{ b.audit[key].pending }}</td>
+    {% endfor %}
+    {% for key, name, q in KINDS %}
+    <td class="{{ 'warm' if b.chase[key].pending }}">{{ b.chase[key].pending }}</td>
+    {% endfor %}
+    {% for key, name, q in KINDS %}
+    <td class="{{ 'hot' if b.timing[key].delayed }}">{{ b.timing[key].delayed }}</td>
+    {% endfor %}
   </tr>
   {% endfor %}
 </table></div>
 {% else %}
-<div class="empty">No company has any delegation or checklist work yet.</div>
+<div class="empty">No company has any work on the board yet.</div>
 {% endif %}
 {% endblock %}
 
