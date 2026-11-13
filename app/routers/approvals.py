@@ -5,7 +5,8 @@ when that was, and has a button to read again.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -38,31 +39,53 @@ def _day(raw: str) -> date | None:
         return None
 
 
+def _ranges(today: date) -> list[tuple[str, str, str]]:
+    """The date ranges asked for most, one click each."""
+    monday = today - timedelta(days=today.weekday())
+    first = today.replace(day=1)
+    return [("Today", today.isoformat(), today.isoformat()),
+            ("This week", monday.isoformat(), today.isoformat()),
+            ("This month", first.isoformat(), today.isoformat())]
+
+
 @router.get("/approvals", response_class=HTMLResponse)
 def tracker(request: Request, status: str = "", person: str = "", q: str = "",
             date_from: str = "", date_to: str = "", export: str = "",
             user: User = Depends(manager_up), db: Session = Depends(get_db)):
+    """The tracker. Two layers of filter, and the order matters.
+
+    The dates, the person and the search decide WHICH requests are being
+    looked at — and the summary is of exactly those, so choosing a week
+    gives that week's four figures. The category then picks one of the
+    four out of them for the list. Done the other way round, choosing
+    "Approved" would turn the summary into one number and three zeros.
+    """
     org = _org(db, user)
     everything = approvals.items(db, org.id)
-    total = approvals.summary(everything)
 
     if status not in dict(STATUSES):
         status = ""
     start, end = _day(date_from), _day(date_to)
+    if start and end and end < start:
+        start, end = end, start
     want = " ".join((q or "").lower().split())
-    rows = everything
-    if status:
-        rows = [r for r in rows if r.status == status]
+
+    scope = everything
     if person:
-        rows = [r for r in rows if (r.person or "") == person]
-    if start:
-        rows = [r for r in rows if r.sent_on and r.sent_on >= start]
-    if end:
-        rows = [r for r in rows if r.sent_on and r.sent_on <= end]
+        scope = [r for r in scope if (r.person or "") == person]
     if want:
-        rows = [r for r in rows if want in " ".join(filter(None, [
+        scope = [r for r in scope if want in " ".join(filter(None, [
             r.task_name, r.message, r.person, r.feedback, r.next_action,
         ])).lower()]
+    # Rows whose date could not be read cannot be placed in a range.
+    # Counted and said, rather than silently dropped from a week's total.
+    undated = (sum(1 for r in scope if r.sent_on is None)
+               if (start or end) else 0)
+    if start:
+        scope = [r for r in scope if r.sent_on and r.sent_on >= start]
+    if end:
+        scope = [r for r in scope if r.sent_on and r.sent_on <= end]
+    rows = [r for r in scope if r.status == status] if status else scope
 
     if xlsx.wants(export):
         return xlsx.one("pending-approvals", "Pending approvals", [
@@ -80,18 +103,36 @@ def tracker(request: Request, status: str = "", person: str = "", q: str = "",
             f"Read from the sheet {org.appr_read_at:%d/%m/%Y %I:%M %p}"
             if org.appr_read_at else "Not read yet")
 
-    people = sorted({r.person for r in everything if r.person},
-                    key=str.lower)
+    s_iso = start.isoformat() if start else ""
+    e_iso = end.isoformat() if end else ""
+
+    def link(st: str = "", **over) -> str:
+        """This page with the filters as they are, and one thing changed.
+
+        Every figure and every tab is built with it, so opening
+        "Approved" from a week's summary keeps the week.
+        """
+        keep = {"status": st, "person": person, "q": q,
+                "date_from": s_iso, "date_to": e_iso}
+        keep.update(over)
+        return "/approvals?" + urlencode({k: v for k, v in keep.items() if v})
+
+    dated = [r.sent_on for r in everything if r.sent_on]
+    people = sorted({r.person for r in everything if r.person}, key=str.lower)
     return templates.TemplateResponse(request, "approvals.html", {
-        "user": user, "org": org, "rows": rows, "total": total,
-        "shown": approvals.summary(rows),
-        "filtered": bool(status or person or start or end or want),
+        "user": user, "org": org, "rows": rows,
+        "total": approvals.summary(everything),
+        "shown": approvals.summary(scope),
+        "narrowed": bool(person or start or end or want),
         "statuses": STATUSES, "status": status, "person": person, "q": q,
-        "date_from": date_from if start else "",
-        "date_to": date_to if end else "",
+        "date_from": s_iso, "date_to": e_iso, "start": start, "end": end,
+        "first_day": min(dated) if dated else None,
+        "last_day": max(dated) if dated else None,
+        "undated": undated, "link": link,
+        "ranges": _ranges(clock.today()),
         "people": people, "labels": approvals.LABELS,
-        "weeks": approvals.by_week(everything),
-        "days": approvals.by_day(everything),
+        "weeks": approvals.by_week(scope), "week_len": timedelta(days=6),
+        "days": approvals.by_day(scope),
         "enabled": approvals.enabled(), "robot": approvals.robot(),
         "configured": approvals.configured(org),
         "default_tab": approvals.DEFAULT_TAB,

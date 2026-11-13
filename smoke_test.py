@@ -15945,22 +15945,132 @@ try:
     check("a pending row that already has a remark is pointed out",
           _cntA.remarked == 1, _cntA.remarked)
 
+    # ---- day and month the wrong way round ----
+    # Found on the live sheet the day this went up: 167 requests from the
+    # first fortnight of November showed as eleven separate months. The
+    # sheet is set to American dates and people type them the Indian
+    # way, so 12/11/2026 was STORED as the 11th of December while still
+    # being shown as 12/11/2026. The 13th could not be an American date,
+    # stayed as text, and read correctly — which is what gave it away.
+    _TODAY_A = _dA(2026, 11, 13)
+    _realA = [_dA(2026, 11, _dd) for _dd in range(1, 14) for _ in range(2)]
+
+    def _reqA(sent, done=None):
+        return {"values": [sent, {}, {"formattedValue": "m"},
+                           {"formattedValue": "t"}, {"formattedValue": "p"},
+                           {}, {}, {}, {}, {}, done or {}]}
+
+    def _serA(d):
+        return {"formattedValue": "x",
+                "effectiveValue": {"numberValue": (d - _EPOCH_A).days}}
+
+    def _txtA(t):
+        return {"formattedValue": t}
+
+    def _readA(make):
+        recs, fixed = _apA.parse({"sheets": [{"data": [{
+            "startRow": 11084, "rowData": [_reqA(*make(d)) for d in _realA]}]}]},
+            11085, today=_TODAY_A)
+        return [r["sent_on"] for r in recs], fixed, recs
+
+    def _usA(d):          # what an American-set sheet does with a typed date
+        if d.day <= 12 and d.day != d.month:
+            return (_serA(_dA(d.year, d.day, d.month)),)
+        return (_serA(d),) if d.day <= 12 else (_txtA(d.strftime("%d/%m/%Y")),)
+
+    _gotA, _fixA, _ = _readA(_usA)
+    check("dates the sheet stored month-first are read as they were meant",
+          _gotA == _realA, sorted({d.isoformat() for d in _gotA})[:4])
+    check("and it says that it put them right", _fixA["sent"] is True)
+    _gotA, _fixA, _ = _readA(lambda d: (_txtA(d.strftime("%m/%d/%Y")),))
+    check("the same for text written month-first", _gotA == _realA,
+          sorted({d.isoformat() for d in _gotA})[:4])
+    _gotA, _fixA, _ = _readA(lambda d: (_serA(d),))
+    check("a sheet whose dates were right all along is left alone",
+          _gotA == _realA and _fixA["sent"] is False, _fixA)
+    _gotA, _fixA, _ = _readA(lambda d: (_txtA(d.strftime("%d/%m/%Y")),))
+    check("and so is one that types them day-first as text",
+          _gotA == _realA and _fixA["sent"] is False, _fixA)
+    _gotA, _fixA, _ = _readA(lambda d: (_txtA(d.strftime("%d-%b-%Y")),))
+    check("a date with the month spelt out is never second-guessed",
+          _gotA == _realA and _fixA["sent"] is False)
+    # The approval time has the same disease, and one more witness: an
+    # approval cannot come before the request it approves.
+    _, _fixA, _recsA = _readA(lambda d: (
+        _serA(d), _serA(_dA(d.year, d.day, d.month)
+                        if d.day <= 12 and d.day != d.month else d)))
+    check("an approval time stored the wrong way round is put right too",
+          all(r["approved_at"].date() == r["sent_on"] for r in _recsA)
+          and _fixA["approved"] is True,
+          sorted({r["approved_at"].date().isoformat() for r in _recsA})[:3])
+    check("no request is ever dated in the future by any of this",
+          all(d <= _TODAY_A for d in _gotA))
+
     # A dead heat between green and orange must not read as approved.
     _tieA = [_cA("x", _PALE_GREEN), _cA("y", _ORANGE)]
     check("a row that is half green and half orange is not called approved",
           _apA.status_of(_tieA)[0] == "revision", _apA.status_of(_tieA))
 
+    import re as _reA2
     _pgA = admin.get("/approvals").text
-    check("the tracker shows the four figures",
-          all(x in _pgA for x in ("Sent for approval", "Approved",
-                                  "Pending approval", "Needs revision")))
+    check("the summary shows the four figures, named as they were asked for",
+          all(x in _pgA for x in ("Total sent for approval",
+                                  "Approved by CMD Sir", "Needs revision",
+                                  "Pending for approval")))
+    # Organised in the order it is read: choose, summary, breakdown, list.
+    _flatA = " ".join(_pgA.split())
+    check("the date filter comes first, above everything it governs",
+          _flatA.index('name="date_from"') < _flatA.index("<h2>Summary")
+          < _flatA.index("Day-wise and week-wise")
+          < _flatA.index("<h2>Every request"),
+          "the page is out of order")
+
+    # The summary answers to the dates; the category then picks the list.
+    _wkA = admin.get("/approvals?date_from=2026-11-02&date_to=2026-11-03").text
+    _wkFlat = " ".join(_wkA.split())
+    _numsA = [int(x) for x in _reA2.findall(
+        r'<div class="n">(\d+)</div>', _wkFlat[_wkFlat.index("<h2>Summary"):])][:4]
+    check("choosing dates gives the summary for those dates",
+          _numsA == [4, 2, 1, 1], _numsA)       # sent, approved, revision, pending
+    check("and says which dates it is the summary of",
+          "02/11/2026 to 03/11/2026" in _wkFlat)
+    check("and how many that is out of", "of 9 in all" in _wkFlat)
+    _bothA = admin.get("/approvals?date_from=2026-11-02&date_to=2026-11-03"
+                       "&status=approved").text
+    check("a category chosen with dates lists only that category in them",
+          "Vendor payment" in _bothA and "Hire GT trainer" in _bothA
+          and "Spa linen" not in _bothA and "Diwali creative" not in _bothA)
+    _bothFlat = " ".join(_bothA.split())
+    check("while the summary still shows all four for those dates",
+          [int(x) for x in _reA2.findall(
+              r'<div class="n">(\d+)</div>',
+              _bothFlat[_bothFlat.index("<h2>Summary"):])][:4] == [4, 2, 1, 1])
+    check("every figure keeps the dates when it is clicked",
+          "date_from=2026-11-02" in _bothA.split("Approved by CMD Sir")[0]
+          .rsplit("<a ", 1)[-1])
+    check("dates the wrong way round are quietly put the right way",
+          admin.get("/approvals?date_from=2026-11-03&date_to=2026-11-02")
+          .text.count("02/11/2026 to 03/11/2026") >= 1)
+    # A request whose date cannot be read cannot be put in a week. It is
+    # counted and said, so a week's total is never short without a word.
+    _sheetA.append(_rA(None, "No date", "Undated one", "Boney", _WHITE,
+                       text_date="soon"))
+    admin.post("/approvals/refresh")
+    _undA = admin.get("/approvals?date_from=2026-11-02&date_to=2026-11-30").text
+    check("a request with no readable date is counted out loud, not lost",
+          "no date this could read" in _undA and "Undated one" not in _undA)
+    check("and is there again as soon as the dates are cleared",
+          "Undated one" in admin.get("/approvals").text)
+    _sheetA.pop()
+    admin.post("/approvals/refresh")
     check("with the requests listed under them",
           "Vendor payment" in _pgA and "Kiran Sandhu" in _pgA
           and "Rate is high" in _pgA)
     check("the unknown colour is called out rather than hidden",
           "not green or orange" in _pgA)
-    check("week by week and day by day",
-          "Week by week" in _pgA and "Day by day" in _pgA)
+    check("day-wise and week-wise, folded under the summary",
+          "Week by week" in _pgA and "Day by day" in _pgA
+          and "<details class=\"card appr-break\">" in _pgA)
     check("it says it only reads", "never changes it" in _pgA)
     _onlyA = admin.get("/approvals?status=revision").text
     check("a figure opens its own rows and no others",

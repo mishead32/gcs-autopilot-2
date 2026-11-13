@@ -1641,3 +1641,17 @@ button.stale-note:hover{transform:translateY(-1px);
 .appr-msg{max-width:38ch;white-space:pre-wrap;overflow-wrap:anywhere}
 .appr-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;
   border:1px solid var(--line);vertical-align:-1px}
+
+/* The tracker, in the order it is read: choose, summary, breakdown, list. */
+.appr-filter{margin-bottom:6px}
+.appr-quick{flex-basis:100%;display:flex;gap:8px;align-items:center;
+  flex-wrap:wrap;margin-top:4px}
+.appr-quick .chip,.appr-tabs .chip{text-decoration:none;cursor:pointer;
+  padding:4px 12px}
+.appr-quick .chip.on,.appr-tabs .chip.on{background:var(--brand);color:#fff}
+.appr-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+.appr-tabs .tabn{display:inline-block;margin-left:6px;padding:0 7px;
+  border-radius:20px;background:rgba(15,32,50,.1);font-weight:800;font-size:11px}
+.appr-tabs .chip.on .tabn{background:rgba(255,255,255,.25)}
+.appr-break{margin-top:14px}
+.appr-break summary{cursor:pointer}

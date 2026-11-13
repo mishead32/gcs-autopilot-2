@@ -380,6 +380,8 @@ class Organization(Base):
     appr_start_row: Mapped[int | None] = mapped_column(Integer, nullable=True)
     appr_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     appr_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Were the sheet's dates found with day and month the wrong way round?
+    appr_swapped: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     @property
     def esc_day_list(self) -> list[int]:

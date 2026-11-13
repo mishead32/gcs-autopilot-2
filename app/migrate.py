@@ -105,6 +105,7 @@ ADDITIONS = {
         ("appr_start_row", "INTEGER"),
         ("appr_read_at", "DATETIME"),
         ("appr_error", "TEXT"),
+        ("appr_swapped", "BOOLEAN"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

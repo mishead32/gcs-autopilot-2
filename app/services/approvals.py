@@ -172,40 +172,107 @@ def status_of(cells: list) -> tuple[str, str | None]:
 # ----------------------------------------------------------------- values ---
 _EPOCH = date(1899, 12, 30)       # day zero of a spreadsheet's calendar
 
-_FORMATS = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+# Day first, because this is an Indian office. Numeric ones are listed
+# apart from the ones that spell the month, because only a numeric date
+# can be read two ways.
+_NUMERIC = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
             "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d-%m-%Y",
-            "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y",
-            "%d-%b-%Y %H:%M:%S", "%d-%b-%Y", "%d %b %Y", "%d %B %Y",
-            "%d-%b-%y", "%d %b %y",
-            "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+            "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y")
+_WORDED = ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y", "%d %b %Y", "%d %B %Y",
+           "%d-%b-%y", "%d %b %y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+# Month first — only ever reached by text that is impossible day-first,
+# such as 11/13/2026, so it cannot steal a date that had a day-first
+# reading.
+_MONTH_FIRST = ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y",
+                "%m-%d-%Y", "%m/%d/%y")
 
 
 def _text(cell: dict) -> str:
     return str((cell or {}).get("formattedValue") or "").strip()
 
 
-def _moment(cell: dict) -> datetime | None:
-    """A date out of a cell, however it was typed.
+def _other_way(when: datetime) -> datetime | None:
+    """The same date with day and month changed over, if that is a date.
 
-    A real spreadsheet date is a NUMBER underneath — days since the end of
-    1899 — and that number is read first, because it means the same thing
-    whatever format the column happens to be showing. Text is the
-    fallback, read day-first: this is an Indian office, and 03/11 is the
-    third of November.
+    03/11 can be the third of November or the eleventh of March; 13/11
+    can only be one thing. Only the first kind has another reading.
+    """
+    if when.day > 12 or when.day == when.month:
+        return None
+    return when.replace(day=when.month, month=when.day)
+
+
+def _moment(cell: dict) -> tuple[datetime | None, datetime | None]:
+    """A date out of a cell — and its other possible reading, if it has one.
+
+    A real spreadsheet date is a NUMBER underneath, and that is read
+    first. But the number is only as right as the day it was typed: on a
+    sheet set to American dates, somebody typing 12/11/2026 for the
+    twelfth of November has stored the eleventh of December, and the
+    sheet goes on SHOWING 12/11/2026, so nobody ever sees it. That is not
+    something one cell can settle. Both readings are handed back, and
+    the column is judged as a whole — see _put_right.
     """
     raw = (cell or {}).get("effectiveValue") or {}
     n = raw.get("numberValue")
     if isinstance(n, (int, float)) and 20000 < n < 80000:
-        return datetime.combine(_EPOCH, datetime.min.time()) + timedelta(days=n)
+        when = datetime.combine(_EPOCH, datetime.min.time()) + timedelta(days=n)
+        return when, _other_way(when)
     text = _text(cell)
     if not text:
-        return None
-    for fmt in _FORMATS:
+        return None, None
+    for fmt in _NUMERIC:
         try:
-            return datetime.strptime(text, fmt)
+            when = datetime.strptime(text, fmt)
+            return when, _other_way(when)
         except ValueError:
             continue
-    return None
+    for fmt in _WORDED + _MONTH_FIRST:
+        try:
+            return datetime.strptime(text, fmt), None
+        except ValueError:
+            continue
+    return None, None
+
+
+def _badness(seq: list, today: date, floors: list | None = None) -> tuple:
+    """How implausible a column of dates is, read one particular way.
+
+    Worst things first: a request cannot have been sent tomorrow; an
+    approval cannot come before its request; rows are added to the
+    bottom of the sheet, so dates should not jump backwards as they go
+    down; and a few weeks of requests do not span a year.
+    """
+    days = [w.date() for w in seq if w is not None]
+    if not days:
+        return (0, 0, 0, 0)
+    future = sum(1 for d in days if d > today)
+    early = 0
+    if floors:
+        early = sum(1 for w, f in zip(seq, floors)
+                    if w is not None and f is not None and w.date() < f)
+    back = sum(1 for a, b in zip(days, days[1:]) if b < a)
+    return (future, early, back, (max(days) - min(days)).days)
+
+
+def _put_right(pairs: list, today: date, floors: list | None = None
+               ) -> tuple[list, bool]:
+    """One column of dates, read whichever way round makes sense.
+
+    `pairs` is (as read, the other reading or None) for each row, top to
+    bottom. Every date that could go either way is read the SAME way —
+    a sheet has one habit, not a different one per row — and the way is
+    whichever leaves the column less absurd. Dates that can only be read
+    one way are in both versions, which is what anchors the choice: a
+    13th or a 25th says which month this really is.
+    """
+    as_read = [a for a, _ in pairs]
+    if not any(alt is not None for _, alt in pairs):
+        return as_read, False
+    turned = [alt if alt is not None else a for a, alt in pairs]
+    if _badness(turned, today, floors) < _badness(as_read, today, floors):
+        return turned, True
+    return as_read, False
 
 
 def _link(cell: dict) -> str:
@@ -240,14 +307,19 @@ def fetch(sheet_id: str, tab: str, start_row: int) -> dict:
     })
 
 
-def parse(payload: dict, start_row: int) -> list[dict]:
+def parse(payload: dict, start_row: int, today: date | None = None
+          ) -> tuple[list[dict], dict]:
     """Google's answer, turned into one plain record per request.
 
     A row with nothing in the message, the task or the name is not a
     request — it is the empty part of the sheet, or a row somebody
     coloured and never filled — and is left out whatever colour it is.
+
+    Returns the records and a note of which date columns were found with
+    day and month the wrong way round and put right.
     """
-    out = []
+    today = today or clock.today()
+    out, sent, done = [], [], []
     for sheet in (payload or {}).get("sheets") or []:
         for block in sheet.get("data") or []:
             first = int(block.get("startRow", start_row - 1)) + 1
@@ -259,21 +331,27 @@ def parse(payload: dict, start_row: int) -> list[dict]:
                 if not (message or task or person):
                     continue
                 status, colour = status_of(cells[:COL_APPROVED + 1])
-                sent, done = _moment(cells[COL_SENT]), _moment(cells[COL_APPROVED])
+                sent.append(_moment(cells[COL_SENT]))
+                done.append(_moment(cells[COL_APPROVED]))
                 out.append({
                     "row_no": first + n,
-                    "sent_on": sent.date() if sent else None,
                     "sent_text": _text(cells[COL_SENT])[:80],
                     "message": message, "task_name": task,
                     "person": person[:160],
                     "doc_link": _link(cells[COL_LINK]),
                     "feedback": _text(cells[COL_FEEDBACK]),
                     "next_action": _text(cells[COL_NEXT]),
-                    "approved_at": done,
                     "approved_text": _text(cells[COL_APPROVED])[:80],
                     "status": status, "colour": colour,
                 })
-    return out
+
+    sent_days, sent_fixed = _put_right(sent, today)
+    floors = [w.date() if w else None for w in sent_days]
+    done_days, done_fixed = _put_right(done, today, floors)
+    for rec, s_at, d_at in zip(out, sent_days, done_days):
+        rec["sent_on"] = s_at.date() if s_at else None
+        rec["approved_at"] = d_at
+    return out, {"sent": sent_fixed, "approved": done_fixed}
 
 
 def _why(exc: Exception) -> str:
@@ -309,8 +387,8 @@ def sync(db: Session, org: Organization) -> dict:
         return {"ok": False, "why": "No sheet has been connected yet."}
     start = org.appr_start_row or DEFAULT_START_ROW
     try:
-        rows = parse(fetch(org.appr_sheet_id, org.appr_tab or DEFAULT_TAB, start),
-                     start)
+        rows, fixed = parse(
+            fetch(org.appr_sheet_id, org.appr_tab or DEFAULT_TAB, start), start)
     except Exception as exc:                              # noqa: BLE001
         db.rollback()
         org.appr_error = _why(exc)
@@ -321,8 +399,9 @@ def sync(db: Session, org: Organization) -> dict:
     db.add_all([ApprovalItem(org_id=org.id, **r) for r in rows])
     org.appr_read_at = clock.now()
     org.appr_error = None
+    org.appr_swapped = bool(fixed["sent"] or fixed["approved"])
     db.commit()
-    return {"ok": True, "rows": len(rows)}
+    return {"ok": True, "rows": len(rows), "fixed": fixed}
 
 
 def sync_all(db: Session) -> int:
@@ -367,7 +446,7 @@ def summary(rows) -> Count:
     return c
 
 
-def by_day(rows, days: int = 14) -> list[tuple[date, Count]]:
+def by_day(rows, days: int = 31) -> list[tuple[date, Count]]:
     """Requests grouped by the day they were SENT, newest first.
 
     How they stand NOW, not how they stood that evening: a request sent on

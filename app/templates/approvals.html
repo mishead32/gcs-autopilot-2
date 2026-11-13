@@ -59,110 +59,31 @@
     <strong>{{ org.appr_read_at|dt('%d/%m/%Y %I:%M %p') }}</strong>
     ({{ org.appr_read_at|ago }}) · {% endif %}
   counting from row {{ org.appr_start_row or default_row }} of
-  “{{ org.appr_tab or default_tab }}”. It is read again every few minutes
-  during the working day.</p>
+  “{{ org.appr_tab or default_tab }}”{% if first_day %}, which is
+  {{ first_day|dt('%d/%m/%Y') }} to {{ last_day|dt('%d/%m/%Y') }}{% endif %}.
+  Read again every few minutes during the working day.</p>
 
-{# ------------------------------------------------------- the numbers ---- #}
-<div class="grid g4 appr-kpis">
-  <a class="kpi {{ 'on' if not status }}" href="/approvals">
-    <div class="l">Sent for approval</div>
-    <div class="n">{{ total.sent }}</div>
-    <div class="m">every request counted</div></a>
-  <a class="kpi ok {{ 'on' if status == 'approved' }}" href="{{ to('approved') }}">
-    <div class="l">Approved</div>
-    <div class="n">{{ total.approved }}</div>
-    <div class="m">green rows</div></a>
-  <a class="kpi {{ 'warn' if total.pending }} {{ 'on' if status == 'pending' }}"
-     href="{{ to('pending') }}">
-    <div class="l">Pending approval</div>
-    <div class="n">{{ total.pending }}</div>
-    <div class="m">no colour yet{% if total.remarked %} ·
-      {{ total.remarked }} already ha{{ 's' if total.remarked == 1 else 've' }}
-      a remark{% endif %}</div></a>
-  <a class="kpi {{ 'bad' if total.revision }} {{ 'on' if status == 'revision' }}"
-     href="{{ to('revision') }}">
-    <div class="l">Needs revision</div>
-    <div class="n">{{ total.revision }}</div>
-    <div class="m">orange rows</div></a>
-</div>
-{% if total.other %}
-{# Said out loud rather than folded into one of the four: a colour this
-   does not know is a row whose status it does not know. #}
-<div class="card warnbox" style="margin-top:14px">
-  <strong>{{ total.other }} row{{ '' if total.other == 1 else 's' }} in a
-    colour that is not green or orange</strong>
-  <p class="m" style="margin:8px 0 0">They are counted in “Sent” and in
-    none of the other three, because this cannot tell what the colour is
-    meant to say. <a href="{{ to('other') }}">See which rows</a> — each
-    shows the colour it was read as.</p>
+{% if org.appr_swapped %}
+{# Said, not done quietly: these dates do not match what a formula on the
+   sheet would give, and somebody comparing the two should know why. #}
+<div class="card" style="margin-bottom:14px">
+  <p class="m" style="margin:0"><strong>Dates put right.</strong> The sheet
+    is storing these dates with the day and the month the other way round
+    — a date typed as 12/11/2026 for the 12th of November has been kept
+    by the sheet as the 11th of December. They are shown here as they
+    were meant: day first, dd/mm/yyyy.</p>
 </div>
 {% endif %}
 
-{# ------------------------------------------------- week and day wise ---- #}
-{% if weeks %}
-<div class="grid g2" style="align-items:start">
-  <div>
-    <h2>Week by week</h2>
-    <div class="table-wrap"><table>
-      <tr><th>Week of</th><th>Sent</th><th>Approved</th><th>Pending</th>
-        <th>Needs revision</th></tr>
-      {% for monday, c in weeks %}
-      <tr>
-        <td>{{ monday|dt('%d/%m/%Y') }}{% if loop.first %}
-          <span class="m">· this week</span>{% endif %}</td>
-        <td><strong>{{ c.sent }}</strong>
-          {% if not loop.last %}{% set was = weeks[loop.index][1].sent %}
-          <span class="m">({{ '+' if c.sent >= was }}{{ c.sent - was }}
-            on the week before)</span>{% endif %}</td>
-        <td>{{ c.approved }}</td>
-        <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
-        <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
-      </tr>
-      {% endfor %}
-    </table></div>
-  </div>
-  <div>
-    <h2>Day by day</h2>
-    <div class="table-wrap"><table>
-      <tr><th>Sent on</th><th>Sent</th><th>Approved</th><th>Pending</th>
-        <th>Needs revision</th></tr>
-      {% for d, c in days %}
-      <tr>
-        <td><a href="/approvals?date_from={{ d.isoformat() }}&date_to={{ d.isoformat() }}">
-          {{ d|dt('%a %d/%m/%Y') }}</a></td>
-        <td><strong>{{ c.sent }}</strong></td>
-        <td>{{ c.approved }}</td>
-        <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
-        <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
-      </tr>
-      {% endfor %}
-    </table></div>
-  </div>
-</div>
-<p class="m" style="margin:6px 0 0">Both tables group requests by the day
-  they were <strong>sent</strong> and show how they stand <strong>now</strong>
-  — a request sent on Monday and approved on Wednesday is in Monday's line
-  as approved. The sheet keeps no history of its colours.</p>
-{% endif %}
-
-{# ----------------------------------------------------------- the list ---- #}
-<h2>{{ labels[status] if status else 'Every request' }}
-  <span class="m">· {{ rows|length }}{% if filtered %} of {{ total.sent }}{% endif %}</span></h2>
-
-<form method="get" action="/approvals" class="card searchbar">
-  <div class="fb-f fb-wide">
-    <label>Search</label>
-    <input name="q" value="{{ q }}"
-           placeholder="Words from the task, the message or the remark">
-  </div>
-  <div class="fb-f">
-    <label>Status</label>
-    <select name="status">
-      {% for k, lbl in statuses %}
-      <option value="{{ k }}" {{ 'selected' if status == k }}>{{ lbl }}</option>
-      {% endfor %}
-    </select>
-  </div>
+{# ------------------------------------------------- 1 · choose what ---- #}
+{# First on the page, because everything under it answers to it: the
+   summary is of these dates, and so are the list and the breakdown. #}
+<form method="get" action="/approvals" class="card searchbar appr-filter">
+  <input type="hidden" name="status" value="{{ status }}">
+  <div class="fb-f"><label>Sent from</label>
+    <input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div class="fb-f"><label>Sent to</label>
+    <input type="date" name="date_to" value="{{ date_to }}"></div>
   <div class="fb-f">
     <label>Person</label>
     <select name="person">
@@ -172,15 +93,145 @@
       {% endfor %}
     </select>
   </div>
-  <div class="fb-f"><label>Sent from</label>
-    <input type="date" name="date_from" value="{{ date_from }}"></div>
-  <div class="fb-f"><label>Sent to</label>
-    <input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}"
+           placeholder="Words from the task, the message or the remark">
+  </div>
   <div class="acts">
     <button class="btn">Show</button>
-    {% if filtered %}<a class="btn ghost" href="/approvals">Clear</a>{% endif %}
+    {% if narrowed or status %}<a class="btn ghost" href="/approvals">Clear</a>{% endif %}
+  </div>
+  <div class="appr-quick">
+    <span class="m">Quick:</span>
+    {% for name, a, b in ranges %}
+    <a class="chip {{ 'on' if date_from == a and date_to == b }}"
+       href="{{ link(status, date_from=a, date_to=b) }}">{{ name }}</a>
+    {% endfor %}
+    <a class="chip {{ 'on' if not date_from and not date_to }}"
+       href="{{ link(status, date_from='', date_to='') }}">Everything</a>
   </div>
 </form>
+
+{# ------------------------------------------------- 2 · the summary ---- #}
+<h2>Summary
+  <span class="m">·
+    {% if start and end and start == end %}{{ start|dt('%d/%m/%Y') }}
+    {% elif start and end %}{{ start|dt('%d/%m/%Y') }} to {{ end|dt('%d/%m/%Y') }}
+    {% elif start %}from {{ start|dt('%d/%m/%Y') }}
+    {% elif end %}up to {{ end|dt('%d/%m/%Y') }}
+    {% else %}everything since row {{ org.appr_start_row or default_row }}{% endif %}
+    {% if person %} · {{ person }}{% endif %}
+    {% if q %} · “{{ q }}”{% endif %}</span></h2>
+
+<div class="grid g4 appr-kpis">
+  <a class="kpi {{ 'on' if not status }}" href="{{ link('') }}">
+    <div class="l">Total sent for approval</div>
+    <div class="n">{{ shown.sent }}</div>
+    <div class="m">every request{% if narrowed %} · of {{ total.sent }} in all{% endif %}</div></a>
+  <a class="kpi ok {{ 'on' if status == 'approved' }}" href="{{ link('approved') }}">
+    <div class="l">Approved by CMD Sir</div>
+    <div class="n">{{ shown.approved }}</div>
+    <div class="m">green rows</div></a>
+  <a class="kpi {{ 'bad' if shown.revision }} {{ 'on' if status == 'revision' }}"
+     href="{{ link('revision') }}">
+    <div class="l">Needs revision</div>
+    <div class="n">{{ shown.revision }}</div>
+    <div class="m">orange rows</div></a>
+  <a class="kpi {{ 'warn' if shown.pending }} {{ 'on' if status == 'pending' }}"
+     href="{{ link('pending') }}">
+    <div class="l">Pending for approval</div>
+    <div class="n">{{ shown.pending }}</div>
+    <div class="m">no colour yet{% if shown.remarked %} ·
+      {{ shown.remarked }} already ha{{ 's' if shown.remarked == 1 else 've' }}
+      a remark{% endif %}</div></a>
+</div>
+{% if shown.other %}
+{# Said out loud rather than folded into one of the four: a colour this
+   does not know is a row whose status it does not know. #}
+<div class="card warnbox" style="margin-top:14px">
+  <strong>{{ shown.other }} row{{ '' if shown.other == 1 else 's' }} in a
+    colour that is not green or orange</strong>
+  <p class="m" style="margin:8px 0 0">Counted in the total and in none of
+    the other three, because this cannot tell what the colour is meant to
+    say. <a href="{{ link('other') }}">See which rows</a> — each shows the
+    colour it was read as.</p>
+</div>
+{% endif %}
+{% if undated %}
+<p class="m" style="margin:10px 0 0"><strong>{{ undated }}</strong>
+  request{{ '' if undated == 1 else 's' }} ha{{ 's' if undated == 1 else 've' }}
+  no date this could read, so {{ 'it is' if undated == 1 else 'they are' }}
+  not in any date range. <a href="{{ link(status, date_from='', date_to='') }}">Show
+  everything</a> to see {{ 'it' if undated == 1 else 'them' }}.</p>
+{% endif %}
+
+{# --------------------------------------------- 3 · day and week wise ---- #}
+{# Folded away under the summary: it is the same figures cut finer, and
+   open by default it pushed the list a screen and a half down the page. #}
+{% if days %}
+<details class="card appr-break">
+  <summary><strong>Day-wise and week-wise</strong>
+    <span class="m">· the same figures, by the day and the week the
+      request was sent</span></summary>
+  <div class="grid g2" style="align-items:start;margin-top:14px">
+    <div>
+      <h3 class="cogroup">Day by day</h3>
+      <div class="table-wrap"><table>
+        <tr><th>Sent on</th><th>Sent</th><th>Approved</th>
+          <th>Needs revision</th><th>Pending</th></tr>
+        {% for d, c in days %}
+        <tr>
+          <td><a href="{{ link('', date_from=d.isoformat(), date_to=d.isoformat()) }}">
+            {{ d|dt('%a %d/%m/%Y') }}</a></td>
+          <td><strong>{{ c.sent }}</strong></td>
+          <td>{{ c.approved }}</td>
+          <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
+          <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
+        </tr>
+        {% endfor %}
+      </table></div>
+    </div>
+    <div>
+      <h3 class="cogroup">Week by week</h3>
+      <div class="table-wrap"><table>
+        <tr><th>Week</th><th>Sent</th><th>Approved</th>
+          <th>Needs revision</th><th>Pending</th></tr>
+        {% for monday, c in weeks %}
+        <tr>
+          <td>{{ monday|dt('%d/%m/%Y') }} to
+            {{ (monday + week_len)|dt('%d/%m/%Y') }}</td>
+          <td><strong>{{ c.sent }}</strong>
+            {% if not loop.last %}{% set was = weeks[loop.index][1].sent %}
+            <span class="m">({{ '+' if c.sent >= was }}{{ c.sent - was }}
+              on the week before)</span>{% endif %}</td>
+          <td>{{ c.approved }}</td>
+          <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
+          <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
+        </tr>
+        {% endfor %}
+      </table></div>
+    </div>
+  </div>
+  <p class="m" style="margin:10px 0 0">Grouped by the day a request was
+    <strong>sent</strong>, showing how it stands <strong>now</strong> — one
+    sent on Monday and approved on Wednesday is in Monday's line as
+    approved. The sheet keeps no history of its colours.</p>
+</details>
+{% endif %}
+
+{# ------------------------------------------------------ 4 · the list ---- #}
+<h2>{{ labels[status] if status else 'Every request' }}
+  <span class="m">· {{ rows|length }}</span></h2>
+<div class="appr-tabs">
+  {% for k, lbl in statuses %}
+  {% set n = shown.sent if not k else shown|attr(k) %}
+  {% if k != 'other' or shown.other %}
+  <a class="chip {{ 'on' if status == k }}" href="{{ link(k) }}">{{ lbl }}
+    <span class="tabn">{{ n }}</span></a>
+  {% endif %}
+  {% endfor %}
+</div>
 
 {% if rows %}
 <div class="table-wrap"><table class="appr-table">
@@ -209,7 +260,7 @@
   {% endfor %}
 </table></div>
 {% elif total.sent %}
-<div class="empty">Nothing matches those filters.
+<div class="empty">Nothing matches.
   <a href="/approvals">Show every request</a>.</div>
 {% else %}
 <div class="empty">The sheet was read and there are no requests from row
