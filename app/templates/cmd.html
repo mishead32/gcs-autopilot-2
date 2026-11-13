@@ -24,6 +24,10 @@
 <div class="page-head">
   <div>
     <h1>CMD board</h1>
+    {# The day this is. At the top, where somebody looking at a printout
+       or a screenshot of it a week later can still tell what they are
+       looking at — the figures below are all "right now". #}
+    <div class="cmd-date">{{ today|dt('%A %d %B %Y') }}</div>
     <p class="sub readable">The group's position in plain counts — number of
       tasks, not score weight. Delegation and Checklist are kept apart because
       they go wrong for different reasons.</p>
@@ -230,16 +234,39 @@
 {# Slides down over the board. Rendered with the page rather than fetched
    on click: it is a few rows, the board has already read these tasks, and
    a panel that has to load is a panel somebody closes before it arrives. #}
-{# The question CMD asks after reading the numbers is "who", and it is
-   asked from wherever on the board they happen to be — so the button
-   follows them down the page instead of sitting in a header they have
-   scrolled past. It lives out here with the panel because a fixed
-   element inside main is fixed to main, not to the window. #}
+{# A notification, in the sense a phone means it: it comes down from the
+   top on its own, says the one thing worth saying, and goes back up.
+   Nobody has to find it, and it is not sitting on the page afterwards.
+
+   Tapping it opens the full list. The small round button below is how
+   you get it back once it has gone — a notification you cannot recall
+   is a notification you have to reload the page to read twice.
+
+   Out here rather than in the content block because a fixed element
+   inside main is fixed to main, not to the window. #}
+{% if stale_total %}
+<div class="stale-note" id="staleNote" role="status" hidden>
+  <span class="sn-i" aria-hidden="true">!</span>
+  <div class="sn-body">
+    <strong>{{ stale_total }} task{{ '' if stale_total == 1 else 's' }}
+      pending over a month</strong>
+    <div class="sn-sub">{{ stale|length }}
+      {{ 'person' if stale|length == 1 else 'people' }} ·
+      longest {{ stale[0].oldest }} days, {{ stale[0].user.name }}</div>
+  </div>
+  <button type="button" class="sn-go" id="staleNoteGo">See who</button>
+  <button type="button" class="sn-x" id="staleNoteX"
+          aria-label="Dismiss">&times;</button>
+</div>
+{% endif %}
+
+{# The handle. Quiet, because the notification above does the attracting
+   — two things shouting at once is one thing too many. #}
 <button type="button" id="staleFab"
         class="stale-fab {{ 'has' if stale_total else 'none' }}"
-        aria-controls="stalePanel" aria-expanded="false">
+        aria-controls="stalePanel" aria-expanded="false"
+        title="Tasks pending more than 1 month">
   <span class="sf-i" aria-hidden="true">!</span>
-  <span class="sf-t">Tasks pending more than 1 month</span>
   <span class="sf-n">{{ stale_total }}</span>
 </button>
 
@@ -376,6 +403,48 @@
   scrim.addEventListener('click', function () { show(false); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && panel.classList.contains('isopen')) show(false);
+  });
+
+  // ---- the notification ------------------------------------------------
+  // Down on its own, then back up. The timer is paused while the pointer
+  // is on it, because something that slides away mid-read is worse than
+  // something that never appeared.
+  var note = document.getElementById('staleNote');
+  if (!note) return;
+  var SEEN = 'ga.cmd.stale.seen', timer = null;
+
+  function hideNote() {
+    note.classList.remove('isin');
+    setTimeout(function () { note.hidden = true; }, 320);
+  }
+
+  function dismiss() {
+    hideNote();
+    // Dismissed means dismissed, for this visit. Coming back on every
+    // click of the period selector would make it an irritation rather
+    // than a notice.
+    try { sessionStorage.setItem(SEEN, '1'); } catch (e) {}
+  }
+
+  var already = false;
+  try { already = sessionStorage.getItem(SEEN) === '1'; } catch (e) {}
+  if (!already) {
+    note.hidden = false;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { note.classList.add('isin'); });
+    });
+    timer = setTimeout(dismiss, 7000);
+    note.addEventListener('mouseenter', function () { clearTimeout(timer); });
+    note.addEventListener('mouseleave', function () {
+      timer = setTimeout(dismiss, 2500);
+    });
+  }
+
+  document.getElementById('staleNoteX').addEventListener('click', dismiss);
+  document.getElementById('staleNoteGo').addEventListener('click', function () {
+    clearTimeout(timer);
+    dismiss();
+    show(true);
   });
 })();
 </script>

@@ -1622,3 +1622,44 @@ body.stale-locked{overflow:hidden}
 }
 .stale-rest{border:1px dashed var(--line);border-radius:10px;padding:10px 14px;
   line-height:1.9}
+
+/* ---- the notification -------------------------------------------------
+   What a phone means by one: it comes down from the top, says its piece,
+   and goes back up. Top-RIGHT rather than centred, so it never lands on
+   the first figures somebody is reading. */
+.stale-note{position:fixed;top:12px;right:16px;z-index:72;
+  width:min(430px,calc(100vw - 32px));
+  display:flex;align-items:flex-start;gap:12px;
+  padding:13px 14px;border-radius:14px;
+  background:var(--card);border:1px solid var(--line);
+  box-shadow:0 16px 38px rgba(15,32,50,.26),0 2px 8px rgba(15,32,50,.1);
+  transform:translateY(calc(-100% - 20px));opacity:0;
+  transition:transform .3s cubic-bezier(.2,.8,.3,1),opacity .2s ease}
+.stale-note.isin{transform:translateY(0);opacity:1}
+.stale-note .sn-i{display:grid;place-items:center;width:30px;height:30px;
+  flex-shrink:0;border-radius:50%;background:var(--bad);color:#fff;
+  font-weight:900;line-height:1}
+.stale-note .sn-body{flex:1;min-width:0;line-height:1.35}
+.stale-note .sn-sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+.stale-note .sn-go{flex-shrink:0;align-self:center;border:0;cursor:pointer;
+  font:inherit;font-weight:700;font-size:13px;color:#fff;
+  background:var(--bad);border-radius:8px;padding:7px 12px}
+.stale-note .sn-x{flex-shrink:0;align-self:flex-start;border:0;cursor:pointer;
+  background:none;color:var(--muted);font-size:18px;line-height:1;padding:0 2px}
+.stale-note .sn-x:hover{color:var(--ink)}
+@media (max-width:760px){
+  .stale-note{top:8px;right:8px;left:8px;width:auto}
+  .stale-note .sn-go{padding:7px 10px}
+}
+@media (prefers-reduced-motion:reduce){
+  .stale-note{transition:opacity .2s ease;transform:none}
+}
+
+/* With the notification doing the attracting, the handle is just a
+   handle: round, quiet, and no longer pulsing at anybody. */
+.stale-fab{padding:12px 14px}
+.stale-fab.has::after{content:none}
+/* The date, at the top of the board rather than only beside a heading
+   further down: a screenshot of this page has to say which day it is. */
+.cmd-date{font-weight:700;color:var(--brand);margin:2px 0 6px;
+  letter-spacing:.2px}

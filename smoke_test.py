@@ -6603,6 +6603,18 @@ check("and does not get the menu item", "CMD board" not in doer.get("/").text)
 check("a manager can", mgr.get("/cmd").status_code == 200)
 _pageB = admin.get("/cmd").text
 check("the board opens on this month", "This month" in _pageB)
+# A screenshot of this page has to say which day it is — the figures at
+# the top are all "right now", and right now is only meaningful with a
+# date beside it.
+check("the day is printed at the top of the board",
+      'class="cmd-date"' in _pageB
+      and _todayB.strftime("%d/%m/%Y") in _pageB,
+      _todayB.strftime("%d/%m/%Y"))
+check("and it is above the first figures, not buried under them",
+      _pageB.index('class="cmd-date"') < _pageB.index("Where the work stands"))
+check("written the way every other date here is",
+      _todayB.strftime("%A %d/%m/%Y") in " ".join(_pageB.split()),
+      _todayB.strftime("%A %d/%m/%Y"))
 check("it says it is counting tasks, not weight", "not score weight" in _pageB)
 check("all four blocks are there",
       all(x in _pageB for x in ("Where the work stands", "Audit",
@@ -6845,6 +6857,20 @@ check("the board carries the panel", 'id="stalePanel"' in _pageS)
 check("with a floating button that says how many",
       'id="staleFab"' in _pageS
       and "Tasks pending more than 1 month" in _pageS)
+# A notification in the sense a phone means it: down from the top on its
+# own, then back up. The button is only the way to call it back.
+check("and a notification that comes down on its own",
+      'id="staleNote"' in _pageS and "pending over a month" in _pageS)
+check("which names the worst of it, so it is worth reading",
+      "longest" in _pageS and "days," in _pageS)
+check("it slides down from above and is not simply there",
+      ".stale-note{position:fixed" in _css
+      and "transform:translateY(calc(-100% - 20px))" in _css
+      and ".stale-note.isin{transform:translateY(0)" in _css)
+check("and it goes away again by itself",
+      "setTimeout(dismiss, 7000)" in _pageS)
+check("while the pointer is on it, it waits",
+      "mouseenter" in _pageS and "clearTimeout(timer)" in _pageS)
 check("the button floats, so it is there wherever they have scrolled to",
       ".stale-fab{position:fixed" in _css)
 # A bar down the right-hand side, coming down from the top — so the
