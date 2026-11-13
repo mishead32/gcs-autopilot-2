@@ -6763,6 +6763,7 @@ check("only delegation and checklist are on the board",
 
 # ==========================================================================
 print("\n-- who has been holding work for a month or more --")
+_css = open("app/static/app.css").read()
 from app.models import (FlowInstance as _FIQ, FlowStep as _FSQ)
 # The board says where the group stands. The next question is always
 # "and who", and it was not answerable without leaving the board.
@@ -6841,8 +6842,15 @@ with _slB() as _d:
 
 _pageS = admin.get("/cmd").text
 check("the board carries the panel", 'id="stalePanel"' in _pageS)
-check("with a button that says how many", 'id="staleOpen"' in _pageS
-      and "Owed a month or more" in _pageS)
+check("with a floating button that says how many",
+      'id="staleFab"' in _pageS and "Owed a month or more" in _pageS)
+check("the button floats, so it is there wherever they have scrolled to",
+      ".stale-fab{position:fixed" in _css)
+check("and it floats OUTSIDE main, for the same reason the panel does",
+      _pageS.index('id="staleFab"') > _pageS.rindex("</main>"))
+check("it only shouts while something is owed",
+      'class="stale-fab has"' in _pageS, 
+      [l for l in _pageS.splitlines() if "stale-fab" in l][:1])
 with _slB() as _d:
     _slowNameS = _d.get(_UB, _slowSid).name
 check("and the person is named on it", _slowNameS in _pageS, _slowNameS)

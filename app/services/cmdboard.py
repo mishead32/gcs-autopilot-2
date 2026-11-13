@@ -306,6 +306,12 @@ STALE_DAYS = 30
 # into a report; the link beside each person opens their full list.
 STALE_SHOWN = 8
 
+# How many people get their work listed out. Everybody past this is still
+# NAMED — the question was "who", and a panel that hides people answers a
+# different one — but without their tasks underneath, so a bad month does
+# not produce a panel nobody scrolls to the end of.
+STALE_PEOPLE = 12
+
 LABELS = {TaskSource.DELEGATION: "Delegation",
           TaskSource.RECURRING: "Checklist",
           TaskSource.FLOW: "FMS"}

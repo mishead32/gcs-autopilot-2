@@ -29,13 +29,6 @@
       they go wrong for different reasons.</p>
   </div>
   <div>
-    {# The question CMD asks after reading the numbers is "who". It opens
-       over the board rather than navigating away, so the board is still
-       there underneath when it is closed. #}
-    <button type="button" class="btn {{ 'danger' if stale_total else 'ghost' }}"
-            id="staleOpen" aria-controls="stalePanel" aria-expanded="false">
-      Owed a month or more
-      <span class="stale-pill">{{ stale_total }}</span></button>
     {{ excel_btn('/cmd?period=' ~ period ~ '&date_from=' ~ date_from ~
                  '&date_to=' ~ date_to ~ '&export=xlsx',
                  title='The whole board, company by company, as Excel') }}</div>
@@ -237,6 +230,19 @@
 {# Slides down over the board. Rendered with the page rather than fetched
    on click: it is a few rows, the board has already read these tasks, and
    a panel that has to load is a panel somebody closes before it arrives. #}
+{# The question CMD asks after reading the numbers is "who", and it is
+   asked from wherever on the board they happen to be — so the button
+   follows them down the page instead of sitting in a header they have
+   scrolled past. It lives out here with the panel because a fixed
+   element inside main is fixed to main, not to the window. #}
+<button type="button" id="staleFab"
+        class="stale-fab {{ 'has' if stale_total else 'none' }}"
+        aria-controls="stalePanel" aria-expanded="false">
+  <span class="sf-i" aria-hidden="true">!</span>
+  <span class="sf-t">Owed a month or more</span>
+  <span class="sf-n">{{ stale_total }}</span>
+</button>
+
 <div class="stale-scrim" id="staleScrim" hidden></div>
 <section class="stale-panel" id="stalePanel" hidden
          aria-label="People holding work for a month or more">
@@ -258,7 +264,7 @@
     <strong>{{ stale_total }}</strong>
     {{ 'task' if stale_total == 1 else 'tasks' }}. Longest first.</p>
   <div class="stale-body">
-    {% for r in stale %}
+    {% for r in stale[:people_shown] %}
     <div class="stale-person">
       <div class="stale-who">
         <div>
@@ -295,6 +301,17 @@
       {% endif %}
     </div>
     {% endfor %}
+    {% if stale|length > people_shown %}
+    {# Still named, every one of them. The question was "who". #}
+    <div class="stale-rest">
+      <strong>{{ stale|length - people_shown }} more
+        {{ 'person' if stale|length - people_shown == 1 else 'people' }}</strong>,
+      each owed less than the {{ stale[people_shown - 1].oldest }} days above:
+      {% for r in stale[people_shown:] %}<a
+        href="/tasks?scope=all&status=overdue&doer={{ r.user.id }}">{{ r.user.name }}</a>
+        <span class="m">({{ r.count }})</span>{{ "" if loop.last else " · " }}{% endfor %}
+    </div>
+    {% endif %}
   </div>
   {% else %}
   <div class="empty" style="margin:0">Nobody is holding work that is
@@ -324,7 +341,7 @@
 // Slides down from the top, over the board. No library: a transform and a
 // class, so it is the same on the phone and does not fight the sidebar.
 (function () {
-  var open = document.getElementById('staleOpen'),
+  var open = document.getElementById('staleFab'),
       panel = document.getElementById('stalePanel'),
       scrim = document.getElementById('staleScrim'),
       shut = document.getElementById('staleClose');
@@ -338,6 +355,7 @@
       panel.classList.toggle('isopen', on);
       scrim.classList.toggle('isopen', on);
       open.setAttribute('aria-expanded', on ? 'true' : 'false');
+      open.classList.toggle('away', on);
       document.body.classList.toggle('stale-locked', on);
     });
     if (!on) {
