@@ -1526,26 +1526,32 @@ table.fmsboard .fmsb-when{white-space:nowrap}
 .stale-scrim{position:fixed;inset:0;z-index:70;background:rgba(15,32,50,.42);
   opacity:0;transition:opacity .22s ease}
 .stale-scrim.isopen{opacity:1}
-.stale-panel{position:fixed;left:0;right:0;top:0;z-index:71;
-  max-height:86vh;overflow:auto;background:var(--card);
-  border-bottom:1px solid var(--line);
-  box-shadow:0 18px 44px rgba(15,32,50,.28);
-  border-radius:0 0 14px 14px;padding:18px 22px 22px;
-  /* Starts fully above its own top edge, so the slide begins off-screen
-     whatever the panel's height turns out to be. */
-  transform:translateY(-101%);transition:transform .24s cubic-bezier(.22,.7,.3,1)}
+/* A bar down the RIGHT-HAND side that comes down from the top, rather
+   than a sheet across the whole page: the board stays readable beside
+   it, which is the point of not navigating away in the first place. */
+.stale-panel{position:fixed;top:0;right:0;left:auto;z-index:71;
+  width:min(560px,calc(100vw - 32px));height:100vh;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:var(--card);border-left:1px solid var(--line);
+  box-shadow:-18px 0 44px rgba(15,32,50,.26);
+  border-radius:0 0 0 14px;padding:18px 20px 20px;
+  /* Starts a whole screen-height above, so it begins off-screen however
+     tall it is and travels straight down into place. */
+  transform:translateY(-100vh);transition:transform .26s cubic-bezier(.22,.7,.3,1)}
 .stale-panel.isopen{transform:translateY(0)}
 /* The board behind it does not scroll away under the panel. */
 body.stale-locked{overflow:hidden}
 .stale-head{display:flex;align-items:flex-start;justify-content:space-between;
-  gap:16px;margin-bottom:10px}
+  gap:16px;margin-bottom:10px;flex-shrink:0}
 .stale-head h2{margin:0 0 4px}
 .stale-head .m{margin:0;max-width:70ch}
 .stale-close{width:34px;height:34px;flex-shrink:0;border:1px solid var(--line);
   background:var(--card);border-radius:8px;font-size:20px;line-height:1;
   color:var(--muted);cursor:pointer}
 .stale-close:hover{background:var(--bg);color:var(--ink)}
-.stale-sum{margin:0 0 12px}
+.stale-sum{margin:0 0 12px;flex-shrink:0}
+.stale-body{flex:1;min-height:0;overflow-y:auto;margin:0 -20px;
+  padding:0 20px 4px}
 .stale-person{border:1px solid var(--line);border-radius:10px;padding:12px 14px;
   margin-bottom:10px}
 .stale-who{display:flex;align-items:flex-start;justify-content:space-between;
@@ -1555,8 +1561,11 @@ body.stale-locked{overflow:hidden}
 .stale-tasks{width:100%;margin-top:10px;border-collapse:collapse}
 .stale-tasks td{padding:6px 8px;border-top:1px solid var(--line);
   vertical-align:top}
+.stale-who{flex-direction:column;align-items:stretch}
+.stale-figs{justify-content:flex-start}
+.stale-tasks td:nth-child(3){width:auto;white-space:nowrap}
 @media (max-width:760px){
-  .stale-panel{padding:14px 14px 18px;max-height:92vh;border-radius:0 0 10px 10px}
+  .stale-panel{width:100vw;padding:14px 14px 18px;border-radius:0}
   .stale-tasks td{display:block;border-top:0;padding:2px 0}
   .stale-tasks tr{display:block;border-top:1px solid var(--line);padding:8px 0}
 }

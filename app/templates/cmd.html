@@ -239,16 +239,16 @@
         class="stale-fab {{ 'has' if stale_total else 'none' }}"
         aria-controls="stalePanel" aria-expanded="false">
   <span class="sf-i" aria-hidden="true">!</span>
-  <span class="sf-t">Owed a month or more</span>
+  <span class="sf-t">Tasks pending more than 1 month</span>
   <span class="sf-n">{{ stale_total }}</span>
 </button>
 
 <div class="stale-scrim" id="staleScrim" hidden></div>
 <section class="stale-panel" id="stalePanel" hidden
-         aria-label="People holding work for a month or more">
+         aria-label="Tasks pending more than 1 month">
   <div class="stale-head">
     <div>
-      <h2>Owed for {{ stale_days }} days or more</h2>
+      <h2>Tasks pending more than 1 month</h2>
       <p class="m">Counted from the planned date, as at
         {{ today|dt('%d/%m/%Y') }} — every kind of work, FMS included.
         Work handed in and waiting on an auditor is not counted against
@@ -314,9 +314,9 @@
     {% endif %}
   </div>
   {% else %}
-  <div class="empty" style="margin:0">Nobody is holding work that is
-    {{ stale_days }} days past its planned date. Anything late is late by
-    less than that.</div>
+  <div class="empty" style="margin:0">Nobody is holding work that is more
+    than a month past its planned date. Anything late is late by less
+    than {{ stale_days }} days.</div>
   {% endif %}
 </section>
 

@@ -6843,9 +6843,17 @@ with _slB() as _d:
 _pageS = admin.get("/cmd").text
 check("the board carries the panel", 'id="stalePanel"' in _pageS)
 check("with a floating button that says how many",
-      'id="staleFab"' in _pageS and "Owed a month or more" in _pageS)
+      'id="staleFab"' in _pageS
+      and "Tasks pending more than 1 month" in _pageS)
 check("the button floats, so it is there wherever they have scrolled to",
       ".stale-fab{position:fixed" in _css)
+# A bar down the right-hand side, coming down from the top — so the
+# board is still readable beside it rather than covered over.
+check("the panel is a bar on the right, not a sheet across the page",
+      ".stale-panel{position:fixed;top:0;right:0" in _css)
+check("and it travels downwards into place",
+      "transform:translateY(-100vh)" in _css
+      and ".stale-panel.isopen{transform:translateY(0)}" in _css)
 check("and it floats OUTSIDE main, for the same reason the panel does",
       _pageS.index('id="staleFab"') > _pageS.rindex("</main>"))
 check("it only shouts while something is owed",
