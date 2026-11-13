@@ -510,8 +510,16 @@ def task_report(request: Request, source: str = "delegation",
     overdue = [t for t in pending if t.is_overdue]
     due_today = [t for t in pending if not t.is_overdue
                  and t.due_at.date() == today]
+    # The REMAINDER, deliberately, rather than "planned for a later day".
+    #
+    # An FMS step whose turn has not come is never overdue however old
+    # its planned date is — the date is a plan, and a slow run can leave
+    # it weeks in the past while nobody has been asked for anything. Ask
+    # for "a later day" and that step is in none of the three buckets:
+    # the page then says 185 pending and shows 3 + 14 + 163, and a total
+    # that does not add up is a page people stop trusting.
     upcoming = [t for t in pending if not t.is_overdue
-                and t.due_at.date() > today]
+                and t.due_at.date() != today]
     on_time = [t for t in completed if t.was_on_time]
 
     # The audit picture, over everything in the window rather than only the

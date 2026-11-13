@@ -290,3 +290,120 @@ def window(period: str, date_from: str = "", date_to: str = "",
     return (datetime.combine(first, datetime.min.time()),
             datetime.combine(last, datetime.max.time()),
             f"{first:%B %Y}")
+
+
+# ======================================================= stale work ========
+# Who is sitting on work that has been owed for a month or more.
+#
+# The board above answers "where does the group stand"; this answers the
+# question CMD asks next, which is "and who". Deliberately NOT limited to
+# the two sources above: an FMS step owed since September is owed by a
+# person exactly as a delegation task is, and leaving flows out would put
+# the worst cases on the one screen that does not show them.
+STALE_DAYS = 30
+
+# Enough to see the shape of somebody's backlog without turning the panel
+# into a report; the link beside each person opens their full list.
+STALE_SHOWN = 8
+
+LABELS = {TaskSource.DELEGATION: "Delegation",
+          TaskSource.RECURRING: "Checklist",
+          TaskSource.FLOW: "FMS"}
+
+
+def _days_owed(t: Task, day: date) -> int:
+    """Whole days since the planned date passed."""
+    return max(0, (day - t.due_at.date()).days)
+
+
+@dataclass
+class StaleRow:
+    """One person, and the work they have been holding too long."""
+    user: object = None
+    tasks: list = field(default_factory=list)
+    day: date = None
+
+    @property
+    def count(self) -> int:
+        return len(self.tasks)
+
+    @property
+    def oldest(self) -> int:
+        """Days owed on the one they have held longest."""
+        return max((_days_owed(t, self.day) for t in self.tasks), default=0)
+
+    def owed(self, t: Task) -> int:
+        return _days_owed(t, self.day)
+
+    @property
+    def shown(self) -> list:
+        return self.tasks[:STALE_SHOWN]
+
+    @property
+    def hidden(self) -> int:
+        return max(0, self.count - STALE_SHOWN)
+
+    @property
+    def sources(self) -> str:
+        """"FMS 4, Delegation 1" — what the backlog is made of."""
+        tally: dict[str, int] = {}
+        for t in self.tasks:
+            name = LABELS.get(t.source, t.source.value)
+            tally[name] = tally.get(name, 0) + 1
+        return ", ".join(f"{k} {v}" for k, v in
+                         sorted(tally.items(), key=lambda kv: -kv[1]))
+
+
+def stale(db: Session, org_id: int, branch_id: int | None = None,
+          days: int = STALE_DAYS, on: date | None = None) -> list[StaleRow]:
+    """Everybody holding work whose planned date passed `days` ago or more.
+
+    Counted on the PLANNED date, like every other lateness figure here, so
+    this agrees with the overdue column instead of telling a second story.
+
+    Three kinds of work are deliberately NOT counted against anybody, and
+    they are the same three `is_overdue` leaves out — a board that names
+    people has to use the same rule as the colour on their own task list,
+    or somebody is told off here for work that is not red there:
+
+      handed in     the doer has finished; what is left is the auditor's
+                    queue, which the doer does not control
+      parked        cancelled, or held because its FMS run is paused
+      not its turn  an FMS step still waiting. Its date is a PLAN, shown
+                    so people can see work coming. A slow run can leave
+                    that plan a month old while the person whose step it
+                    is has not been asked for anything yet.
+
+    The person is the DOER. Work with nobody on it cannot be owed by
+    anybody and is left out rather than filed under a blank name.
+    """
+    day = on or clock.today()
+    cutoff = datetime.combine(day, datetime.min.time()) - timedelta(days=days)
+
+    q = (select(Task)
+         .where(Task.org_id == org_id,
+                Task.status.in_(OPEN_STATES),
+                Task.submitted_at.is_(None),
+                Task.flow_waiting.is_(False),
+                Task.due_at < cutoff,
+                Task.doer_id.isnot(None))
+         .options(joinedload(Task.doer), joinedload(Task.branch),
+                  joinedload(Task.flow_instance)))
+    if branch_id:
+        q = q.where(Task.branch_id == branch_id)
+
+    rows: dict[int, StaleRow] = {}
+    for t in db.scalars(q).unique().all():
+        if t.doer is None:
+            continue
+        row = rows.setdefault(t.doer_id, StaleRow(user=t.doer, day=day))
+        row.tasks.append(t)
+
+    for row in rows.values():
+        row.tasks.sort(key=lambda t: t.due_at)       # longest held first
+
+    # Worst first by how long the oldest has been owed, not by how many:
+    # one task owed since August is a bigger problem than six owed since
+    # last month, and whoever reads this has limited attention.
+    return sorted(rows.values(), key=lambda r: (-r.oldest, -r.count,
+                                                (r.user.name or "").lower()))

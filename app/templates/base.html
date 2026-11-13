@@ -185,6 +185,17 @@
   {% block content %}{% endblock %}
 </main>
 
+{# Anything that covers the page goes HERE, outside <main>.
+
+   main carries an animation whose fill is `both`, so its final transform
+   stays applied — and an element with a transform becomes the containing
+   block for every position:fixed descendant. A panel written inside the
+   content block is therefore fixed to main rather than to the window:
+   it lands a little below the top, cannot reach over the sidebar, and
+   its backdrop stops at main's edges. Cost an afternoon once; this block
+   is so it costs nobody another one. #}
+{% block overlays %}{% endblock %}
+
 {% if user %}
 <script>
 (function(){

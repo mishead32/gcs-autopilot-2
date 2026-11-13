@@ -28,27 +28,18 @@
       tasks, not score weight. Delegation and Checklist are kept apart because
       they go wrong for different reasons.</p>
   </div>
-  <div>{{ excel_btn('/cmd?period=' ~ period ~ '&date_from=' ~ date_from ~
-                    '&date_to=' ~ date_to ~ '&export=xlsx',
-                    title='The whole board, company by company, as Excel') }}</div>
-</div>
-
-<form method="get" action="/cmd" class="card daterange">
   <div>
-    <label>Period</label>
-    <select name="period" onchange="this.form.submit()">
-      {% for k, lbl in periods %}
-      <option value="{{ k }}" {{ 'selected' if period == k }}>{{ lbl }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
-  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
-  <div class="acts">
-    <button class="btn" name="period" value="custom">Apply dates</button>
-    <a class="btn ghost" href="/cmd">This month</a>
-  </div>
-</form>
+    {# The question CMD asks after reading the numbers is "who". It opens
+       over the board rather than navigating away, so the board is still
+       there underneath when it is closed. #}
+    <button type="button" class="btn {{ 'danger' if stale_total else 'ghost' }}"
+            id="staleOpen" aria-controls="stalePanel" aria-expanded="false">
+      Owed a month or more
+      <span class="stale-pill">{{ stale_total }}</span></button>
+    {{ excel_btn('/cmd?period=' ~ period ~ '&date_from=' ~ date_from ~
+                 '&date_to=' ~ date_to ~ '&export=xlsx',
+                 title='The whole board, company by company, as Excel') }}</div>
+</div>
 
 {# ---------------------------------------------------------------- 1 ---- #}
 {# The live block is deliberately first and deliberately not period-filtered:
@@ -239,4 +230,135 @@
 {% else %}
 <div class="empty">No company has any delegation or checklist work yet.</div>
 {% endif %}
+{% endblock %}
+
+{% block overlays %}
+{# -------------------------------------------------- the "who" panel ---- #}
+{# Slides down over the board. Rendered with the page rather than fetched
+   on click: it is a few rows, the board has already read these tasks, and
+   a panel that has to load is a panel somebody closes before it arrives. #}
+<div class="stale-scrim" id="staleScrim" hidden></div>
+<section class="stale-panel" id="stalePanel" hidden
+         aria-label="People holding work for a month or more">
+  <div class="stale-head">
+    <div>
+      <h2>Owed for {{ stale_days }} days or more</h2>
+      <p class="m">Counted from the planned date, as at
+        {{ today|dt('%d/%m/%Y') }} — every kind of work, FMS included.
+        Work handed in and waiting on an auditor is not counted against
+        the doer, and nor is an FMS step whose turn has not come.</p>
+    </div>
+    <button type="button" class="stale-close" id="staleClose"
+            aria-label="Close">&times;</button>
+  </div>
+
+  {% if stale %}
+  <p class="m stale-sum"><strong>{{ stale|length }}</strong>
+    {{ 'person is' if stale|length == 1 else 'people are' }} holding
+    <strong>{{ stale_total }}</strong>
+    {{ 'task' if stale_total == 1 else 'tasks' }}. Longest first.</p>
+  <div class="stale-body">
+    {% for r in stale %}
+    <div class="stale-person">
+      <div class="stale-who">
+        <div>
+          <strong>{{ r.user.name }}</strong>
+          {% if r.user.branch %}<span class="m"> · {{ r.user.branch.name }}</span>{% endif %}
+          <div class="m">{{ r.sources }}</div>
+        </div>
+        <div class="stale-figs">
+          <span class="chip bad">{{ r.oldest }} days</span>
+          <span class="chip">{{ r.count }}
+            {{ 'task' if r.count == 1 else 'tasks' }}</span>
+          <a class="btn ghost sm"
+             href="/tasks?scope=all&status=overdue&doer={{ r.user.id }}">
+            Open their list</a>
+        </div>
+      </div>
+      <table class="stale-tasks">
+        {% for t in r.shown %}
+        <tr>
+          <td class="m" style="width:84px">{{ t.ref or '—' }}</td>
+          <td><a href="/tasks/{{ t.id }}">{{ t.title }}</a>
+            <div class="m">{{ t.source_label }}{% if t.branch %} ·
+              {{ t.branch.name }}{% endif %}</div></td>
+          <td class="m" style="width:150px">planned
+            {{ t.due_at|dt('%d/%m/%Y') }}</td>
+          <td class="overdue" style="width:100px">{{ r.owed(t) }} days</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% if r.hidden %}
+      <p class="m" style="margin:4px 0 0">and {{ r.hidden }} more —
+        <a href="/tasks?scope=all&status=overdue&doer={{ r.user.id }}">see
+          all {{ r.count }}</a></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty" style="margin:0">Nobody is holding work that is
+    {{ stale_days }} days past its planned date. Anything late is late by
+    less than that.</div>
+  {% endif %}
+</section>
+
+<form method="get" action="/cmd" class="card daterange">
+  <div>
+    <label>Period</label>
+    <select name="period" onchange="this.form.submit()">
+      {% for k, lbl in periods %}
+      <option value="{{ k }}" {{ 'selected' if period == k }}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="acts">
+    <button class="btn" name="period" value="custom">Apply dates</button>
+    <a class="btn ghost" href="/cmd">This month</a>
+  </div>
+</form>
+
+<script>
+// Slides down from the top, over the board. No library: a transform and a
+// class, so it is the same on the phone and does not fight the sidebar.
+(function () {
+  var open = document.getElementById('staleOpen'),
+      panel = document.getElementById('stalePanel'),
+      scrim = document.getElementById('staleScrim'),
+      shut = document.getElementById('staleClose');
+  if (!open || !panel) return;
+
+  function show(on) {
+    // hidden is removed BEFORE the class goes on, or the browser has
+    // nothing to animate from and the panel simply appears.
+    if (on) { panel.hidden = false; scrim.hidden = false; }
+    requestAnimationFrame(function () {
+      panel.classList.toggle('isopen', on);
+      scrim.classList.toggle('isopen', on);
+      open.setAttribute('aria-expanded', on ? 'true' : 'false');
+      document.body.classList.toggle('stale-locked', on);
+    });
+    if (!on) {
+      // Left in the page until the slide has finished, so it does not
+      // vanish halfway up.
+      setTimeout(function () {
+        if (!panel.classList.contains('isopen')) {
+          panel.hidden = true; scrim.hidden = true;
+        }
+      }, 260);
+    }
+  }
+
+  open.addEventListener('click', function () {
+    show(!panel.classList.contains('isopen'));
+  });
+  shut.addEventListener('click', function () { show(false); });
+  scrim.addEventListener('click', function () { show(false); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && panel.classList.contains('isopen')) show(false);
+  });
+})();
+</script>
 {% endblock %}

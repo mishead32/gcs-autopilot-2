@@ -70,8 +70,15 @@ def cmd_board(request: Request, period: str = "this_month",
         ], rows, f"Position on {today:%d/%m/%Y} · period {label} · counts of "
                  f"tasks, not score weight")
 
+    # Who is holding work that has been owed a month or more. Read now
+    # rather than for the chosen period: "pending for a month" is a fact
+    # about today, and filtering it by a month-long window would answer a
+    # different question while looking like this one.
+    stale = cmdboard.stale(db, user.org_id)
     return templates.TemplateResponse(request, "cmd.html", {
         "user": user, "board": board, "branches": branches,
+        "stale": stale, "stale_days": cmdboard.STALE_DAYS,
+        "stale_total": sum(r.count for r in stale),
         "period": period, "periods": cmdboard.PERIODS, "label": label,
         "date_from": date_from or start.date().isoformat(),
         "date_to": date_to or end.date().isoformat(),

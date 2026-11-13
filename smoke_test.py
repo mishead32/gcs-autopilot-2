@@ -6609,6 +6609,7 @@ check("all four blocks are there",
                                 "Follow-ups", "On time vs delayed")))
 check("and the company table", "Company by company" in _pageB)
 
+
 with _slB() as _d:
     _bossB = _d.scalar(_spB(_UB).where(_UB.email == "mis@gcs.local"))
     _manB = _d.scalar(_spB(_UB).where(_UB.email == "amit@gcs.local"))
@@ -6761,6 +6762,95 @@ check("only delegation and checklist are on the board",
 
 
 # ==========================================================================
+print("\n-- who has been holding work for a month or more --")
+from app.models import (FlowInstance as _FIQ, FlowStep as _FSQ)
+# The board says where the group stands. The next question is always
+# "and who", and it was not answerable without leaving the board.
+with _slB() as _d:
+    _bossS = _d.scalar(_spB(_UB).where(_UB.email == "mis@gcs.local"))
+    _slowS = _d.scalar(_spB(_UB).where(_UB.email == "meena@gcs.local"))
+    _oldS = _TB(org_id=1, branch_id=_slowS.branch_id,
+                title=f"SMOKE held since forever {RUN}",
+                assigner_id=_bossS.id, doer_id=_slowS.id, priority=_PB.HIGH,
+                source=_SRB.DELEGATION,
+                due_at=_nowB - _tdB(days=70), status=_STB.PENDING,
+                audit_state=_ASB.NOT_REQUIRED)
+    # Late, but not a month late: the line has to be somewhere.
+    _midS = _TB(org_id=1, branch_id=_slowS.branch_id,
+                title=f"SMOKE only a fortnight {RUN}",
+                assigner_id=_bossS.id, doer_id=_slowS.id, priority=_PB.HIGH,
+                source=_SRB.DELEGATION,
+                due_at=_nowB - _tdB(days=14), status=_STB.PENDING,
+                audit_state=_ASB.NOT_REQUIRED)
+    # Finished by the doer two months ago and still with an auditor. Not
+    # the doer's fault and must never be counted against them.
+    _audS = _TB(org_id=1, branch_id=_slowS.branch_id,
+                title=f"SMOKE with the auditor {RUN}",
+                assigner_id=_bossS.id, doer_id=_slowS.id, priority=_PB.HIGH,
+                source=_SRB.DELEGATION,
+                due_at=_nowB - _tdB(days=60), status=_STB.SUBMITTED,
+                audit_state=_ASB.PENDING, requires_audit=True,
+                submitted_at=_nowB - _tdB(days=59))
+    _d.add_all([_oldS, _midS, _audS]); _d.commit()
+    _oldSid, _slowSid = _oldS.id, _slowS.id
+
+with _slB() as _d:
+    _staleS = _cbB.stale(_d, 1)
+    _mineS = [r for r in _staleS if r.user.id == _slowSid]
+    check("the person holding work for months is named", bool(_mineS),
+          [r.user.name for r in _staleS][:5])
+    _rS = _mineS[0] if _mineS else None
+    if _rS:
+        _idsS = {t.id for t in _rS.tasks}
+        check("the task owed since two months ago is in their list",
+              _oldSid in _idsS)
+        check("one only a fortnight late is not", _midS.id not in _idsS)
+        check("and work sitting with an auditor is never held against them",
+              _audS.id not in _idsS)
+        check("their worst is counted in days, from the planned date",
+              _rS.oldest >= 70, _rS.oldest)
+        check("and the oldest is listed first",
+              _rS.tasks[0].due_at == min(t.due_at for t in _rS.tasks))
+    check("the worst person is at the top",
+          _staleS == sorted(_staleS, key=lambda r: (-r.oldest, -r.count,
+                                                    (r.user.name or "").lower())))
+
+# An FMS step whose turn has NOT come has a planned date that can be
+# months old on a slow run. Nobody has been asked for it yet, so naming
+# them for it would be the board telling CMD a lie about a person.
+with _slB() as _d:
+    # Hung off a real run, because an FMS task belonging to no FMS is a
+    # row nothing in the software can produce and a test written against
+    # one proves nothing.
+    _runS = _d.scalars(_spB(_FIQ)).first()
+    _stepS = _d.scalars(_spB(_FSQ).where(
+        _FSQ.flow_id == _runS.flow_id)).first()
+    _waitS = _TB(org_id=1, branch_id=_slowS.branch_id,
+                 title=f"SMOKE not my turn yet {RUN}",
+                 assigner_id=_bossS.id, doer_id=_slowSid, priority=_PB.HIGH,
+                 source=_SRB.FLOW, due_at=_nowB - _tdB(days=90),
+                 status=_STB.PENDING, audit_state=_ASB.NOT_REQUIRED,
+                 flow_waiting=True, flow_instance_id=_runS.id,
+                 flow_step_id=_stepS.id)
+    _d.add(_waitS); _d.commit()
+    _waitSid = _waitS.id
+with _slB() as _d:
+    _afterS = [r for r in _cbB.stale(_d, 1) if r.user.id == _slowSid]
+    check("an FMS step whose turn has not come is not held against anybody",
+          _afterS and _waitSid not in {t.id for t in _afterS[0].tasks})
+
+_pageS = admin.get("/cmd").text
+check("the board carries the panel", 'id="stalePanel"' in _pageS)
+check("with a button that says how many", 'id="staleOpen"' in _pageS
+      and "Owed a month or more" in _pageS)
+with _slB() as _d:
+    _slowNameS = _d.get(_UB, _slowSid).name
+check("and the person is named on it", _slowNameS in _pageS, _slowNameS)
+check("the panel is rendered OUTSIDE main, or it cannot cover the page",
+      _pageS.index('id="stalePanel"') > _pageS.rindex("</main>"),
+      "a position:fixed panel inside main is fixed to main, not the window")
+
+
 print("\n== the detective survives a retired model ==")
 # What actually happened on the live site: Google retired gemini-2.5-flash,
 # every call came back 404, and seven hundred tasks were stored as "could
@@ -9603,8 +9693,12 @@ with _slK() as _d:
     _over = len([t for t in _openF if t.is_overdue])
     _tod = len([t for t in _openF if not t.is_overdue
                 and t.due_at.date() == _ckT.today()])
+    # The remainder. A step whose turn has not come is never overdue,
+    # whatever its planned date says, so asking for "a later day" leaves
+    # an old planned step in no bucket at all and the total stops adding
+    # up. Found by this check after a slow run was built above.
     _up = len([t for t in _openF if not t.is_overdue
-               and t.due_at.date() > _ckT.today()])
+               and t.due_at.date() != _ckT.today()])
 check("the three buckets add up to the pending total",
       _over + _tod + _up == len(_openF), (_over, _tod, _up, len(_openF)))
 check("the Due today tab opens",
