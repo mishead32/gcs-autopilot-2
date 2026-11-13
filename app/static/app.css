@@ -110,6 +110,7 @@ h2{font-size:15px;margin:26px 0 10px;color:var(--muted);
 .grid{display:grid;gap:14px}
 .g3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
 .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 /* users page: give the list room so the rights chips don't stack */
 @media (min-width:1100px){.g2.wide{grid-template-columns:1.75fr 1fr}}
 
@@ -1617,3 +1618,26 @@ button.stale-note:hover{transform:translateY(-1px);
   .stale-note{width:100%}
   .stale-note .sn-n{margin-left:auto}
 }
+
+/* ---- Pending Approval Tracker ----------------------------------------
+   The three statuses in the colours the sheet itself uses for them, so
+   nobody has to learn a second code: green is approved, orange needs
+   doing again, and no colour is still waiting. */
+.chip.appr-approved{background:#dcfce7;color:#166534}
+.chip.appr-revision{background:#ffedd5;color:#9a3412;font-weight:800}
+.chip.appr-pending{background:#f1f5f9;color:#475569}
+.chip.appr-other{background:#ede9fe;color:#5b21b6}
+.appr-kpis .kpi{display:block;color:inherit;text-decoration:none;
+  transition:box-shadow .15s ease,transform .15s ease}
+.appr-kpis .kpi:hover{transform:translateY(-1px);
+  box-shadow:0 6px 16px rgba(15,32,50,.1)}
+.appr-kpis .kpi.on{border-color:var(--brand);box-shadow:0 0 0 2px rgba(15,76,129,.14)}
+.appr-kpis .kpi.ok .n{color:var(--ok)}
+.appr-kpis .kpi.warn .n{color:var(--warn)}
+.appr-kpis .kpi.bad .n{color:var(--bad)}
+.appr-table td{vertical-align:top}
+/* Remarks are sentences, and some are long: let them wrap inside a
+   sensible width rather than stretching the table off the screen. */
+.appr-msg{max-width:38ch;white-space:pre-wrap;overflow-wrap:anywhere}
+.appr-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;
+  border:1px solid var(--line);vertical-align:-1px}

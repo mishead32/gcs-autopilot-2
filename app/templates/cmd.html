@@ -115,6 +115,41 @@
   {% endfor %}
 </div>
 
+{# ------------------------------------------------- with CMD Sir ---- #}
+{# His own sheet, counted. Every figure opens the rows behind it, on the
+   tracker — the same rule as the rest of this board: a number nobody can
+   open is a number people stop believing. #}
+{% if appr is not none %}
+<div class="mhead">
+  <h2>Sent for approval</h2>
+  <span class="m">from the Pending Approvals sheet, row {{ appr_from }}
+    onwards{% if appr_read_at %} · read
+    {{ appr_read_at|dt('%d/%m/%Y %I:%M %p') }}{% endif %}{% if appr_error %}
+    · <strong class="overdue">the last read failed —
+    <a href="/approvals">see why</a></strong>{% endif %}</span>
+</div>
+<div class="matrix">
+  <div class="mrow mhdr">
+    <div class="mname"></div>
+    <div class="mcell"><div class="l">Sent</div></div>
+    <div class="mcell"><div class="l">Approved</div></div>
+    <div class="mcell"><div class="l">Pending</div></div>
+    <div class="mcell"><div class="l">Needs revision</div></div>
+  </div>
+  <div class="mrow">
+    <div class="mname">Approvals
+      <div class="s">with CMD Sir</div></div>
+    {{ cell(appr.sent, 'sent for approval', '/approvals') }}
+    {{ cell(appr.approved, 'approved · green', '/approvals?status=approved',
+            'ok' if appr.approved else '') }}
+    {{ cell(appr.pending, 'waiting · no colour', '/approvals?status=pending',
+            'warn' if appr.pending else '') }}
+    {{ cell(appr.revision, 'to redo · orange', '/approvals?status=revision',
+            'bad' if appr.revision else '') }}
+  </div>
+</div>
+{% endif %}
+
 <p class="sub m">Everything below is for <strong>{{ label }}</strong>,
   counted on the planned date.</p>
 

@@ -15,7 +15,8 @@ from .. import clock
 from ..db import get_db
 from ..deps import manager_up
 from ..models import User
-from ..services import cmdboard, xlsx
+from ..models import Organization
+from ..services import approvals, cmdboard, xlsx
 from ..templating import templates
 
 router = APIRouter()
@@ -90,6 +91,14 @@ def cmd_board(request: Request, period: str = "this_month",
     # about today, and filtering it by a month-long window would answer a
     # different question while looking like this one.
     stale = cmdboard.stale(db, user.org_id)
+
+    # What is with CMD Sir for approval, from the copy of his sheet. Read
+    # from the copy and never from Google here: this page is opened all
+    # day, and a board that waits on somebody else's server to draw is a
+    # board that is sometimes blank.
+    org = db.get(Organization, user.org_id)
+    appr = (approvals.summary(approvals.items(db, user.org_id))
+            if approvals.configured(org) else None)
     return templates.TemplateResponse(request, "cmd.html", {
         "user": user, "board": board, "branches": branches,
         # One list for every section and for the company table, so a
@@ -97,6 +106,9 @@ def cmd_board(request: Request, period: str = "this_month",
         "KINDS": [(src.value, label, cmdboard.QUERY_NAME[src.value])
                   for src, label in cmdboard.SOURCES],
         "SHORT": {"delegation": "DEL", "recurring": "CL", "flow": "FMS"},
+        "appr": appr, "appr_read_at": org.appr_read_at if org else None,
+        "appr_error": org.appr_error if org else None,
+        "appr_from": org.appr_start_row if org else None,
         "stale": stale, "stale_days": cmdboard.STALE_DAYS,
         "stale_total": sum(r.count for r in stale),
         "people_shown": cmdboard.STALE_PEOPLE,

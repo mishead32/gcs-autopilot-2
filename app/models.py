@@ -371,6 +371,16 @@ class Organization(Base):
     # Keyed off the date for the same reason esc_last_run is.
     quiet_last_run: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # The Pending Approvals sheet — where it is, and how the last read
+    # went. Typed in on the tracker's own page rather than written into
+    # the code, so the address of CMD Sir's sheet is not in a public
+    # repository.
+    appr_sheet_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    appr_tab: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    appr_start_row: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    appr_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    appr_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     @property
     def esc_day_list(self) -> list[int]:
         """The weekdays it runs on. Empty setting means all seven."""
@@ -2383,3 +2393,32 @@ class Escalation(Base):
         if self.mail:
             return self.mail.cc_list
         return [a for a in (self.cc_emails or "").split(",") if a.strip()]
+
+
+class ApprovalItem(Base):
+    """One request on the Pending Approvals sheet, as last read.
+
+    A COPY, replaced whole on every read. The sheet is the record and
+    stays the record: nothing here is ever written back to it, and
+    nothing typed into this software changes what a row says. It is kept
+    at all only so the CMD board can show four numbers without calling
+    Google every time somebody opens it.
+    """
+    __tablename__ = "approval_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    row_no: Mapped[int] = mapped_column(Integer)           # its row on the sheet
+    sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sent_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    person: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    doc_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # pending / approved / revision / other — read off the row's colour.
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    colour: Mapped[str | None] = mapped_column(String(9), nullable=True)

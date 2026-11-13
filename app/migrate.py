@@ -100,6 +100,11 @@ ADDITIONS = {
         ("quiet_cc", "TEXT"),
         ("quiet_hour", "INTEGER DEFAULT 11"),
         ("quiet_last_run", "DATE"),
+        ("appr_sheet_id", "VARCHAR(120)"),
+        ("appr_tab", "VARCHAR(120)"),
+        ("appr_start_row", "INTEGER"),
+        ("appr_read_at", "DATETIME"),
+        ("appr_error", "TEXT"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

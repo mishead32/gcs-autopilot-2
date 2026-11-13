@@ -15561,6 +15561,7 @@ for _u in ["/", "/tasks", "/tasks?scope=all&status=all", "/flows",
            # reach for; the delegation report above would never catch a
            # per-row read of it, because delegation has no flow at all.
            "/reports/tasks?source=fms", "/reports/score/behind",
+           "/approvals",
            "/help", "/bulk"]:
     _q, _r = _cost(admin, _u)
     if _r.status_code != 200:
@@ -15727,6 +15728,317 @@ with _slQ() as _d:
 # ==========================================================================
 # Nothing impossible is left in the database
 # ==========================================================================
+print("\n== the Pending Approval Tracker reads CMD Sir's sheet ==")
+# Every task that needs approval is a row on one Google Sheet, and what
+# has happened to it is said by the COLOUR of the row. Nobody could say
+# how many of each there were without scrolling and counting.
+#
+# Google is not called from here. The one function that touches the
+# network is replaced with an answer shaped exactly as Google shapes
+# one — including the part that catches people out: a colour component
+# that is zero is LEFT OUT, so pure green arrives as {"green": 1}.
+from datetime import date as _dA, datetime as _dtA, timedelta as _tdA
+from sqlalchemy import select as _selA
+from app.db import SessionLocal as _slA
+from app.models import (Organization as _OrgA, ApprovalItem as _AiA)
+from app.services import approvals as _apA
+from app.services import sheets as _shA
+
+_WHITE = {"red": 1, "green": 1, "blue": 1}
+_PALE_GREEN = {"red": 0.851, "green": 0.918, "blue": 0.827}
+_PURE_GREEN = {"green": 1}
+_ORANGE = {"red": 1, "green": 0.6}
+_PALE_ORANGE = {"red": 0.988, "green": 0.898, "blue": 0.804}
+_YELLOW = {"red": 1, "green": 1}
+_GREY = {"red": 0.953, "green": 0.953, "blue": 0.953}
+_EPOCH_A = _dA(1899, 12, 30)
+
+
+def _cA(text="", fill=None, number=None, link=None):
+    c = {}
+    if text != "":
+        c["formattedValue"] = text
+    if number is not None:
+        c["effectiveValue"] = {"numberValue": number}
+    if link:
+        c["hyperlink"] = link
+    if fill is not None:
+        c["effectiveFormat"] = {"backgroundColor": fill}
+    return c
+
+
+def _rA(day, message, task, person, fill, feedback="", nxt="", done=None,
+        link="", only=None, text_date=None):
+    """One request. `only` colours just that column and leaves the rest."""
+    def f(col):
+        return fill if only is None or only == col else None
+    serial = (day - _EPOCH_A).days if day else None
+    cells = [_cA(text_date or (day.strftime("%d/%m/%Y") if day else ""), f(0),
+                 None if text_date else serial),
+             _cA("", f(1)), _cA(message, f(2)), _cA(task, f(3)),
+             _cA(person, f(4)), _cA("Doc" if link else "", f(5), link=link or None),
+             _cA(feedback, f(6)), _cA("", f(7)), _cA(nxt, f(8)), _cA("", f(9)),
+             _cA(done.strftime("%d/%m/%Y %H:%M:%S") if done else "", f(10),
+                 ((done.date() - _EPOCH_A).days
+                  + (done.hour * 3600 + done.minute * 60) / 86400)
+                 if done else None)]
+    return {"values": cells}
+
+
+_d1A = _dA(2026, 11, 2)
+_sheetA = [
+    _rA(_d1A, "Please approve payment", "Vendor payment", "Kiran Sandhu",
+        _PALE_GREEN, feedback="Approved", link="https://docs.example/a",
+        done=_dtA(2026, 11, 3, 11, 30)),                       # 11085 approved
+    _rA(_d1A, "Offer letter", "Hire GT trainer", "Neha Chugh",
+        _PURE_GREEN, feedback="Ok"),                           # 11086 approved
+    _rA(_d1A + _tdA(days=1), "Spa linen", "Purchase", "Arun Sharma",
+        _ORANGE, feedback="Rate is high", nxt="Get two quotations"),  # 11087 revision
+    {},                                                        # 11088 blank
+    _rA(_d1A + _tdA(days=1), "Transport bill", "BIPS bill", "Santosh",
+        _WHITE),                                               # 11089 pending
+    _rA(_d1A + _tdA(days=7), "Leave", "Leave encashment", "Boney",
+        None, feedback="Discuss with me"),                     # 11090 pending, remarked
+    _rA(_d1A + _tdA(days=8), "Creative", "Diwali creative", "Kiran Sandhu",
+        _PALE_ORANGE, feedback="Redo", only=6),                # 11091 revision, one cell
+    _rA(_d1A + _tdA(days=8), "On hold", "Gym flooring", "Boney",
+        _YELLOW),                                              # 11092 other
+    _rA(_d1A + _tdA(days=9), "Banded", "Stationery", "Santosh",
+        _GREY),                                                # 11093 pending
+    {"values": [_cA("", _PALE_GREEN)] * 11},                   # 11094 coloured, empty
+    _rA(None, "Typed date", "Typed", "Neha Chugh", _WHITE,
+        text_date="12-Nov-2026"),                              # 11095 pending
+]
+_asked = {}
+
+
+def _fakeFetch(sheet_id, tab, start_row):
+    _asked.update(sheet=sheet_id, tab=tab, row=start_row)
+    return {"sheets": [{"properties": {"title": tab},
+                        "data": [{"startRow": start_row - 1,
+                                  "rowData": _sheetA}]}]}
+
+
+_realFetch, _realSA = _apA.fetch, _shA.SERVICE_ACCOUNT
+_apA.fetch = _fakeFetch
+_shA.SERVICE_ACCOUNT = '{"client_email": "robot@example.iam.gserviceaccount.com"}'
+try:
+    check("it asks Google for read-only access and nothing wider",
+          _apA.READONLY == ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+          _apA.READONLY)
+    # The one part no stand-in can vouch for: what is actually SENT to
+    # Google. Captured on its way out rather than sent. The first version
+    # of the request had one bracket too many in the list of fields, which
+    # Google refuses outright — every read would have failed, and every
+    # other check in this section would still have passed.
+    from unittest import mock as _mkA
+    from gspread.http_client import HTTPClient as _HcA
+    _outA = {}
+
+    def _captureA(self, method, endpoint, params=None, **kw):
+        _outA.update(method=method, url=endpoint, params=dict(params or {}))
+        return _mkA.Mock(json=lambda: {"sheets": []})
+
+    with _mkA.patch("google.oauth2.service_account.Credentials."
+                    "from_service_account_info") as _credsA, \
+            _mkA.patch("gspread.authorize") as _authA, \
+            _mkA.patch.object(_HcA, "request", _captureA):
+        _authA.return_value = _mkA.Mock(http_client=_HcA.__new__(_HcA))
+        _realFetch("SHEETID", "CMD's tab", 11085)
+    check("the real request signs in read-only",
+          _credsA.call_args.kwargs.get("scopes") == _apA.READONLY,
+          _credsA.call_args.kwargs)
+    check("it only ever GETs", _outA.get("method") == "get", _outA.get("method"))
+    check("it asks for the rows from the starting row, columns A to K",
+          _outA["params"]["ranges"] == "'CMD''s tab'!A11085:K",
+          _outA["params"]["ranges"])
+    check("it asks for the colours, which the plain values call leaves out",
+          _outA["params"]["includeGridData"] == "true"
+          and "effectiveFormat(backgroundColor)" in _outA["params"]["fields"])
+    _maskA = _outA["params"]["fields"]
+    _depthA, _okA = 0, True
+    for _chA in _maskA:
+        _depthA += (_chA == "(") - (_chA == ")")
+        _okA = _okA and _depthA >= 0
+    check("and the list of fields is well formed, bracket for bracket",
+          _okA and _depthA == 0, (_maskA.count("("), _maskA.count(")")))
+
+    check("a pasted link gives up its sheet id",
+          _apA.sheet_id_from("https://docs.google.com/spreadsheets/d/"
+                             "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8/"
+                             "edit?gid=1160875339#gid=1160875339")
+          == "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8")
+    check("and something that is not a sheet link gives nothing",
+          _apA.sheet_id_from("https://example.com/whatever") == "")
+
+    # Before anything is connected.
+    check("with no sheet connected the page still opens",
+          admin.get("/approvals").status_code == 200)
+    check("and the CMD board simply leaves the block out",
+          "Sent for approval" not in admin.get("/cmd").text)
+    check("a link that is not a sheet is refused",
+          admin.post("/approvals/settings", data={
+              "sheet": "not a link", "tab": "Pending Approvals",
+              "start_row": "11085"}).status_code == 400)
+    check("and so is a starting row that is the headings",
+          admin.post("/approvals/settings", data={
+              "sheet": "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8",
+              "tab": "Pending Approvals", "start_row": "1"}).status_code == 400)
+    check("a doer cannot change which sheet is read",
+          login("amit@gcs.local").post("/approvals/settings", data={
+              "sheet": "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8",
+              "tab": "x", "start_row": "5"}).status_code == 403)
+
+    _savedA = admin.post("/approvals/settings", data={
+        "sheet": "https://docs.google.com/spreadsheets/d/"
+                 "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8/edit#gid=1",
+        "tab": "Pending Approvals", "start_row": "11085"})
+    check("connecting the sheet reads it straight away",
+          _savedA.status_code == 200 and _asked.get("row") == 11085, _asked)
+    check("from the tab and the row that were given",
+          _asked.get("tab") == "Pending Approvals"
+          and _asked.get("sheet") == "1p-bsAGpT5cVUSw4zkvJG96zHmcKFvDc29l2rf_AgBO8")
+
+    with _slA() as _d:
+        _itA = {i.row_no: i for i in _d.scalars(_selA(_AiA)).all()}
+    check("a blank row and a coloured-but-empty row are not requests",
+          sorted(_itA) == [11085, 11086, 11087, 11089, 11090, 11091, 11092,
+                           11093, 11095], sorted(_itA))
+    check("each request keeps the number of its own row on the sheet",
+          _itA[11089].person == "Santosh" and _itA[11087].person == "Arun Sharma")
+    check("pale green is approved", _itA[11085].status == "approved")
+    check("and so is pure green, which arrives with its zeros left out",
+          _itA[11086].status == "approved", _itA[11086].status)
+    check("orange needs revision", _itA[11087].status == "revision")
+    check("even when only the remark cell was coloured",
+          _itA[11091].status == "revision", _itA[11091].status)
+    check("white with text is pending", _itA[11089].status == "pending")
+    check("so is a row with no fill recorded at all",
+          _itA[11090].status == "pending")
+    check("a banded sheet's grey stripe is not a status",
+          _itA[11093].status == "pending", _itA[11093].status)
+    check("and a colour it does not know is said to be one, not guessed",
+          _itA[11092].status == "other" and _itA[11092].colour == "#ffff00",
+          (_itA[11092].status, _itA[11092].colour))
+    check("the date is read from the number under the cell",
+          _itA[11085].sent_on == _d1A, _itA[11085].sent_on)
+    check("a date typed as words is read too, day first",
+          _itA[11095].sent_on == _dA(2026, 11, 12), _itA[11095].sent_on)
+    check("the approval time is kept to the minute",
+          _itA[11085].approved_at == _dtA(2026, 11, 3, 11, 30),
+          _itA[11085].approved_at)
+    check("the document link comes across",
+          _itA[11085].doc_link == "https://docs.example/a")
+    check("with the remark and the next action as written",
+          _itA[11087].feedback == "Rate is high"
+          and _itA[11087].next_action == "Get two quotations")
+
+    with _slA() as _d:
+        _cntA = _apA.summary(_apA.items(_d, 1))
+    check("sent is every request", _cntA.sent == 9, _cntA)
+    check("approved, pending and needing revision are counted apart",
+          (_cntA.approved, _cntA.pending, _cntA.revision, _cntA.other)
+          == (2, 4, 2, 1), _cntA)
+    check("and the four add back up to what was sent",
+          _cntA.approved + _cntA.pending + _cntA.revision + _cntA.other
+          == _cntA.sent)
+    check("a pending row that already has a remark is pointed out",
+          _cntA.remarked == 1, _cntA.remarked)
+
+    # A dead heat between green and orange must not read as approved.
+    _tieA = [_cA("x", _PALE_GREEN), _cA("y", _ORANGE)]
+    check("a row that is half green and half orange is not called approved",
+          _apA.status_of(_tieA)[0] == "revision", _apA.status_of(_tieA))
+
+    _pgA = admin.get("/approvals").text
+    check("the tracker shows the four figures",
+          all(x in _pgA for x in ("Sent for approval", "Approved",
+                                  "Pending approval", "Needs revision")))
+    check("with the requests listed under them",
+          "Vendor payment" in _pgA and "Kiran Sandhu" in _pgA
+          and "Rate is high" in _pgA)
+    check("the unknown colour is called out rather than hidden",
+          "not green or orange" in _pgA)
+    check("week by week and day by day",
+          "Week by week" in _pgA and "Day by day" in _pgA)
+    check("it says it only reads", "never changes it" in _pgA)
+    _onlyA = admin.get("/approvals?status=revision").text
+    check("a figure opens its own rows and no others",
+          "Spa linen" in _onlyA and "Vendor payment" not in _onlyA)
+    check("one person can be picked out",
+          "Transport bill" in admin.get("/approvals?person=Santosh").text
+          and "Spa linen" not in admin.get("/approvals?person=Santosh").text)
+    _xA = admin.get("/approvals?export=xlsx&status=approved")
+    check("the list downloads as Excel",
+          _xA.status_code == 200 and _xA.content[:2] == b"PK")
+
+    check("it is in the Operations menu",
+          "Pending Approval Tracker" in admin.get("/").text)
+    check("a manager can open it", mgr.get("/approvals").status_code == 200)
+    check("a doer cannot — it is everybody's remarks from CMD Sir",
+          login("amit@gcs.local").get("/approvals").status_code == 403)
+    check("nor is it in their menu",
+          "Pending Approval Tracker" not in login("amit@gcs.local").get("/").text)
+
+    # The CMD board: the same four figures, each opening its list.
+    _cbA = " ".join(admin.get("/cmd").text.split())
+    check("the CMD board has the block", "<h2>Sent for approval</h2>" in _cbA)
+    _blkA = _cbA[_cbA.index("<h2>Sent for approval</h2>"):]
+    _blkA = _blkA[:_blkA.index("Everything below is for")]
+    import re as _reA
+    _figA = [int(x) for x in _reA.findall(r'<div class="n">(\d+)</div>', _blkA)]
+    check("with the same four figures as the tracker",
+          _figA == [_cntA.sent, _cntA.approved, _cntA.pending, _cntA.revision],
+          _figA)
+    check("and every one of them opens its list",
+          all(x in _blkA for x in ('href="/approvals"',
+                                   'href="/approvals?status=approved"',
+                                   'href="/approvals?status=pending"',
+                                   'href="/approvals?status=revision"')))
+    for _stA, _wantA in (("approved", _cntA.approved), ("pending", _cntA.pending),
+                         ("revision", _cntA.revision)):
+        _lstA = admin.get(f"/approvals?status={_stA}").text
+        check(f"  the board's {_stA} figure is the number of rows it opens",
+              _lstA.count('class="chip appr-' + _stA + '"') == _wantA,
+              (_lstA.count('class="chip appr-' + _stA + '"'), _wantA))
+
+    # A read that fails must not empty the page.
+    def _brokenFetch(sheet_id, tab, start_row):
+        raise RuntimeError("APIError: [403]: The caller does not have permission")
+    _apA.fetch = _brokenFetch
+    admin.post("/approvals/refresh")
+    with _slA() as _d:
+        _orgA = _d.scalar(_selA(_OrgA))
+        check("a refused read leaves the last good copy where it was",
+              len(_apA.items(_d, 1)) == 9)
+        check("and says what to do about it, with the address to share with",
+              "robot@example.iam.gserviceaccount.com" in (_orgA.appr_error or "")
+              and "Viewer" in (_orgA.appr_error or ""), _orgA.appr_error)
+    check("the page shows the reason", "did not work" in admin.get("/approvals").text)
+    check("and the board says the figures are from an earlier read",
+          "the last read failed" in admin.get("/cmd").text)
+
+    # And the next good read clears it and replaces the copy whole.
+    _sheetA.pop()                                  # row 11095 leaves the sheet
+    _apA.fetch = _fakeFetch
+    admin.post("/approvals/refresh")
+    with _slA() as _d:
+        _orgA = _d.scalar(_selA(_OrgA))
+        check("a good read clears the notice", _orgA.appr_error is None)
+        check("and a row removed from the sheet is gone from the copy",
+              len(_apA.items(_d, 1)) == 8, len(_apA.items(_d, 1)))
+    check("the background tick reads it without anybody pressing anything",
+          __import__("app.main", fromlist=["x"])._approvals_once() == 1)
+finally:
+    _apA.fetch, _shA.SERVICE_ACCOUNT = _realFetch, _realSA
+    # Unhooked again, so the rest of the suite sees a board without it.
+    with _slA() as _d:
+        _orgA = _d.scalar(_selA(_OrgA))
+        _orgA.appr_sheet_id = None
+        _orgA.appr_error = None
+        _d.query(_AiA).delete()
+        _d.commit()
+
 print("\n== one answer to 'is this late', everywhere it is asked ==")
 # Reported from the live site: the CMD board said 20 FMS overdue, and
 # clicking the 20 opened a list of 41. Neither figure was a lie about

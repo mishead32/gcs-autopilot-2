@@ -26,10 +26,12 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       reports as reports_router,
                       detective as detective_router,
                       escalation as escalation_router,
-                      cmd as cmd_router)
+                      cmd as cmd_router,
+                      approvals as approvals_router)
 from .services import recurring
 from .services import detective
 from .services import flowsheet
+from .services import approvals as approvals_svc
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
 from .services import quietflows
@@ -154,6 +156,13 @@ async def _daily_spawn():
             if picked:
                 print(f"Google Sheets: started {picked} run(s)")
 
+            # The Pending Approvals sheet, read again each tick so the
+            # tracker and the CMD board are never more than a few minutes
+            # behind a row somebody has just coloured. Reading only — it
+            # asks Google for read-only access and could not write if it
+            # tried.
+            await asyncio.to_thread(_approvals_once)
+
             # And a few of the oldest unchecked tasks handed to the
             # detective, every tick, within the day's allowance. The free
             # allowance is about twenty a day, so a backlog only ever clears
@@ -225,6 +234,23 @@ def _sheets_once() -> int:
             return flowsheet.run_all(db).get("started", 0)
     except Exception as exc:                          # noqa: BLE001
         print(f"Google Sheets check failed: {exc}")
+        return 0
+
+
+def _approvals_once() -> int:
+    """One read of the Pending Approvals sheet. Never raises.
+
+    A sheet that has been unshared or renamed costs this tick and nothing
+    else: the reason is written on the tracker's page, where the person
+    who can fix it will see it, and the last good copy stays up.
+    """
+    if not approvals_svc.enabled():
+        return 0
+    try:
+        with SessionLocal() as db:
+            return approvals_svc.sync_all(db)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"Pending Approvals read failed: {exc}")
         return 0
 
 
@@ -496,6 +522,7 @@ app.include_router(followups_router.router)
 app.include_router(reports_router.router)
 app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
+app.include_router(approvals_router.router)
 app.include_router(escalation_router.router)
 
 

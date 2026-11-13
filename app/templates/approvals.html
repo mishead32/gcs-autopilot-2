@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% from "_export.html" import excel_btn %}
+{% block title %}Pending Approval Tracker · {{ APP_NAME }}{% endblock %}
+
+{# One link builder for every number on the page, so a figure and the
+   list it opens can never be asked two different questions. #}
+{% macro to(st) %}/approvals?status={{ st }}{% endmacro %}
+
+{% macro chip(st) %}
+<span class="chip appr-{{ st }}">{{ labels[st] }}</span>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Pending Approval Tracker</h1>
+    <p class="sub readable">Every task sent to CMD Sir for approval, read
+      straight off the Pending Approvals sheet. The status is the colour of
+      the row: no colour is waiting, green is approved, orange needs doing
+      again. This page only reads the sheet — it never changes it.</p>
+  </div>
+  <div class="ph-right">
+    {% if configured %}
+    <form method="post" action="/approvals/refresh" style="display:inline">
+      <button class="btn ghost" title="Read the sheet again now">Read the
+        sheet again</button></form>
+    {{ excel_btn('/approvals?export=xlsx&status=' ~ status ~ '&person=' ~
+                 (person|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&date_from=' ~
+                 date_from ~ '&date_to=' ~ date_to,
+                 title='Download the rows listed below') }}
+    {% endif %}
+  </div>
+</div>
+
+{% if not enabled %}
+<div class="card warnbox">
+  <strong>The server has no Google credential</strong>
+  <p class="m" style="margin:8px 0 0">The tracker reads the sheet with the
+    same service account the Google Sheet mirror uses. That is set on the
+    server as <code>GOOGLE_SERVICE_ACCOUNT</code>; until it is there,
+    nothing can be read.</p>
+</div>
+{% endif %}
+
+{% if org.appr_error %}
+<div class="card warnbox">
+  <strong>The last read did not work</strong>
+  <p class="m" style="margin:8px 0 0">{{ org.appr_error }}</p>
+  {% if org.appr_read_at %}
+  <p class="m" style="margin:6px 0 0">What is below is from the last read
+    that did: {{ org.appr_read_at|dt('%d/%m/%Y %I:%M %p') }}.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if configured %}
+<p class="m" style="margin:0 0 12px">
+  {% if org.appr_read_at %}Last read from the sheet
+    <strong>{{ org.appr_read_at|dt('%d/%m/%Y %I:%M %p') }}</strong>
+    ({{ org.appr_read_at|ago }}) · {% endif %}
+  counting from row {{ org.appr_start_row or default_row }} of
+  “{{ org.appr_tab or default_tab }}”. It is read again every few minutes
+  during the working day.</p>
+
+{# ------------------------------------------------------- the numbers ---- #}
+<div class="grid g4 appr-kpis">
+  <a class="kpi {{ 'on' if not status }}" href="/approvals">
+    <div class="l">Sent for approval</div>
+    <div class="n">{{ total.sent }}</div>
+    <div class="m">every request counted</div></a>
+  <a class="kpi ok {{ 'on' if status == 'approved' }}" href="{{ to('approved') }}">
+    <div class="l">Approved</div>
+    <div class="n">{{ total.approved }}</div>
+    <div class="m">green rows</div></a>
+  <a class="kpi {{ 'warn' if total.pending }} {{ 'on' if status == 'pending' }}"
+     href="{{ to('pending') }}">
+    <div class="l">Pending approval</div>
+    <div class="n">{{ total.pending }}</div>
+    <div class="m">no colour yet{% if total.remarked %} ·
+      {{ total.remarked }} already ha{{ 's' if total.remarked == 1 else 've' }}
+      a remark{% endif %}</div></a>
+  <a class="kpi {{ 'bad' if total.revision }} {{ 'on' if status == 'revision' }}"
+     href="{{ to('revision') }}">
+    <div class="l">Needs revision</div>
+    <div class="n">{{ total.revision }}</div>
+    <div class="m">orange rows</div></a>
+</div>
+{% if total.other %}
+{# Said out loud rather than folded into one of the four: a colour this
+   does not know is a row whose status it does not know. #}
+<div class="card warnbox" style="margin-top:14px">
+  <strong>{{ total.other }} row{{ '' if total.other == 1 else 's' }} in a
+    colour that is not green or orange</strong>
+  <p class="m" style="margin:8px 0 0">They are counted in “Sent” and in
+    none of the other three, because this cannot tell what the colour is
+    meant to say. <a href="{{ to('other') }}">See which rows</a> — each
+    shows the colour it was read as.</p>
+</div>
+{% endif %}
+
+{# ------------------------------------------------- week and day wise ---- #}
+{% if weeks %}
+<div class="grid g2" style="align-items:start">
+  <div>
+    <h2>Week by week</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Week of</th><th>Sent</th><th>Approved</th><th>Pending</th>
+        <th>Needs revision</th></tr>
+      {% for monday, c in weeks %}
+      <tr>
+        <td>{{ monday|dt('%d/%m/%Y') }}{% if loop.first %}
+          <span class="m">· this week</span>{% endif %}</td>
+        <td><strong>{{ c.sent }}</strong>
+          {% if not loop.last %}{% set was = weeks[loop.index][1].sent %}
+          <span class="m">({{ '+' if c.sent >= was }}{{ c.sent - was }}
+            on the week before)</span>{% endif %}</td>
+        <td>{{ c.approved }}</td>
+        <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
+        <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+  </div>
+  <div>
+    <h2>Day by day</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Sent on</th><th>Sent</th><th>Approved</th><th>Pending</th>
+        <th>Needs revision</th></tr>
+      {% for d, c in days %}
+      <tr>
+        <td><a href="/approvals?date_from={{ d.isoformat() }}&date_to={{ d.isoformat() }}">
+          {{ d|dt('%a %d/%m/%Y') }}</a></td>
+        <td><strong>{{ c.sent }}</strong></td>
+        <td>{{ c.approved }}</td>
+        <td class="{{ 'warm' if c.pending }}">{{ c.pending }}</td>
+        <td class="{{ 'overdue' if c.revision }}">{{ c.revision }}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+  </div>
+</div>
+<p class="m" style="margin:6px 0 0">Both tables group requests by the day
+  they were <strong>sent</strong> and show how they stand <strong>now</strong>
+  — a request sent on Monday and approved on Wednesday is in Monday's line
+  as approved. The sheet keeps no history of its colours.</p>
+{% endif %}
+
+{# ----------------------------------------------------------- the list ---- #}
+<h2>{{ labels[status] if status else 'Every request' }}
+  <span class="m">· {{ rows|length }}{% if filtered %} of {{ total.sent }}{% endif %}</span></h2>
+
+<form method="get" action="/approvals" class="card searchbar">
+  <div class="fb-f fb-wide">
+    <label>Search</label>
+    <input name="q" value="{{ q }}"
+           placeholder="Words from the task, the message or the remark">
+  </div>
+  <div class="fb-f">
+    <label>Status</label>
+    <select name="status">
+      {% for k, lbl in statuses %}
+      <option value="{{ k }}" {{ 'selected' if status == k }}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fb-f">
+    <label>Person</label>
+    <select name="person">
+      <option value="">Everyone</option>
+      {% for p in people %}
+      <option value="{{ p }}" {{ 'selected' if person == p }}>{{ p }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fb-f"><label>Sent from</label>
+    <input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div class="fb-f"><label>Sent to</label>
+    <input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="acts">
+    <button class="btn">Show</button>
+    {% if filtered %}<a class="btn ghost" href="/approvals">Clear</a>{% endif %}
+  </div>
+</form>
+
+{% if rows %}
+<div class="table-wrap"><table class="appr-table">
+  <tr><th>Sent on</th><th>Task</th><th>Person</th><th>Status</th>
+    <th>Feedback / approval</th><th>Next action</th><th>Approved</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td class="whencell">{{ r.sent_on|dt('%d/%m/%Y') if r.sent_on else (r.sent_text or '—') }}
+      <div class="m">row {{ r.row_no }}</div></td>
+    <td><strong>{{ r.task_name or '—' }}</strong>
+      {% if r.message %}<div class="m appr-msg">{{ r.message }}</div>{% endif %}
+      {% if r.doc_link %}<div class="m"><a href="{{ r.doc_link }}"
+        target="_blank" rel="noopener">Open the document ↗</a></div>{% endif %}</td>
+    <td>{{ r.person or '—' }}</td>
+    <td>{{ chip(r.status) }}
+      {% if r.colour and r.status == 'other' %}
+      <div class="m"><span class="appr-swatch"
+        style="background:{{ r.colour }}"></span> {{ r.colour }}</div>{% endif %}
+      {% if r.status == 'pending' and r.feedback %}
+      <div class="m">has a remark, no colour</div>{% endif %}</td>
+    <td class="appr-msg">{{ r.feedback or '—' }}</td>
+    <td class="appr-msg">{{ r.next_action or '—' }}</td>
+    <td class="whencell">{{ r.approved_at|dt('%d/%m/%Y %I:%M %p') if r.approved_at
+        else (r.approved_text or '—') }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% elif total.sent %}
+<div class="empty">Nothing matches those filters.
+  <a href="/approvals">Show every request</a>.</div>
+{% else %}
+<div class="empty">The sheet was read and there are no requests from row
+  {{ org.appr_start_row or default_row }} onwards.</div>
+{% endif %}
+{% endif %}
+
+{# ------------------------------------------------------------ set-up ---- #}
+{% if can_set %}
+<details class="card" {{ 'open' if not configured }} style="margin-top:18px">
+  <summary><strong>{{ 'Change which sheet is read' if configured
+    else 'Connect the Pending Approvals sheet' }}</strong></summary>
+  <ol class="m" style="margin:12px 0 14px;padding-left:20px;line-height:1.8">
+    <li>Open the sheet and press <strong>Share</strong>.</li>
+    <li>Add this address as a <strong>Viewer</strong> — Viewer is enough,
+      this never writes:
+      <code>{{ robot or 'the service account address' }}</code></li>
+    <li>Copy the sheet's whole address from the top of the browser and
+      paste it below.</li>
+  </ol>
+  <form method="post" action="/approvals/settings" class="searchbar"
+        style="border:0;padding:0">
+    <div class="fb-f fb-wide">
+      <label>Sheet link</label>
+      <input name="sheet" required
+             placeholder="https://docs.google.com/spreadsheets/d/…"
+             value="{{ 'https://docs.google.com/spreadsheets/d/' ~ org.appr_sheet_id if org.appr_sheet_id }}">
+    </div>
+    <div class="fb-f">
+      <label>Tab name</label>
+      <input name="tab" value="{{ org.appr_tab or default_tab }}">
+    </div>
+    <div class="fb-f">
+      <label>Count from row</label>
+      <input name="start_row" type="number" min="2"
+             value="{{ org.appr_start_row or default_row }}">
+    </div>
+    <div class="acts"><button class="btn">Save and read it</button></div>
+  </form>
+  <p class="m" style="margin:10px 0 0">Columns are read as: <strong>A</strong>
+    date sent · <strong>C</strong> message · <strong>D</strong> task ·
+    <strong>E</strong> person · <strong>F</strong> document ·
+    <strong>G</strong> feedback / approval · <strong>I</strong> next action ·
+    <strong>K</strong> approved at.</p>
+</details>
+{% elif not configured %}
+<div class="empty">No sheet has been connected yet. An administrator can do
+  that from this page.</div>
+{% endif %}
+{% endblock %}
