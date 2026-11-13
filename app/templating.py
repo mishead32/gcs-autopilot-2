@@ -31,6 +31,26 @@ def when(value):
     return value.strftime(clock.WHEN) if value is not None else "—"
 
 
+def due_text(task):
+    """How a task's deadline reads, agreeing with its own colour.
+
+    relative_due below knows only a date, so it said "6d overdue" for an
+    FMS step whose turn had not come — while is_overdue said no and the
+    row stayed uncoloured. The words and the colour contradicted each
+    other on the same line, and the words were the wrong one: nobody has
+    been asked for that step yet.
+    """
+    if task is None or task.due_at is None:
+        return "—"
+    if getattr(task, "flow_waiting", False):
+        late = clock.now() - task.due_at
+        days = late.days
+        if days >= 1:
+            return f"planned {days}d ago · not its turn yet"
+        return "not its turn yet"
+    return relative_due(task.due_at)
+
+
 def relative_due(value):
     if value is None:
         return "—"
@@ -81,6 +101,7 @@ templates.env.filters["dt"] = dt
 templates.env.filters["day"] = day
 templates.env.filters["when"] = when
 templates.env.filters["due"] = relative_due
+templates.env.filters["duetext"] = due_text
 # A stamp on every /static address, so the browser may keep those files
 # for a week (see CachedStatic in main.py) and still pick up a new one
 # the moment it is deployed. Computed once at import: the newest file in

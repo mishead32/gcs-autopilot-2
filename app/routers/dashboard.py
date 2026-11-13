@@ -55,10 +55,20 @@ def home(request: Request, period: str = "days30",
     ).all()
 
     now = clock.now()
+    # is_overdue, not a bare date comparison — the same rule the CMD
+    # board, the task list and the row colour use. A doer's own first
+    # screen told them they were late for an FMS step whose turn had not
+    # come, which is the worst place of all to be wrong about it.
+    #
+    # "Upcoming" is the remainder rather than "dated later", so a step
+    # with an old plan on a slow run lands in a bucket instead of
+    # falling between all three and leaving the totals short.
     buckets = {
-        "overdue": [t for t in mine if t.due_at < now],
-        "today": [t for t in mine if t.due_at.date() == now.date() and t.due_at >= now],
-        "upcoming": [t for t in mine if t.due_at.date() > now.date()],
+        "overdue": [t for t in mine if t.is_overdue],
+        "today": [t for t in mine
+                  if not t.is_overdue and t.due_at.date() == now.date()],
+        "upcoming": [t for t in mine
+                     if not t.is_overdue and t.due_at.date() != now.date()],
     }
     # The same open work, cut the other way: by kind of work rather than by
     # how soon it is due. Both cuts of one list, so the totals always agree.

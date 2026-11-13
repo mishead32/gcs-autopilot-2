@@ -64,7 +64,7 @@
       <details class="duepick">
         <summary title="Click to move this deadline">
           {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
-          <span style="font-size:11px">{{ t.due_at|due }}</span></summary>
+          <span style="font-size:11px">{{ t|duetext }}</span></summary>
         <form method="post" action="/tasks/{{ t.id }}/due">
           <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
           <input type="datetime-local" name="due_at" required
@@ -81,7 +81,7 @@
                    can move this. An admin ticks it on your user under
                    Setup → Users."{% endif %}>
         {{ t.due_at|dt('%d %b, %I:%M %p') }}<br>
-        <span style="font-size:11px">{{ t.due_at|due }}</span>
+        <span style="font-size:11px">{{ t|duetext }}</span>
       </span>
       {% endif %}
     </td>

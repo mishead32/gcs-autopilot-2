@@ -11,12 +11,18 @@
 <div class="page-head">
   <div>
     <h1>{{ source_tabs[source].label if source else 'Tasks' }}</h1>
-    <p class="sub">{{ tasks|length }} task(s) · {{ status_labels[status]|lower }}
-      · sorted {{ sort_label|lower }}</p>
+    {# The true size of what was asked for. The screen stops at 500 rows,
+       but saying "500 task(s)" when there are 2,495 makes the figure
+       that linked here look wrong when it was right. #}
+    <p class="sub">{{ total }} task(s) · {{ status_labels[status]|lower }}
+      · sorted {{ sort_label|lower }}
+      {% if capped %}<br><strong>Showing the first {{ tasks|length }}</strong>
+      — narrow it with the filters below, or use Excel for all
+      {{ total }}.{% endif %}</p>
   </div>
   <div>
     {{ excel_btn('/tasks?' ~ q ~ '&export=xlsx',
-                 title='Download these ' ~ tasks|length ~ ' task(s) as Excel') }}
+                 title='Download all ' ~ total ~ ' task(s) as Excel') }}
     {% if user.has_create_task %}
     <a class="btn ghost" href="/bulk?kind=delegation">Bulk import</a>
     <a class="btn" href="/tasks/new">+ Delegate a task</a>

@@ -15727,6 +15727,123 @@ with _slQ() as _d:
 # ==========================================================================
 # Nothing impossible is left in the database
 # ==========================================================================
+print("\n== one answer to 'is this late', everywhere it is asked ==")
+# Reported from the live site: the CMD board said 20 FMS overdue, and
+# clicking the 20 opened a list of 41. Neither figure was a lie about
+# the data — they were answers to two different questions, which is
+# worse, because the page offered them as the same one.
+#
+# The difference was the two things is_overdue excludes and a bare date
+# comparison does not: work already handed in, and an FMS step whose
+# turn has not come. A slow run leaves that step's PLAN weeks in the
+# past while nobody has been asked for anything.
+from sqlalchemy import select as _selL, func as _fnL, not_ as _notL
+from app.db import SessionLocal as _slL
+from app.models import (Task as _TkL, TaskStatus as _TsL, TaskSource as _SrcL,
+                        Flow as _FlL, FlowStep as _FsL, Priority as _PrL,
+                        User as _UsL, overdue_clause as _odL, OWED_STATES)
+from app.services import flows as _fsL
+from app import clock as _ckL
+from datetime import timedelta as _tdL
+
+# A run that has stalled on step 1 with every planned date long gone —
+# exactly the shape that produced the two figures.
+with _slL() as _d:
+    _bossL = _d.scalar(_selL(_UsL).where(_UsL.email == "mis@gcs.local"))
+    _doerL = _d.scalar(_selL(_UsL).where(_UsL.email == "amit@gcs.local"))
+    _flL2 = _FlL(org_id=_bossL.org_id, name=f"SMOKE stalled {RUN}",
+                 active=True, branch_id=None)
+    _d.add(_flL2); _d.flush()
+    for _p in range(1, 7):
+        _d.add(_FsL(flow_id=_flL2.id, position=_p, title=f"Step {_p}",
+                    priority=_PrL.HIGH, tat_unit="days", tat_value=1,
+                    default_doer_id=_doerL.id, requires_attachment=False))
+    _d.commit()
+    _instL = _fsL.start_flow(_d, _flL2, f"SMOKE stalled {RUN}", _bossL)
+    _d.commit()
+    for _t in _d.scalars(_selL(_TkL).where(
+            _TkL.flow_instance_id == _instL.id)).all():
+        _t.due_at = _ckL.now() - _tdL(days=6)
+    _d.commit()
+    _instLid = _instL.id
+
+with _slL() as _d:
+    _rowsL = _d.scalars(_selL(_TkL).where(
+        _TkL.flow_instance_id == _instLid)).all()
+    _reallyL = [t for t in _rowsL if t.is_overdue]
+    _waitingL = [t for t in _rowsL if t.flow_waiting]
+    check("the stalled run has steps whose plan has gone by",
+          len(_waitingL) >= 4, len(_waitingL))
+    check("and only the one that actually opened is late",
+          len(_reallyL) == 1, [t.flow_step.position for t in _reallyL])
+    # The database must answer the same way the property does.
+    _sqlL = {t.id for t in _d.scalars(_selL(_TkL).where(
+        _TkL.flow_instance_id == _instLid, _odL())).all()}
+    check("the database agrees with the task's own answer",
+          _sqlL == {t.id for t in _reallyL},
+          (sorted(_sqlL), sorted(t.id for t in _reallyL)))
+    # And over the WHOLE company, not just this run.
+    _allL = _d.scalars(_selL(_TkL).where(_TkL.org_id == 1)).all()
+    _propL = {t.id for t in _allL if t.is_overdue}
+    _dbL = {t.id for t in _d.scalars(_selL(_TkL).where(
+        _TkL.org_id == 1, _odL())).all()}
+    check("across every task in the company, the two answers are identical",
+          _propL == _dbL,
+          f"{len(_propL ^ _dbL)} task(s) differ")
+
+# The board figure and the list it opens must be the same number.
+from app.services import cmdboard as _cbL
+with _slL() as _d:
+    _sL, _eL, _ = _cbL.window("this_month")
+    _boardL = _cbL.build(_d, 1, _sL, _eL)
+for _key, _src, _q in (("delegation", _SrcL.DELEGATION, "delegation"),
+                       ("recurring", _SrcL.RECURRING, "checklist"),
+                       ("flow", _SrcL.FLOW, "fms")):
+    with _slL() as _d:
+        _listedL = _d.scalar(_selL(_fnL.count(_TkL.id)).where(
+            _TkL.org_id == 1, _TkL.source == _src, _odL()))
+    check(f"{_q}: the board's overdue figure is the list it opens",
+          _boardL.position[_key].overdue == _listedL,
+          (_boardL.position[_key].overdue, _listedL))
+    # Overdue and coming-up must add back up to pending, or a figure
+    # falls between the two tabs and nobody can reconcile the page.
+    with _slL() as _d:
+        _pendL = _d.scalar(_selL(_fnL.count(_TkL.id)).where(
+            _TkL.org_id == 1, _TkL.source == _src,
+            _TkL.status.in_(OWED_STATES)))
+        _upL = _d.scalar(_selL(_fnL.count(_TkL.id)).where(
+            _TkL.org_id == 1, _TkL.source == _src,
+            _TkL.status.in_(OWED_STATES), _notL(_odL())))
+    check(f"  and {_q}'s overdue plus coming-up is everything pending",
+          _listedL + _upL == _pendL, (_listedL, _upL, _pendL))
+
+# And the heading on the list must be the true size of what was asked
+# for. The screen stops at 500 rows; counting the rows it was handed
+# printed "500 task(s)" under a figure of 2,495 that linked straight to
+# it, which makes the right number look like the wrong one.
+import re as _reL
+with _slL() as _d:
+    _bigL = _d.scalar(_selL(_fnL.count(_TkL.id)).where(
+        _TkL.org_id == 1, _TkL.source == _SrcL.DELEGATION, _odL()))
+_pageLhead = admin.get("/tasks?scope=all&status=overdue&source=delegation").text
+_saidL = _reL.search(r"(\d+) task\(s\)", " ".join(_pageLhead.split()))
+check("the list heading is the true total, not the number of rows shown",
+      _saidL and int(_saidL.group(1)) == _bigL,
+      (_saidL.group(1) if _saidL else "?", _bigL))
+if _bigL > 500:
+    check("and it says plainly that the screen is showing fewer",
+          "Showing the first 500" in _pageLhead)
+
+# The words on the row have to agree with its colour. "6d overdue" under
+# a step that is not overdue, on a row the software deliberately leaves
+# uncoloured, is the page arguing with itself in front of the doer.
+_lateL = admin.get("/tasks?scope=all&status=overdue&source=fms").text
+_pendLpage = admin.get("/tasks?scope=all&status=pending&source=fms").text
+check("no planned step is listed as overdue",
+      "not its turn yet" not in _lateL)
+check("and on the pending list it says so in words, not 'overdue'",
+      "not its turn yet" in _pendLpage)
+
 print("\n== and afterwards, nothing impossible is left behind ==")
 # Written after two bugs of the same shape reached the office before they
 # reached this file: a rule that held on one code path and not on another,

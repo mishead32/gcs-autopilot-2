@@ -6,7 +6,8 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, Request, Form,
                      UploadFile, File, HTTPException)
 from fastapi.responses import (RedirectResponse, HTMLResponse, FileResponse,
                                JSONResponse)
-from sqlalchemy import select, or_, update, case, func, delete as sa_delete
+from sqlalchemy import (select, or_, not_, update, case, func,
+                        delete as sa_delete)
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import UPLOAD_DIR
@@ -20,7 +21,7 @@ from ..models import (
     Task, TaskStatus, TaskSource, TaskComment, Attachment, User, Role, Priority,
     Branch, Department, Right, OutboundMessage, AuditState, AUDIT_LABELS, AUDIT_SETTABLE,
     HelpTicket, HelpStatus, REF_PREFIX, VoiceNote,
-    Followup, Escalation, Flow, FlowInstance
+    Followup, Escalation, Flow, FlowInstance, overdue_clause
 )
 from ..services import (attach, notify, flows as flow_svc, storage, holidays,
                         xlsx, detective, shrink, voice)
@@ -328,9 +329,17 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     if status == "pending":
         q = q.where(Task.status.in_(OPEN_STATES))
     elif status == "overdue":
-        q = q.where(Task.status.in_(OPEN_STATES), Task.due_at < now)
+        # The same rule the CMD board, the row colour and the escalation
+        # ladder use — see models.overdue_clause. Asked crudely here, the
+        # list counted work already handed in and FMS steps whose turn
+        # had not come, so a board figure of 20 opened a list of 41.
+        q = q.where(overdue_clause())
     elif status == "upcoming":
-        q = q.where(Task.status.in_(OPEN_STATES), Task.due_at >= now)
+        # The REMAINDER of what is owed, not "dated later". A step whose
+        # turn has not come is never overdue however old its plan is, so
+        # asking for a future date leaves it in neither tab and the two
+        # no longer add up to Pending.
+        q = q.where(Task.status.in_(OPEN_STATES), not_(overdue_clause()))
     elif status == "audit_pending":
         q = q.where(Task.audit_state == AuditState.PENDING)
     elif status == "audit_done":
@@ -419,6 +428,14 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
     # screen that is the difference between one page load and a wait.
     # The flow and its steps are here because an FMS row names the FMS
     # it belongs to and says which step of how many it is.
+    # The TRUE size of what was asked for, before the screen cap below.
+    #
+    # The heading used to count the rows it had been handed, so a filter
+    # matching 2,495 tasks printed "500 task(s)" — and the CMD board
+    # figure that linked here printed 2,495. Two numbers for one
+    # question again, and this time the smaller one was the wrong one.
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+
     tasks = db.scalars(
         q.order_by(*order).limit(500).options(
             selectinload(Task.doer), selectinload(Task.branch),
@@ -437,7 +454,9 @@ def task_list(request: Request, status: str = "pending", scope: str = "mine",
         .order_by(Department.name)).all()
 
     return templates.TemplateResponse(request, "tasks.html", {
-        "user": user, "tasks": tasks, "status": status, "scope": scope,
+        "user": user, "tasks": tasks, "total": total,
+        "capped": total > len(tasks),
+        "status": status, "scope": scope,
         "source": source, "source_tabs": SOURCE_TABS, "counts": counts,
         "ref_q": text_q, "q": text_q,
         "status_tabs": status_tabs, "scopes": scopes, "own_open": own_open,

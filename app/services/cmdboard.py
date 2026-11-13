@@ -214,17 +214,21 @@ def build(db: Session, org_id: int, start: datetime, end: datetime,
         # --- live position: what is owed right now ----------------------
         if _open(t):
             pos = board.position[key]
-            if t.flow_waiting:
-                # An FMS step whose turn has not come. Its date is a
-                # PLAN, shown so people can see work coming, and a slow
-                # run can leave that plan weeks in the past. Calling it
-                # overdue would tell CMD somebody is late for a step
-                # nobody has asked them for — the same rule the task's
-                # own colour follows, and the follow-up desk with it.
-                pos.upcoming += 1
-            elif t.due_at < today_start:
+            # is_overdue, not a date comparison of our own.
+            #
+            # Two differences, and each one produced a figure somebody
+            # could not reconcile with the list it opened. An FMS step
+            # whose turn has not come is never late however old its plan
+            # is — nobody has been asked for it. And a task due at ten
+            # this morning is late at eleven: counting it as "due today"
+            # until midnight made the board say 0 overdue while the rows
+            # on the screen were already red.
+            #
+            # "Upcoming" is the remainder, so the three always add up to
+            # what is open and no figure can fall between them.
+            if t.is_overdue:
                 pos.overdue += 1
-            elif t.due_at <= today_end:
+            elif t.due_at.date() == day:
                 pos.today += 1
             else:
                 pos.upcoming += 1

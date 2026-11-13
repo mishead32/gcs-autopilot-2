@@ -63,7 +63,7 @@
         <tr><th style="background:0">Assigned by</th><td>{{ task.assigner.name }}</td></tr>
         <tr><th style="background:0">Doer</th><td>{{ task.doer.name }}</td></tr>
         <tr><th style="background:0">{{ 'Planned for' if task.waiting_label else 'Due' }}</th>
-            <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task.due_at|due }})
+            <td class="{{ 'overdue' if task.is_overdue }}">{{ task.due_at|dt }} ({{ task|duetext }})
             {% if task.waiting_label %}
             <div class="m" style="margin-top:4px">This step's turn has not come
               round yet — the run is on step

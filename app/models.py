@@ -10,7 +10,7 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     String, Integer, DateTime, Date, Boolean, ForeignKey, Text, Float, Enum,
-    LargeBinary, UniqueConstraint, event, select, func
+    LargeBinary, UniqueConstraint, and_, event, select, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
@@ -77,6 +77,36 @@ class TaskStatus(str, enum.Enum):
 # taken above them. Everywhere one of those questions is asked, this is the
 # set to ask it about.
 PARKED_STATES = (TaskStatus.CANCELLED, TaskStatus.ON_HOLD)
+
+# Still owed by the person doing it, in the four states that mean so.
+OWED_STATES = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS,
+               TaskStatus.REJECTED, TaskStatus.REOPENED)
+
+
+def overdue_clause():
+    """"Late" as a database query — the same rule as Task.is_overdue.
+
+    There were two answers to one question. The property below excludes
+    work handed in (the doer has finished; the audit queue is not their
+    fault) and an FMS step whose turn has not come (its date is a plan,
+    and a slow run leaves that plan weeks in the past before anybody is
+    asked for anything). The task list asked the database a cruder
+    question — open, and the date has gone — and so counted both.
+
+    The CMD board said 20 FMS overdue; clicking the 20 opened a list of
+    41. Neither number was a lie about the data; they were answers to
+    two different questions, which is worse, because the page offered
+    them as the same one.
+    """
+    return and_(Task.status.in_(OWED_STATES),
+                Task.submitted_at.is_(None),
+                Task.flow_waiting.is_(False),
+                Task.due_at < clock.now())
+
+
+def owed_clause():
+    """Open and still with the doer, late or not."""
+    return Task.status.in_(OWED_STATES)
 
 
 class AuditState(str, enum.Enum):
