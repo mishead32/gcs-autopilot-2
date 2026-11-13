@@ -1575,91 +1575,45 @@ body.stale-locked{overflow:hidden}
   .stale-panel,.stale-scrim{transition:none}
 }
 
-/* ---- the floating "who" button ---------------------------------------
-   Follows the reader down the board. Fixed to the window, so it has to
-   live outside <main> (see the overlays block in base.html). */
-.stale-fab{position:fixed;right:22px;bottom:22px;z-index:60;
-  display:inline-flex;align-items:center;gap:10px;
-  padding:12px 18px 12px 14px;border:0;border-radius:40px;cursor:pointer;
-  font:inherit;font-weight:700;color:#fff;background:var(--bad);
-  box-shadow:0 10px 26px rgba(185,28,28,.34),0 2px 6px rgba(15,32,50,.18);
-  transition:transform .18s ease,box-shadow .18s ease,opacity .18s ease}
-.stale-fab:hover{transform:translateY(-2px);
-  box-shadow:0 14px 32px rgba(185,28,28,.42),0 2px 6px rgba(15,32,50,.2)}
-.stale-fab:active{transform:translateY(0)}
-.stale-fab .sf-i{display:grid;place-items:center;width:24px;height:24px;
-  flex-shrink:0;border-radius:50%;background:rgba(255,255,255,.22);
-  font-weight:900;font-size:14px;line-height:1}
-.stale-fab .sf-n{min-width:24px;padding:2px 9px;border-radius:20px;
-  background:#fff;color:var(--bad);font-weight:900;font-size:14px}
-/* Nothing owed: still there to be checked, but it stops shouting. */
-.stale-fab.none{background:var(--card);color:var(--muted);
-  box-shadow:0 8px 20px rgba(15,32,50,.14);border:1px solid var(--line)}
-.stale-fab.none .sf-i{background:var(--chip);color:var(--muted)}
-.stale-fab.none .sf-n{background:var(--chip);color:var(--muted)}
-/* Out of the way while the panel it opened is down. */
-.stale-fab.away{opacity:0;pointer-events:none;transform:translateY(12px)}
-
-/* A ring that leaves the button every few seconds — enough to catch the
-   eye on a page of numbers, not enough to nag. Only when something is
-   actually owed. */
-.stale-fab.has::after{content:"";position:absolute;inset:0;border-radius:40px;
-  box-shadow:0 0 0 0 rgba(185,28,28,.55);animation:fabPing 2.8s ease-out infinite;
-  pointer-events:none}
-@keyframes fabPing{
-  0%{box-shadow:0 0 0 0 rgba(185,28,28,.5)}
-  55%{box-shadow:0 0 0 16px rgba(185,28,28,0)}
-  100%{box-shadow:0 0 0 0 rgba(185,28,28,0)}}
-
-@media (max-width:760px){
-  /* Thumb-reachable, and the words go so it cannot cover half the page. */
-  .stale-fab{right:14px;bottom:14px;padding:11px 14px;gap:8px}
-  .stale-fab .sf-t{display:none}
-}
-@media (prefers-reduced-motion:reduce){
-  .stale-fab,.stale-fab:hover{transition:none;transform:none}
-  .stale-fab.has::after{animation:none}
-}
 .stale-rest{border:1px dashed var(--line);border-radius:10px;padding:10px 14px;
   line-height:1.9}
 
-/* ---- the notification -------------------------------------------------
-   What a phone means by one: it comes down from the top, says its piece,
-   and goes back up. Top-RIGHT rather than centred, so it never lands on
-   the first figures somebody is reading. */
-.stale-note{position:fixed;top:12px;right:16px;z-index:72;
-  width:min(430px,calc(100vw - 32px));
-  display:flex;align-items:flex-start;gap:12px;
-  padding:13px 14px;border-radius:14px;
-  background:var(--card);border:1px solid var(--line);
-  box-shadow:0 16px 38px rgba(15,32,50,.26),0 2px 8px rgba(15,32,50,.1);
-  transform:translateY(calc(-100% - 20px));opacity:0;
-  transition:transform .3s cubic-bezier(.2,.8,.3,1),opacity .2s ease}
-.stale-note.isin{transform:translateY(0);opacity:1}
-.stale-note .sn-i{display:grid;place-items:center;width:30px;height:30px;
-  flex-shrink:0;border-radius:50%;background:var(--bad);color:#fff;
-  font-weight:900;line-height:1}
-.stale-note .sn-body{flex:1;min-width:0;line-height:1.35}
-.stale-note .sn-sub{color:var(--muted);font-size:12.5px;margin-top:2px}
-.stale-note .sn-go{flex-shrink:0;align-self:center;border:0;cursor:pointer;
-  font:inherit;font-weight:700;font-size:13px;color:#fff;
-  background:var(--bad);border-radius:8px;padding:7px 12px}
-.stale-note .sn-x{flex-shrink:0;align-self:flex-start;border:0;cursor:pointer;
-  background:none;color:var(--muted);font-size:18px;line-height:1;padding:0 2px}
-.stale-note .sn-x:hover{color:var(--ink)}
-@media (max-width:760px){
-  .stale-note{top:8px;right:8px;left:8px;width:auto}
-  .stale-note .sn-go{padding:7px 10px}
-}
-@media (prefers-reduced-motion:reduce){
-  .stale-note{transition:opacity .2s ease;transform:none}
-}
-
-/* With the notification doing the attracting, the handle is just a
-   handle: round, quiet, and no longer pulsing at anybody. */
-.stale-fab{padding:12px 14px}
-.stale-fab.has::after{content:none}
 /* The date, at the top of the board rather than only beside a heading
    further down: a screenshot of this page has to say which day it is. */
 .cmd-date{font-weight:700;color:var(--brand);margin:2px 0 6px;
   letter-spacing:.2px}
+
+/* ---- the notice in the header ----------------------------------------
+   Beside the heading and staying there. It used to slide in and take
+   itself away again, which meant that half a minute into reading the
+   board the one thing worth seeing was gone. */
+.page-head .ph-right{display:flex;align-items:center;gap:10px;
+  flex-wrap:wrap;justify-content:flex-end}
+.stale-note{display:inline-flex;align-items:center;gap:11px;
+  padding:9px 12px;border-radius:12px;cursor:pointer;text-align:left;
+  font:inherit;color:var(--ink);
+  background:#fff5f5;border:1px solid #f4cfcb;
+  box-shadow:0 2px 8px rgba(185,28,28,.1);
+  transition:box-shadow .16s ease,transform .16s ease}
+button.stale-note:hover{transform:translateY(-1px);
+  box-shadow:0 6px 16px rgba(185,28,28,.18)}
+.stale-note .sn-i{display:grid;place-items:center;width:26px;height:26px;
+  flex-shrink:0;border-radius:50%;background:var(--bad);color:#fff;
+  font-weight:900;font-size:14px;line-height:1}
+.stale-note .sn-body{display:flex;flex-direction:column;line-height:1.3}
+.stale-note .sn-t{font-weight:700;font-size:13.5px}
+.stale-note .sn-sub{color:var(--muted);font-size:12px}
+.stale-note .sn-n{flex-shrink:0;min-width:26px;padding:3px 10px;
+  border-radius:20px;background:var(--bad);color:#fff;
+  font-weight:900;font-size:14px;text-align:center}
+/* Nothing owed: the same spot, so the eye knows where to look, with
+   nothing to click and nothing to worry about. */
+.stale-note.none{background:var(--card);border-color:var(--line);
+  cursor:default;box-shadow:none}
+.stale-note.none .sn-i{background:var(--ok)}
+.stale-note.none .sn-t{font-weight:600;color:var(--muted)}
+@media (max-width:760px){
+  .page-head .ph-right{justify-content:flex-start}
+  .stale-note{width:100%}
+  .stale-note .sn-n{margin-left:auto}
+}

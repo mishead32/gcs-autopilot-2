@@ -32,11 +32,52 @@
       tasks, not score weight. Delegation and Checklist are kept apart because
       they go wrong for different reasons.</p>
   </div>
-  <div>
+  <div class="ph-right">
+    {# The notice, up here beside the heading and STAYING here. It was a
+       notification that slid in and took itself away again, which meant
+       that half a minute into reading the board the one thing you most
+       needed to see was gone and there was nothing left to click. It is
+       a count that is either zero or a problem; it belongs on the page. #}
+    {% if stale_total %}
+    <button type="button" class="stale-note" id="staleNote"
+            aria-controls="stalePanel" aria-expanded="false">
+      <span class="sn-i" aria-hidden="true">!</span>
+      <span class="sn-body">
+        <span class="sn-t">Tasks pending more than 1 month</span>
+        <span class="sn-sub">{{ stale|length }}
+          {{ 'person' if stale|length == 1 else 'people' }} ·
+          longest {{ stale[0].oldest }} days, {{ stale[0].user.name }}</span>
+      </span>
+      <span class="sn-n">{{ stale_total }}</span>
+    </button>
+    {% else %}
+    <div class="stale-note none">
+      <span class="sn-i" aria-hidden="true">✓</span>
+      <span class="sn-body"><span class="sn-t">Nothing pending over a
+        month</span></span>
+    </div>
+    {% endif %}
     {{ excel_btn('/cmd?period=' ~ period ~ '&date_from=' ~ date_from ~
                  '&date_to=' ~ date_to ~ '&export=xlsx',
                  title='The whole board, company by company, as Excel') }}</div>
 </div>
+
+<form method="get" action="/cmd" class="card daterange">
+  <div>
+    <label>Period</label>
+    <select name="period" onchange="this.form.submit()">
+      {% for k, lbl in periods %}
+      <option value="{{ k }}" {{ 'selected' if period == k }}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+  <div class="acts">
+    <button class="btn" name="period" value="custom">Apply dates</button>
+    <a class="btn ghost" href="/cmd">This month</a>
+  </div>
+</form>
 
 {# ---------------------------------------------------------------- 1 ---- #}
 {# The live block is deliberately first and deliberately not period-filtered:
@@ -234,42 +275,6 @@
 {# Slides down over the board. Rendered with the page rather than fetched
    on click: it is a few rows, the board has already read these tasks, and
    a panel that has to load is a panel somebody closes before it arrives. #}
-{# A notification, in the sense a phone means it: it comes down from the
-   top on its own, says the one thing worth saying, and goes back up.
-   Nobody has to find it, and it is not sitting on the page afterwards.
-
-   Tapping it opens the full list. The small round button below is how
-   you get it back once it has gone — a notification you cannot recall
-   is a notification you have to reload the page to read twice.
-
-   Out here rather than in the content block because a fixed element
-   inside main is fixed to main, not to the window. #}
-{% if stale_total %}
-<div class="stale-note" id="staleNote" role="status" hidden>
-  <span class="sn-i" aria-hidden="true">!</span>
-  <div class="sn-body">
-    <strong>{{ stale_total }} task{{ '' if stale_total == 1 else 's' }}
-      pending over a month</strong>
-    <div class="sn-sub">{{ stale|length }}
-      {{ 'person' if stale|length == 1 else 'people' }} ·
-      longest {{ stale[0].oldest }} days, {{ stale[0].user.name }}</div>
-  </div>
-  <button type="button" class="sn-go" id="staleNoteGo">See who</button>
-  <button type="button" class="sn-x" id="staleNoteX"
-          aria-label="Dismiss">&times;</button>
-</div>
-{% endif %}
-
-{# The handle. Quiet, because the notification above does the attracting
-   — two things shouting at once is one thing too many. #}
-<button type="button" id="staleFab"
-        class="stale-fab {{ 'has' if stale_total else 'none' }}"
-        aria-controls="stalePanel" aria-expanded="false"
-        title="Tasks pending more than 1 month">
-  <span class="sf-i" aria-hidden="true">!</span>
-  <span class="sf-n">{{ stale_total }}</span>
-</button>
-
 <div class="stale-scrim" id="staleScrim" hidden></div>
 <section class="stale-panel" id="stalePanel" hidden
          aria-label="Tasks pending more than 1 month">
@@ -346,29 +351,12 @@
     than {{ stale_days }} days.</div>
   {% endif %}
 </section>
-
-<form method="get" action="/cmd" class="card daterange">
-  <div>
-    <label>Period</label>
-    <select name="period" onchange="this.form.submit()">
-      {% for k, lbl in periods %}
-      <option value="{{ k }}" {{ 'selected' if period == k }}>{{ lbl }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
-  <div><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
-  <div class="acts">
-    <button class="btn" name="period" value="custom">Apply dates</button>
-    <a class="btn ghost" href="/cmd">This month</a>
-  </div>
-</form>
-
 <script>
-// Slides down from the top, over the board. No library: a transform and a
-// class, so it is the same on the phone and does not fight the sidebar.
+// The bar in the header opens the panel; the panel comes down over the
+// board. No library: a transform and a class, so it behaves the same on
+// a phone and does not fight the sidebar.
 (function () {
-  var open = document.getElementById('staleFab'),
+  var open = document.getElementById('staleNote'),
       panel = document.getElementById('stalePanel'),
       scrim = document.getElementById('staleScrim'),
       shut = document.getElementById('staleClose');
@@ -382,7 +370,6 @@
       panel.classList.toggle('isopen', on);
       scrim.classList.toggle('isopen', on);
       open.setAttribute('aria-expanded', on ? 'true' : 'false');
-      open.classList.toggle('away', on);
       document.body.classList.toggle('stale-locked', on);
     });
     if (!on) {
@@ -392,7 +379,7 @@
         if (!panel.classList.contains('isopen')) {
           panel.hidden = true; scrim.hidden = true;
         }
-      }, 260);
+      }, 320);
     }
   }
 
@@ -403,48 +390,6 @@
   scrim.addEventListener('click', function () { show(false); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && panel.classList.contains('isopen')) show(false);
-  });
-
-  // ---- the notification ------------------------------------------------
-  // Down on its own, then back up. The timer is paused while the pointer
-  // is on it, because something that slides away mid-read is worse than
-  // something that never appeared.
-  var note = document.getElementById('staleNote');
-  if (!note) return;
-  var SEEN = 'ga.cmd.stale.seen', timer = null;
-
-  function hideNote() {
-    note.classList.remove('isin');
-    setTimeout(function () { note.hidden = true; }, 320);
-  }
-
-  function dismiss() {
-    hideNote();
-    // Dismissed means dismissed, for this visit. Coming back on every
-    // click of the period selector would make it an irritation rather
-    // than a notice.
-    try { sessionStorage.setItem(SEEN, '1'); } catch (e) {}
-  }
-
-  var already = false;
-  try { already = sessionStorage.getItem(SEEN) === '1'; } catch (e) {}
-  if (!already) {
-    note.hidden = false;
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () { note.classList.add('isin'); });
-    });
-    timer = setTimeout(dismiss, 7000);
-    note.addEventListener('mouseenter', function () { clearTimeout(timer); });
-    note.addEventListener('mouseleave', function () {
-      timer = setTimeout(dismiss, 2500);
-    });
-  }
-
-  document.getElementById('staleNoteX').addEventListener('click', dismiss);
-  document.getElementById('staleNoteGo').addEventListener('click', function () {
-    clearTimeout(timer);
-    dismiss();
-    show(true);
   });
 })();
 </script>

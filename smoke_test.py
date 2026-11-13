@@ -6854,37 +6854,32 @@ with _slB() as _d:
 
 _pageS = admin.get("/cmd").text
 check("the board carries the panel", 'id="stalePanel"' in _pageS)
-check("with a floating button that says how many",
-      'id="staleFab"' in _pageS
-      and "Tasks pending more than 1 month" in _pageS)
-# A notification in the sense a phone means it: down from the top on its
-# own, then back up. The button is only the way to call it back.
-check("and a notification that comes down on its own",
-      'id="staleNote"' in _pageS and "pending over a month" in _pageS)
-check("which names the worst of it, so it is worth reading",
+# The notice sits in the page header and STAYS there. It was a sliding
+# notification that took itself away after a few seconds, so half a
+# minute into reading the board the one thing worth seeing was gone and
+# there was nothing left to click.
+check("the notice is in the page header, with the count on it",
+      'id="staleNote"' in _pageS
+      and "Tasks pending more than 1 month" in _pageS
+      and ">" + str(sum(r.count for r in _staleS)) + "<" in _pageS)
+check("it names the worst of it, so it is worth reading",
       "longest" in _pageS and "days," in _pageS)
-check("it slides down from above and is not simply there",
-      ".stale-note{position:fixed" in _css
-      and "transform:translateY(calc(-100% - 20px))" in _css
-      and ".stale-note.isin{transform:translateY(0)" in _css)
-check("and it goes away again by itself",
-      "setTimeout(dismiss, 7000)" in _pageS)
-check("while the pointer is on it, it waits",
-      "mouseenter" in _pageS and "clearTimeout(timer)" in _pageS)
-check("the button floats, so it is there wherever they have scrolled to",
-      ".stale-fab{position:fixed" in _css)
-# A bar down the right-hand side, coming down from the top — so the
-# board is still readable beside it rather than covered over.
-check("the panel is a bar on the right, not a sheet across the page",
-      ".stale-panel{position:fixed;top:0;right:0" in _css)
-check("and it travels downwards into place",
-      "transform:translateY(-100vh)" in _css
-      and ".stale-panel.isopen{transform:translateY(0)}" in _css)
-check("and it floats OUTSIDE main, for the same reason the panel does",
-      _pageS.index('id="staleFab"') > _pageS.rindex("</main>"))
-check("it only shouts while something is owed",
-      'class="stale-fab has"' in _pageS, 
-      [l for l in _pageS.splitlines() if "stale-fab" in l][:1])
+check("it does not take itself away again",
+      "setTimeout(dismiss" not in _pageS and "staleNoteX" not in _pageS)
+check("and there is no second button floating in a corner",
+      "staleFab" not in _pageS and ".stale-fab" not in _css)
+check("the notice is INSIDE the page header, where the eye already is",
+      _pageS.index('id="staleNote"') < _pageS.index("Where the work stands"))
+
+# The period form belongs above the figures it governs. A careless move
+# of the overlay block once stranded it at the foot of the page, behind
+# the sidebar — the board's own date controls, below everything.
+check("the period form is above the figures, not at the foot of the page",
+      _pageS.index('class="card daterange"') < _pageS.index("Where the work stands"),
+      "the date controls are below the board")
+check("and it is not inside the overlay block",
+      _pageS.index('class="card daterange"') < _pageS.rindex("</main>"))
+
 with _slB() as _d:
     _slowNameS = _d.get(_UB, _slowSid).name
 check("and the person is named on it", _slowNameS in _pageS, _slowNameS)
