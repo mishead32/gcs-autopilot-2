@@ -16714,5 +16714,31 @@ check("and so do the two definitions of 'finished'",
       _tkR.FINISHED_STATES == _rpR.FINISHED_STATES,
       [_tkR.FINISHED_STATES, _rpR.FINISHED_STATES])
 
+
+
+print("\n== a crash says what it was ==")
+# "Internal Server Error" on a white page sent everybody to a server log
+# they cannot open. The page now carries the one line that names the fault.
+from app.services import flows as _fsCr
+_crClient = TestClient(app, follow_redirects=True, raise_server_exceptions=False)
+_crClient.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
+_realCr = _fsCr.start_blockers
+def _boomCr(*a, **k):
+    raise RuntimeError("SMOKE boom postgresql://user:secret@host/db tail")
+_fsCr.start_blockers = _boomCr
+try:
+    with _slK() as _d:
+        _anyFlowCr = _d.scalar(_spK(_FlJ).where(_FlJ.active.is_(True)))
+    _rCr = _crClient.post(f"/flows/{_anyFlowCr.id}/start", data={})
+finally:
+    _fsCr.start_blockers = _realCr
+check("a crash is still a 500", _rCr.status_code == 500, _rCr.status_code)
+check("but the page names the fault instead of 'Internal Server Error'",
+      "RuntimeError: SMOKE boom" in _rCr.text
+      and "Something went wrong" in _rCr.text, _rCr.text[:120])
+check("and says where it happened", f"/flows/{_anyFlowCr.id}/start" in _rCr.text)
+check("without ever printing a connection string",
+      "secret" not in _rCr.text and "[address removed]" in _rCr.text)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

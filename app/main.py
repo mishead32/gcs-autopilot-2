@@ -509,6 +509,39 @@ async def _friendly_error(request: Request, exc: StarletteHTTPException):
                                           status_code=exc.status_code)
 
 
+def _what_broke(exc: BaseException) -> str:
+    """One line saying what failed, safe to put on a page.
+
+    The first line only, cut short, and with anything shaped like a
+    connection string taken out — a database error can quote the address it
+    was talking to, and that address carries a password.
+    """
+    first = (str(exc) or "").strip().splitlines()[0:1]
+    said = re.sub(r"\S+://\S+", "[address removed]", first[0] if first else "")
+    return f"{type(exc).__name__}: {said}"[:300]
+
+
+@app.exception_handler(Exception)
+async def _crash_page(request: Request, exc: Exception):
+    """A crash that says what it was, instead of "Internal Server Error".
+
+    Those three words on a white page told nobody anything: the reason was
+    only in the server's log, which the people using this cannot open. So
+    the reason is put on the page, one line, where it can be read out or
+    screenshotted — and the full trace still goes to the log as before,
+    because Starlette re-raises after this handler has answered.
+    """
+    import traceback
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    detail = ("The software hit an error it did not expect. Before trying "
+              "again, look at the page you came from: part of it may have "
+              "been saved. Send this line to whoever looks after the software — "
+              + _what_broke(exc)
+              + f" — at {request.method} {request.url.path}")
+    return await _friendly_error(
+        request, StarletteHTTPException(status_code=500, detail=detail))
+
+
 app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(tasks.router)
