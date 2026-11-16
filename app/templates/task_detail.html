@@ -13,6 +13,7 @@
   of {{ task.ref }}{% if task.flow_instance %} —
   <a href="/flows/instance/{{ task.flow_instance_id }}">{{ task.flow_instance.reference }}</a>{% endif %}</p>
 {% endif %}
+{% if task.run_about %}<p class="rowabout" style="margin:0 0 10px">{{ task.run_about }}</p>{% endif %}
 <p class="sub">
   <span class="chip {{ task.priority.value }}"
         title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>

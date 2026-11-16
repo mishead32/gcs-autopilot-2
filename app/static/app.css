@@ -1655,3 +1655,7 @@ button.stale-note:hover{transform:translateY(-1px);
 .appr-tabs .chip.on .tabn{background:rgba(255,255,255,.25)}
 .appr-break{margin-top:14px}
 .appr-break summary{cursor:pointer}
+
+/* What an FMS run is about, under the step's title on every task row. */
+.rowabout{margin-top:3px;font-size:12.5px;line-height:1.4;color:var(--ink,#1f2937);
+  max-width:60ch;white-space:normal;overflow-wrap:anywhere}

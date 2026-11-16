@@ -880,10 +880,20 @@ def reference_from(flow: Flow, context: dict | None) -> str:
             # every task already; putting them in the name as well gives
             # "Ritu Bansal · Amit Kumar" where the run is about Ritu.
             continue
-        value = str(data.get(field["label"], "") or "").strip()
-        if not value or len(value) > NAME_PART_MAX:
+        value = " ".join(str(data.get(field["label"], "") or "").split())
+        if not value:
             continue
-        parts.append(" ".join(value.split()))
+        if len(value) > NAME_PART_MAX:
+            # A long answer further down the form is still skipped. But the
+            # FIRST question is what the run is about, and skipping it named
+            # six different purchases "as required · EA". Its opening words
+            # are a better name than the two answers after it.
+            # A long-text box is a paragraph by design and is still passed
+            # over: its first words are rarely what the thing is called.
+            if parts or field["type"] == "textarea":
+                continue
+            value = value[:NAME_PART_MAX].rstrip(" -,.;:") + "\u2026"
+        parts.append(value)
     return " \u00b7 ".join(parts)[:NAME_MAX]
 
 

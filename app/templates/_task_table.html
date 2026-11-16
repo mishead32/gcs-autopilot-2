@@ -27,6 +27,9 @@
             out early because nobody is in that day. Today's own copy of this
             job is the other row.">for {{ t.covers_label }}</span>
       {% endif %}
+      {# Which purchase, which hire: the run's own first answer, whole.
+         See Task.run_about — the title alone can read "as required · EA". #}
+      {% if t.run_about %}<div class="rowabout">{{ t.run_about }}</div>{% endif %}
       {# The FMS's own name, not the word "flow" — see Task.source_label. #}
       <div class="m rowsub">{{ t.source_label }}{% if t.branch %} ·
         {{ t.branch.name }}{% endif %} · assigned

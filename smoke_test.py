@@ -16398,5 +16398,60 @@ check("and so do the two definitions of 'finished'",
       _tkR.FINISHED_STATES == _rpR.FINISHED_STATES,
       [_tkR.FINISHED_STATES, _rpR.FINISHED_STATES])
 
+print("\n== an FMS task says what its run is about ==")
+# Six purchase runs all read "3 QUOTATIONS — as required · EA" on the doer's
+# list, because the item description was too long to be used in the name.
+_abLong = ("BIPS-PODCAST STUDIO-Decorative Wooden Wall Panelling and Backlit "
+           "Display Shelves--Check with Mr.Arun for Operational/Technical "
+           "requiremnt & Mr.Vikram if any designing related query")
+admin.post("/flows/new", data={
+    "name": f"SMOKE about {RUN}", "description": "", "branch_id": "",
+    "sf_label": ["Item name", "Quantity", "Entered by"],
+    "sf_type": ["text", "text", "text"], "sf_required": ["1", "1", "1"],
+    "sf_options": ["", "", ""],
+    "step_title": ["Quotations"], "step_doer": ["6"], "step_doers": [""],
+    "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
+    "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
+    "step_proof": ["0"], "step_decision": ["0"], "step_yes": [""],
+    "step_next": ["0"], "step_no": [""], "step_fail": [""],
+    "step_due_from": [""]})
+from app.models import Flow as _FlAb, FlowInstance as _FiAb, Task as _TkAb
+from app.db import SessionLocal as _slAb
+from sqlalchemy import select as _selAb
+import json as _jsAb
+with _slAb() as _d:
+    _abF = _d.scalar(_selAb(_FlAb).where(_FlAb.name == f"SMOKE about {RUN}"))
+    _abFid = _abF.id
+    _abKeys = {f["label"]: f["key"] for f in _abF.start_form_fields}
+admin.post(f"/flows/{_abFid}/start", data={
+    _abKeys["Item name"]: _abLong, _abKeys["Quantity"]: "as required",
+    _abKeys["Entered by"]: "EA"})
+with _slAb() as _d:
+    _abI = _d.scalar(_selAb(_FiAb).where(_FiAb.flow_id == _abFid))
+    _abT = _d.scalar(_selAb(_TkAb).where(_TkAb.flow_instance_id == _abI.id))
+    _abTid = _abT.id
+    check("a long first answer leads the run's name instead of being dropped",
+          _abI.reference.startswith("BIPS-PODCAST STUDIO-Decorative Wooden"),
+          _abI.reference)
+    check("the name still fits its column", len(_abT.title) <= 250,
+          len(_abT.title))
+    check("and the task carries the whole answer, not the cut one",
+          _abT.run_about == " ".join(_abLong.split()), _abT.run_about)
+    # A run started BEFORE this change: named after the later answers.
+    _abI.reference = "as required \u00b7 EA"
+    _abT.title = "Quotations \u2014 as required \u00b7 EA"
+    _d.commit()
+_abPage = login("amit@gcs.local").get("/tasks?scope=mine&status=open").text
+check("an older run named 'as required · EA' shows the item on the doer's list",
+      "Decorative Wooden Wall Panelling" in _abPage)
+check("and on the task's own page",
+      "Decorative Wooden Wall Panelling" in admin.get(f"/tasks/{_abTid}").text)
+with _slAb() as _d:
+    _abT = _d.get(_TkAb, _abTid)
+    _abT.title = "Quotations \u2014 " + " ".join(_abLong.split())
+    check("a title that already says it is not repeated underneath",
+          _abT.run_about == "")
+    _d.rollback()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

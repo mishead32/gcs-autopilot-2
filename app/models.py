@@ -6,6 +6,7 @@ run GCS internally today and serve multiple tenants later without a rewrite.
 from __future__ import annotations
 
 import enum
+import json
 from datetime import datetime, date
 
 from sqlalchemy import (
@@ -1378,6 +1379,44 @@ class Task(Base):
         if self.flow_instance is not None and self.flow_instance.flow:
             return self.flow_instance.flow.name or self.source.value
         return self.source.value
+
+    @property
+    def run_about(self) -> str:
+        """What this FMS run is ABOUT, in the words typed on its start form.
+
+        A run is named from its short answers, so a run whose first answer
+        is a full sentence — "BIPS podcast studio: wooden wall panelling
+        and backlit shelves, check with Mr. Arun" — was named after the
+        answers that came next: "as required · EA". Six purchase runs then
+        read identically on the doer's list, and the one line that said
+        which purchase each was could only be found by opening the run.
+
+        So the first real answer is read here, whole, for the row to show
+        under the title. Read from the run rather than stored on the task:
+        runs started before this existed get it too. Files and person
+        questions are passed over — neither says what the run is about.
+        Empty when the title already says it.
+        """
+        inst = self.flow_instance
+        if inst is None or inst.flow is None:
+            return ""
+        try:
+            data = json.loads(inst.context or "{}")
+        except (ValueError, TypeError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        for field in inst.flow.start_form_fields:
+            if field.get("type") in ("file", "person"):
+                continue
+            value = " ".join(str(data.get(field["label"], "") or "").split())
+            if not value:
+                continue
+            # Already in the title: saying it twice is noise, not detail.
+            if value.lower() in (self.title or "").lower():
+                return ""
+            return value[:400]
+        return ""
 
     @property
     def step_label(self) -> str:
