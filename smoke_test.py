@@ -6285,7 +6285,7 @@ with _slK() as _d:
         _d.add(_HolJ(org_id=1, branch_id=None, day=_landJ, name="SMOKE landing day"))
         _d.commit()
 _mkJ = {"name": f"SMOKE closed-day flow {RUN}", "description": "", "branch_id": "",
-        "step_title": ["Only step"], "step_doer": ["6"], "step_tat_unit": ["days"],
+        "step_title": ["Only step"], "step_doer": [""], "step_tat_unit": ["days"],
         "step_tat": ["20"], "step_priority": ["medium"], "step_instructions": [""],
         "step_fields": [""], "step_audit": ["0"], "step_proof": ["1"],
         "step_decision": ["0"], "step_yes": [""], "step_next": ["0"],
@@ -6353,7 +6353,7 @@ check("switching one off clears the warning",
 print("\n== an FMS template can be changed and retired ==")
 from app.models import Flow as _FlK, FlowStep as _FSK
 _mkflowK = {"name": f"SMOKE flow {RUN}", "description": "", "branch_id": "",
-            "step_title": ["First", "Second"], "step_doer": ["6", "6"],
+            "step_title": ["First", "Second"], "step_doer": ["", ""],
             "step_tat_unit": ["hours", "hours"], "step_tat": ["24", "24"],
             "step_priority": ["medium", "medium"],
             "step_instructions": ["", ""], "step_fields": ["", ""],
@@ -8141,7 +8141,7 @@ from datetime import datetime as _dtD
 _mkD = {"name": f"SMOKE field anchor {RUN}", "description": "", "branch_id": "",
         "sf_label": ["Bill Date"], "sf_type": ["date"], "sf_required": ["1"],
         "sf_options": [""],
-        "step_title": ["Verify the bill"], "step_doer": ["6"],
+        "step_title": ["Verify the bill"], "step_doer": [""],
         "step_tat_unit": ["days"], "step_tat": ["3"], "step_priority": ["medium"],
         "step_instructions": [""], "step_fields": [""], "step_audit": ["0"],
         "step_proof": ["1"], "step_decision": ["0"], "step_yes": [""],
@@ -8510,7 +8510,7 @@ _tbHow = ("1. Open https://drive.google.com/po-folder\n"
 admin.post("/flows/new", data={
     "name": _tbName, "description": "", "branch_id": "",
     "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
-    "step_title": ["Verify the bill"], "step_doer": ["6"], "step_doers": [""],
+    "step_title": ["Verify the bill"], "step_doer": [""], "step_doers": [""],
     "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
     "step_instructions": [_tbWhat], "step_howto": [_tbHow],
     "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
@@ -8529,17 +8529,8 @@ with _slK() as _d:
     _tbI = _d.scalar(_spK(_FIT).where(_FIT.flow_id == _tbFid))
     _tbT = _d.scalar(_spK(_TT).where(_TT.flow_instance_id == _tbI.id))
     _tbTid = _tbT.id
-    # This flow names nobody for its one step, so the task is parked on
-    # whoever started the run and says so underneath the description.
-    # The description itself must arrive whole and first, and the method
-    # untouched — which is what this check is about.
     check("both reach the task the doer opens",
-          (_tbT.details or "").startswith(_tbWhat) and _tbT.how_to == _tbHow,
-          (_tbT.details or "")[:80])
-    # And it is NOT parked: the flow names its doer now, so it is theirs.
-    check("a step whose flow names its doer is that person's, not parked",
-          not _tbT.stand_in and _tbT.doer_id == 6,
-          (_tbT.stand_in, _tbT.doer_id))
+          _tbT.details == _tbWhat and _tbT.how_to == _tbHow)
 
 _tbPage = admin.get(f"/tasks/{_tbTid}").text
 check("the task shows the description", _tbWhat in _tbPage)
@@ -8562,7 +8553,7 @@ _tbBare = f"SMOKE one box {RUN}"
 admin.post("/flows/new", data={
     "name": _tbBare, "description": "", "branch_id": "",
     "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
-    "step_title": ["Just do it"], "step_doer": ["6"], "step_doers": [""],
+    "step_title": ["Just do it"], "step_doer": [""], "step_doers": [""],
     "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
     "step_instructions": ["Something simple"], "step_howto": [""],
     "step_fields": [""], "step_audit": ["0"], "step_proof": ["0"],
@@ -8594,7 +8585,7 @@ check("it saves one last time on the way out instead",
 from app.models import Flow as _FlR
 _fdOk = {"name": f"SMOKE draft clear {RUN}", "description": "", "branch_id": "",
          "sf_label": [""], "sf_type": ["text"], "sf_required": ["1"], "sf_options": [""],
-         "step_title": ["Only step"], "step_doer": ["6"], "step_doers": [""],
+         "step_title": ["Only step"], "step_doer": [""], "step_doers": [""],
          "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
          "step_instructions": [""], "step_howto": [""], "step_fields": [""],
          "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
@@ -8848,7 +8839,7 @@ admin.post("/flows/new", data={
     "sf_label": ["Date of joining", "Bill date"],
     "sf_type": ["datetime", "date"], "sf_required": ["1", "1"],
     "sf_options": ["", ""],
-    "step_title": ["Step one"], "step_doer": ["6"], "step_doers": [""],
+    "step_title": ["Step one"], "step_doer": [""], "step_doers": [""],
     "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
     "step_instructions": [""], "step_howto": [""], "step_fields": [""],
     "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
@@ -8874,7 +8865,7 @@ admin.post("/flows/new", data={
     "name": _ynName, "description": "", "branch_id": "",
     "sf_label": ["Approved?"], "sf_type": ["yesno"], "sf_required": ["1"],
     "sf_options": [""],
-    "step_title": ["Step one"], "step_doer": ["6"], "step_doers": [""],
+    "step_title": ["Step one"], "step_doer": [""], "step_doers": [""],
     "step_tat_unit": ["hours"], "step_tat": ["24"], "step_priority": ["medium"],
     "step_instructions": [""], "step_howto": [""], "step_fields": [""],
     "step_audit": ["0"], "step_proof": ["0"], "step_decision": ["0"],
@@ -11465,12 +11456,11 @@ def _build8(db, name, staffing, kiran, extra=None):
             st.default_doer_id = kiran.id
             if extra:
                 st.extra_doer_ids = str(extra.id)
-        elif staffing in ("named", "nobody"):
-            # "nobody" is staffed here and emptied AFTER the run starts: a
-            # flow with an unset step cannot be started any more.
+        elif staffing == "named":
             st.default_doer_id = kiran.id
         elif staffing == "position":
             st.doer_dept = f"SMOKE HR {RUN}"
+        # staffing == "nobody": left unset on purpose
         db.add(st)
     db.commit()
     return flow
@@ -11519,30 +11509,8 @@ with _slP() as _d:
         if _howP == "position":
             _k1P.set_extra_branches([_branchP])
             _d.commit()
-        # Same for a step with NOBODY set: a run cannot start that way any
-        # more (that was the Kiran Sandhu bug). The state exists in an
-        # office when the flow is edited, or the named person leaves, while
-        # a run is going — so it is staffed to start and emptied after.
-        if _howP == "nobody":
-            _blankedP = [st for st in _flowP.steps if st.position > 1]
         _instP = _fsvP.start_flow(_d, _flowP, f"SMOKE {_howP} {RUN}", _bossP,
                                   branch_id=_branchP)
-        if _howP == "nobody":
-            for _stP in _blankedP:
-                _stP.default_doer_id = None
-            # The tasks planned while they were still staffed go, so the
-            # plan is drawn afresh against the flow as it now stands.
-            for _oldP in _d.scalars(_SELP(_TkP).where(
-                    _TkP.flow_instance_id == _instP.id)).all():
-                if _oldP.flow_step.position > 1:
-                    _d.delete(_oldP)
-            _d.commit()
-            check("a flow whose steps name nobody is refused a new run, and "
-                  "the refusal lists the steps",
-                  "step 2 (Step 2)" in " ".join(
-                      _fsvP.start_blockers(_d, _flowP, _branchP)))
-            _fsvP.replan(_d, _instP, _bossP)
-            _d.commit()
         if _howP == "position":
             _k1P.set_extra_branches([])
             _d.commit()
@@ -11644,28 +11612,10 @@ with _slP() as _d:
     check("step 2 still opens rather than vanishing", bool(_step2P),
           "the run stalled when the position emptied")
     if _step2P:
-        # In the task's own details and with a flag, NOT as a comment: a
-        # comment reads as somebody having worked on it, which freezes the
-        # task where it is — the opposite of what a parked task needs.
-        _noteP = _step2P[0].details or ""
+        _noteP = " ".join(c.body for c in _step2P[0].comments)
         check("and the person it fell to is told why they have it",
               _depGapP.name in _noteP and "nobody is" in _noteP,
-              _noteP[-200:] or "(nothing on the task)")
-        check("it is flagged as parked, so it can be found and moved",
-              _step2P[0].stand_in is True)
-        check("and that is not written as a comment, which would freeze it",
-              not _step2P[0].comments)
-        # The holder comes back: the parked step goes to them by itself.
-        _holderP.department_id = _depGapP.id
-        _holderP.set_extra_branches([_brGapP.id])
-        _d.commit()
-        _fsvP.settle_all(_d, _bossP.org_id)
-        _d.refresh(_step2P[0])
-        check("when somebody is in the position again, it moves to them",
-              _step2P[0].doer_id == _holderP.id and not _step2P[0].stand_in,
-              (_step2P[0].doer.name, _step2P[0].stand_in))
-        _holderP.department_id = _wasDeptP
-        _d.commit()
+              _noteP[:160] or "(no comment on the task)")
     _holderP.also_branch_ids = _wasExtraP
     _d.commit()
 
@@ -16199,254 +16149,6 @@ finally:
         _d.query(_AiA).delete()
         _d.commit()
 
-print("\n== a step parked on a stand-in moves when there is somebody ==")
-# Reported from the live site, twice: an Accounts step of Bill to Payment
-# sitting with the person who started the run. The task said why in its
-# own details — "the flow does not say who does this step" — because on
-# the day the run began, it did not. The flow was corrected a week later.
-# Nothing went back for the task. The note on it promised "the plan
-# follows next time this run moves", and no code anywhere kept that.
-from sqlalchemy import select as _selK2
-from app.db import SessionLocal as _slK2
-from app.models import (Flow as _FlK2, FlowStep as _FsK2, Task as _TkK2,
-                        TaskStatus as _TsK2, Priority as _PrK2, User as _UsK2,
-                        Branch as _BrK2, Department as _DpK2, Role as _RoK2,
-                        TaskComment as _TcK2)
-from app.services import flows as _fsK2
-from app.security import hash_password as _hpK2
-from app import clock as _ckK2
-from datetime import timedelta as _tdK2
-
-
-def _stepsK2(d, iid):
-    return {t.flow_step.position: t for t in d.scalars(_selK2(_TkK2).where(
-        _TkK2.flow_instance_id == iid,
-        _TkK2.status != _TsK2.CANCELLED)).all()}
-
-
-with _slK2() as _d:
-    _starterK = _d.scalar(_selK2(_UsK2).where(_UsK2.email == "mis@gcs.local"))
-    _firstK = _d.scalar(_selK2(_UsK2).where(_UsK2.email == "amit@gcs.local"))
-    _hoK = _BrK2(org_id=_starterK.org_id, name=f"SMOKE HO {RUN}")
-    _d.add(_hoK); _d.flush()
-    _accK = _DpK2(org_id=_starterK.org_id, branch_id=_hoK.id,
-                  name=f"SMOKE Accounts {RUN}")
-    _d.add(_accK); _d.flush()
-    _flK = _FlK2(org_id=_starterK.org_id, name=f"SMOKE bill pay {RUN}",
-                 active=True, branch_id=None)
-    _d.add(_flK); _d.flush()
-    for _p in range(1, 6):
-        _stK = _FsK2(flow_id=_flK.id, position=_p, title=f"Pay step {_p}",
-                     priority=_PrK2.MEDIUM, tat_unit="days", tat_value=1,
-                     requires_attachment=False)
-        _stK.default_doer_id = _firstK.id   # staffed; 3, 4, 5 emptied below
-        _d.add(_stK)
-    _d.commit()
-    # Steps 3, 4 and 5 with nobody set is what the live run FMS-46 had, and
-    # it must no longer be possible to START one that way.
-    _flK3 = [s_ for s_ in _flK.steps if s_.position in (3, 4, 5)]
-    for s_ in _flK3:
-        s_.default_doer_id = None
-    _d.commit()
-    _refusedK = _fsK2.start_blockers(_d, _flK, _hoK.id)
-    check("a flow whose steps 3, 4 and 5 have no doer cannot be started",
-          any("step 3 (Pay step 3)" in b and "step 5 (Pay step 5)" in b
-              for b in _refusedK), _refusedK)
-    try:
-        _fsK2.start_flow(_d, _flK, "SMOKE refused", _starterK,
-                         branch_id=_hoK.id)
-        check("and start_flow itself refuses, not only the form", False)
-    except ValueError:
-        check("and start_flow itself refuses, not only the form", True)
-    # The live state is reached the way it happens in an office: started
-    # while staffed, then the doer goes.
-    for s_ in _flK3:
-        s_.default_doer_id = _firstK.id
-    _d.commit()
-    _instK = _fsK2.start_flow(_d, _flK, f"SMOKE SHIV {RUN}", _starterK,
-                              branch_id=_hoK.id)
-    for s_ in _flK3:
-        s_.default_doer_id = None
-    for _oldK in _d.scalars(_selK2(_TaskM).where(
-            _TaskM.flow_instance_id == _instK.id)).all():
-        if _oldK.flow_step.position in (3, 4, 5):
-            _d.delete(_oldK)
-    _d.commit()
-    _fsK2.replan(_d, _instK, _starterK)
-    _d.commit()
-    _iK, _flKid, _hoKid, _accKname, _accKid = (
-        _instK.id, _flK.id, _hoK.id, _accK.name, _accK.id)
-    _starterKid = _starterK.id
-
-with _slK2() as _d:
-    _sK = _stepsK2(_d, _iK)
-    check("a step with no doer is parked on whoever started the run",
-          all(_sK[p].doer_id == _starterKid for p in (3, 4, 5)))
-    check("and flagged as parked, every one",
-          all(_sK[p].stand_in for p in (3, 4, 5))
-          and not _sK[1].stand_in and not _sK[2].stand_in)
-    check("the task says what would move it",
-          "moves to them by itself" in (_sK[3].details or ""),
-          (_sK[3].details or "")[-120:])
-    # The run reaches step 3 with still nobody set: it opens, parked.
-    for _p in (1, 2):
-        _tK = _stepsK2(_d, _iK)[_p]
-        _tK.status = _TsK2.COMPLETED; _tK.closed_at = _ckK2.now(); _d.flush()
-        _fsK2.advance_flow(_d, _tK); _d.commit()
-    _sK = _stepsK2(_d, _iK)
-    check("when the run reaches it, it opens — still parked, still flagged",
-          not _sK[3].flow_waiting and _sK[3].stand_in
-          and _sK[3].doer_id == _starterKid)
-    _sK[3].due_at = _ckK2.now() - _tdK2(days=6)
-    _d.commit()
-    _t3K = _sK[3].id
-
-# The page says so at the top, in terms of this run.
-_pgK = admin.get(f"/tasks/{_t3K}").text
-check("the task's own page says it is parked, and with whom",
-      "Parked with" in _pgK and "not meant for" in _pgK)
-check("and what would move it", "set who does this one" in " ".join(_pgK.split()))
-
-# The flow is corrected THROUGH THE PAGE, the way it was on the live site.
-with _slK2() as _d:
-    for _stK in _d.scalars(_selK2(_FsK2).where(_FsK2.flow_id == _flKid)).all():
-        if _stK.position >= 3:
-            _stK.doer_dept = _accKname
-    _d.commit()
-    _fsK2.catch_up_all(_d)
-    _sK = _stepsK2(_d, _iK)
-    check("a position nobody holds leaves it parked — there is still nobody",
-          _sK[3].doer_id == _starterKid and _sK[3].stand_in)
-_pgK = " ".join(admin.get(f"/tasks/{_t3K}").text.split())
-check("the page now names the position and the company that is short",
-      _accKname in _pgK and f"SMOKE HO {RUN}" in _pgK and "Setup → Users" in _pgK)
-
-# Somebody is put in Accounts at that company — through the Users page.
-_newK = admin.post("/admin/users", data={
-    "name": f"SMOKE Accountant {RUN}", "email": f"acct.{RUN}@gcs.local",
-    "password": "gcs12345", "role": "doer", "branch_id": str(_hoKid),
-    "department_id": str(_accKid), "phone": ""})
-with _slK2() as _d:
-    _ravK = _d.scalar(_selK2(_UsK2).where(_UsK2.email == f"acct.{RUN}@gcs.local"))
-    check("the accountant was saved", _ravK is not None, _newK.status_code)
-    _sK = _stepsK2(_d, _iK)
-    check("saving the person moves the live step to them at once",
-          _ravK is not None and _sK[3].doer_id == _ravK.id,
-          _sK[3].doer.name)
-    check("and the steps still to come",
-          _ravK is not None and all(_sK[p].doer_id == _ravK.id for p in (4, 5)),
-          [_sK[p].doer.name for p in (4, 5)])
-    check("none of them is called a stand-in any more",
-          not any(_sK[p].stand_in for p in (3, 4, 5)))
-    check("the parked sentence is taken back off the task",
-          not any(m in (_sK[3].details or "")
-                  for m in ("Planned provisionally", "Stand-in")),
-          (_sK[3].details or "")[-80:])
-    check("the live one is not handed over already six days late",
-          not _sK[3].is_overdue and _sK[3].due_at > _ckK2.now())
-    check("but where it came from stays written on it",
-          any("Moved here from" in (c.body or "") for c in _sK[3].comments))
-    check("and the run still has one task per step — nothing doubled",
-          len(_sK) == 5 and len(_d.scalars(_selK2(_TkK2).where(
-              _TkK2.flow_instance_id == _iK,
-              _TkK2.status != _TsK2.CANCELLED)).all()) == 5)
-check("the task's page stops saying it is parked",
-      "Parked with" not in admin.get(f"/tasks/{_t3K}").text)
-
-# What must NOT be moved. A stand-in who has started the work has the work.
-with _slK2() as _d:
-    _fl2K = _FlK2(org_id=_starterKid and _d.get(_UsK2, _starterKid).org_id,
-                  name=f"SMOKE bill pay B {RUN}", active=True, branch_id=None)
-    _d.add(_fl2K); _d.flush()
-    for _p in range(1, 4):
-        _d.add(_FsK2(flow_id=_fl2K.id, position=_p, title=f"B step {_p}",
-                     priority=_PrK2.MEDIUM, tat_unit="days", tat_value=1,
-                     requires_attachment=False,
-                     default_doer_id=_firstK.id))
-    _d.commit()
-    _i2K = _fsK2.start_flow(_d, _fl2K, f"SMOKE B {RUN}",
-                            _d.get(_UsK2, _starterKid), branch_id=_hoKid).id
-    _d.commit()
-    # A run that is parked on its starter, reached as it is in an office:
-    # started while staffed, then the flow loses its doers. (It cannot be
-    # STARTED with nobody on any step any more.)
-    for _stB in _d.scalars(_selK2(_FsK2).where(
-            _FsK2.flow_id == _fl2K.id)).all():
-        _stB.default_doer_id = None
-    for _tB in _d.scalars(_selK2(_TkK2).where(
-            _TkK2.flow_instance_id == _i2K)).all():
-        _tB.doer_id = _starterKid
-        _tB.stand_in = True
-        _tB.details = ((_tB.details or "") + "\n\n" +
-                       _fsK2._stand_in_note(_tB.flow_step, _tB.flow_waiting))
-    _d.commit()
-    _sB = _stepsK2(_d, _i2K)
-    # The starter writes on step 1; a manager hands step 2 to somebody.
-    _d.add(_TcK2(task_id=_sB[1].id, author_id=_starterKid,
-                 body="Called the vendor, cheque being prepared"))
-    _d.commit()
-    _t2B = _sB[2].id
-admin.post(f"/tasks/{_t2B}/edit", data={
-    "title": "B step 2 — handed over", "details": "", "doer_id": str(_firstK.id),
-    "priority": "medium", "due_at": ""})
-with _slK2() as _d:
-    for _stK in _d.scalars(_selK2(_FsK2).where(_FsK2.flow_id == _fl2K.id)).all():
-        _stK.doer_dept = _accKname
-    _d.commit()
-    _fsK2.settle_all(_d)
-    _sB = _stepsK2(_d, _i2K)
-    check("a parked task the stand-in has written on stays with them",
-          _sB[1].doer_id == _starterKid, _sB[1].doer.name)
-    check("one a manager gave to somebody by hand is not moved again",
-          _sB[2].doer_id == _firstK.id, _sB[2].doer.name)
-    check("and one nobody has touched does move",
-          _sB[3].doer_id == _ravK.id, _sB[3].doer.name)
-
-# Tasks parked BEFORE there was a flag carry only the old sentence. The
-# migrator finds them by it, or they would sit where they are for ever.
-import sqlalchemy as _saK2
-from app import migrate as _migK2
-_engK2 = _saK2.create_engine("sqlite://")
-with _engK2.begin() as _c:
-    _c.execute(_saK2.text(
-        "CREATE TABLE tasks (id INTEGER PRIMARY KEY, flow_instance_id INTEGER,"
-        " status VARCHAR, submitted_at DATETIME, closed_at DATETIME,"
-        " details TEXT, stand_in BOOLEAN DEFAULT 0)"))
-    _c.execute(_saK2.text(
-        "CREATE TABLE task_comments (id INTEGER PRIMARY KEY, task_id INTEGER,"
-        " body TEXT)"))
-    for _id, _inst, _st, _sub, _det in (
-        (1, 46, "IN_PROGRESS", None,
-         "Issue the cheque\n\n— Planned provisionally: the flow does not say "
-         "who does this step, so it is held against whoever started the run"),
-        (2, 46, "COMPLETED", None, "— Planned provisionally: done already"),
-        (3, 46, "IN_PROGRESS", "2026-11-10", "— Planned provisionally: handed in"),
-        (4, 46, "IN_PROGRESS", None, "An ordinary step"),
-        (5, None, "PENDING", None, "— Planned provisionally: not an FMS task"),
-        (6, 47, "PENDING", None, "Said in a comment instead"),
-    ):
-        _c.execute(_saK2.text(
-            "INSERT INTO tasks (id, flow_instance_id, status, submitted_at, details)"
-            " VALUES (:i, :f, :s, :u, :d)"),
-            {"i": _id, "f": _inst, "s": _st, "u": _sub, "d": _det})
-    _c.execute(_saK2.text(
-        "INSERT INTO task_comments (id, task_id, body) VALUES (1, 6, "
-        "'This step is meant for whoever is in Accounts at this company')"))
-with _engK2.begin() as _c:
-    _saidK2 = _migK2._flag_stand_ins(_c, {"tasks", "task_comments"})
-    _flaggedK2 = sorted(r[0] for r in _c.execute(_saK2.text(
-        "SELECT id FROM tasks WHERE stand_in = 1")).all())
-check("old parked tasks are found by the sentence they carry",
-      _flaggedK2 == [1, 6], _flaggedK2)
-check("one already finished or handed in is left as the stand-in's own work",
-      2 not in _flaggedK2 and 3 not in _flaggedK2)
-check("and it says how many it found",
-      "parked on a stand-in" in " ".join(_saidK2), _saidK2)
-with _engK2.begin() as _c:
-    check("finding them twice finds nothing new",
-          _migK2._flag_stand_ins(_c, {"tasks", "task_comments"}) == [])
-_engK2.dispose()
-
 print("\n== one answer to 'is this late', everywhere it is asked ==")
 # Reported from the live site: the CMD board said 20 FMS overdue, and
 # clicking the 20 opened a list of 41. Neither figure was a lie about
@@ -16683,24 +16385,6 @@ with _slZ() as _d:
     check("no step is still waiting its turn on a finished run",
           not _waitZ, _waitZ[:5])
 
-# And the stand-ins. After one tick, a step still parked must be parked
-# because there really is nobody — never because nobody went back for it.
-from app.services import flows as _fsZ
-with _slZ() as _d:
-    _fsZ.catch_up_all(_d)
-    _leftZ = []
-    for t in _d.scalars(_selZ(_TkZ).where(_TkZ.stand_in.is_(True))).all():
-        inst = _runsZ.get(t.flow_instance_id)
-        if inst is None or not _fsZ._still_parked(t):
-            continue
-        live = _d.get(_FiZ, t.flow_instance_id)
-        if live.completed_at or live.cancelled_at or live.held_at:
-            continue
-        if t.flow_step and _fsZ.step_people(_d, live, t.flow_step):
-            _leftZ.append((t.id, t.doer.name))
-    check("no step is left parked on a stand-in while somebody could take it",
-          not _leftZ, _leftZ[:5])
-
 # One rule, four copies. They agree today; the day one of them is edited
 # on its own, a task is open on one screen and finished on another, and
 # that is exactly how the last two bugs started.
@@ -16713,32 +16397,6 @@ check("the four definitions of 'still open' have not drifted apart",
 check("and so do the two definitions of 'finished'",
       _tkR.FINISHED_STATES == _rpR.FINISHED_STATES,
       [_tkR.FINISHED_STATES, _rpR.FINISHED_STATES])
-
-
-
-print("\n== a crash says what it was ==")
-# "Internal Server Error" on a white page sent everybody to a server log
-# they cannot open. The page now carries the one line that names the fault.
-from app.services import flows as _fsCr
-_crClient = TestClient(app, follow_redirects=True, raise_server_exceptions=False)
-_crClient.post("/login", data={"email": "mis@gcs.local", "password": "gcs1234"})
-_realCr = _fsCr.start_blockers
-def _boomCr(*a, **k):
-    raise RuntimeError("SMOKE boom postgresql://user:secret@host/db tail")
-_fsCr.start_blockers = _boomCr
-try:
-    with _slK() as _d:
-        _anyFlowCr = _d.scalar(_spK(_FlJ).where(_FlJ.active.is_(True)))
-    _rCr = _crClient.post(f"/flows/{_anyFlowCr.id}/start", data={})
-finally:
-    _fsCr.start_blockers = _realCr
-check("a crash is still a 500", _rCr.status_code == 500, _rCr.status_code)
-check("but the page names the fault instead of 'Internal Server Error'",
-      "RuntimeError: SMOKE boom" in _rCr.text
-      and "Something went wrong" in _rCr.text, _rCr.text[:120])
-check("and says where it happened", f"/flows/{_anyFlowCr.id}/start" in _rCr.text)
-check("without ever printing a connection string",
-      "secret" not in _rCr.text and "[address removed]" in _rCr.text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

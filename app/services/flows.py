@@ -232,23 +232,6 @@ def step_people(db: Session, inst: FlowInstance, step: FlowStep) -> list[User]:
     return [p for p in people if p is not None and p.active]
 
 
-def step_has_no_doer(db: Session, step: FlowStep) -> bool:
-    """True when the flow itself names nobody usable for this step.
-
-    Not about who is free today, which varies by company and is checked
-    separately: this is the flow's own definition being blank, or naming
-    only people who have since left. A person question counts as an
-    answer, because the start form supplies it.
-    """
-    if step.doer_field or step.doer_dept:
-        return False
-    for i in step.doer_ids:
-        p = db.get(User, i)
-        if p is not None and p.active:
-            return False
-    return True
-
-
 def missing_positions(db: Session, flow: Flow, branch_id: int | None) -> list[str]:
     """Positions this flow needs that the chosen company has nobody in.
 
@@ -303,22 +286,6 @@ def start_blockers(db: Session, flow: Flow, branch_id: int | None) -> list[str]:
                 "step one person by name, or leave one person in that "
                 "department at this company.")
 
-    # A step with NO doer at all — no name, no position, no question to
-    # answer — used to be parked on whoever started the run, and the task
-    # then read as theirs: overdue, chased, scored. That is how an
-    # accountant's "issue the cheque" step ended up on Kiran Sandhu, who is
-    # not in Accounts. The position check above cannot see it, because there
-    # is no position to be missing. Refused here, the same way, so the gap is
-    # fixed in the flow once instead of being paid for by whoever clicks Start.
-    unset = [s for s in flow.steps if step_has_no_doer(db, s)]
-    if unset:
-        bad.append(
-            "These steps have nobody set to do them: "
-            + "; ".join(f"step {s.position} ({s.title})" for s in unset)
-            + ". Open the flow, choose Edit steps & questions, and give each "
-            "one a person or a position. Until then the work would land on "
-            "whoever pressed Start, who may have nothing to do with it.")
-
     gaps = missing_positions(db, flow, branch_id)
     if gaps:
         bad.append(
@@ -366,184 +333,6 @@ def _deadline_base(db: Session, inst: FlowInstance, step: FlowStep,
     # The most recent run of it, so a rework loop measures from the latest
     # pass rather than from a date two rounds old.
     return max(t.due_at for t in earlier)
-
-
-# ------------------------------------------------------------ stand-ins ---
-# A step with nobody to go to still has to go somewhere, so it is parked
-# on whoever is in front of it. That part always worked. What did not is
-# the other half: the day the flow is given a doer, or somebody joins
-# Accounts, the parked task has to MOVE — and nothing moved it. The note
-# on the task promised "the plan follows next time this run moves", and
-# no code anywhere kept that promise, so an Accounts step sat with the
-# person who started the run for as long as the run lasted.
-#
-# Two markers, because the sentence was written two ways before there
-# was a flag. Both are taken off a task when it is handed over.
-_NOTES = ("— Planned provisionally:", "— Stand-in:")
-_SAID = "This step is meant for whoever is in"
-
-
-def _stand_in_note(step: FlowStep, waiting: bool) -> str:
-    """Why this task is with somebody it is not meant for, and the cure."""
-    lead = _NOTES[0] if waiting else _NOTES[1]
-    if step.doer_dept:
-        return (f"{lead} this step belongs to whoever is in "
-                f"{step.doer_dept} at this run's company, and nobody is. "
-                "It is with whoever started the run until somebody is. Add "
-                "the person under Setup → Users, with that company and "
-                "department, and this task moves to them by itself.")
-    return (f"{lead} the flow does not say who does this step, so it is "
-            "with whoever started the run until it does. Set the doer "
-            "under Edit steps & questions and this task moves to them by "
-            "itself.")
-
-
-def _without_note(details: str | None) -> str | None:
-    """A task's details with the stand-in sentence taken back off."""
-    text = details or ""
-    cut = min((text.find(m) for m in _NOTES if m in text), default=-1)
-    if cut < 0:
-        return details
-    return text[:cut].rstrip() or None
-
-
-def _still_parked(task: Task) -> bool:
-    """Is this stand-in task still exactly as it was parked?
-
-    Narrower than "open". If the stand-in has handed it in, written on
-    it or attached proof, they have done the work and it is theirs — a
-    task is never taken off somebody who has started it. The only
-    comment that does not count is the software's own note saying why
-    the task was parked, which for a few days was written as a comment.
-    """
-    if not task.stand_in:
-        return False
-    if task.status not in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
-        return False
-    if task.submitted_at or task.closed_at or task.completion_note:
-        return False
-    if task.attachments:
-        return False
-    return all((c.body or "").startswith(_SAID) for c in task.comments)
-
-
-def _hand_over(db: Session, inst: FlowInstance, step: FlowStep, task: Task,
-               person: User, assigner: User) -> None:
-    """Give a parked task to the person it was always meant for."""
-    before = task.doer
-    was_due = task.due_at
-    task.doer_id = person.id
-    task.branch_id = person.branch_id or task.branch_id
-    task.stand_in = False
-    task.details = _without_note(task.details)
-    for c in list(task.comments):
-        if (c.body or "").startswith(_SAID):
-            db.delete(c)
-    if task.flow_waiting:
-        return                      # still only planned: nothing to announce
-    # Live work. The time allowed starts again today: the person has only
-    # just been given it, and handing somebody a task that is already six
-    # days late for work they never had is how a score stops being
-    # believed. What it was, and who had it, stays written on the task.
-    task.due_at = _planned_due(db, inst, step, person, clock.now())
-    db.add(TaskComment(
-        task_id=task.id, author_id=assigner.id,
-        body=(f"Moved here from {before.name if before else 'a stand-in'} "
-              f"on {clock.today():%d/%m/%Y}. When the run reached this "
-              "step there was nobody to give it to, so it was parked. It "
-              f"had been due {was_due:%d/%m/%Y}; the time allowed is "
-              "counted again from today, because you have only just been "
-              "given it.")))
-    notify.queue(
-        db, person, "flow_step_ready", task,
-        title=step.title, flow=inst.flow.name, reference=inst.reference,
-        due=task.due_at.strftime("%d/%m/%Y %I:%M %p"))
-
-
-def settle_stand_ins(db: Session, inst: FlowInstance,
-                     assigner: User | None = None) -> int:
-    """Move every parked step of this run that now has somebody to go to.
-
-    Asked on every tick, when a flow is edited and when a person is
-    saved — the three moments "is there somebody now?" can change its
-    answer. Planned steps and live ones alike: a step that opened while
-    there was still nobody is the worst case, not an exception to it.
-
-    Returns how many tasks were changed.
-    """
-    if inst.completed_at or inst.cancelled_at:
-        return 0
-    rows = _run_tasks(db, inst)
-    parked = [t for t in rows if _still_parked(t)]
-    if not parked:
-        return 0
-    assigner = assigner or inst.started_by
-    changed = 0
-    for step_id in {t.flow_step_id for t in parked}:
-        tasks = [t for t in parked if t.flow_step_id == step_id]
-        step = tasks[0].flow_step
-        if step is None:
-            continue
-        people = step_people(db, inst, step)
-        if not people:
-            continue                          # still nobody: it stays parked
-        if step.is_decision:
-            people = people[:1]
-        wanted = {p.id: p for p in people}
-
-        # A stand-in who turns out to be the right person keeps the task;
-        # it just stops being called a stand-in.
-        loose = []
-        for t in tasks:
-            if t.doer_id in wanted:
-                t.stand_in = False
-                t.details = _without_note(t.details)
-                changed += 1
-            else:
-                loose.append(t)
-        have = {t.doer_id for t in rows
-                if t.flow_step_id == step_id and t not in loose
-                and t.status in _LIVE_TASK_STATES}
-        need = [p for p in people if p.id not in have]
-
-        for t, person in zip(loose, need):
-            _hand_over(db, inst, step, t, person, assigner)
-            changed += 1
-        # More parked rows than people who still need one: the people
-        # this step is for already have theirs. Parked, not deleted.
-        for t in loose[len(need):]:
-            t.status = TaskStatus.CANCELLED
-            t.stand_in = False
-            changed += 1
-        # And more people than rows: two accountants, one parked task.
-        for person in need[len(loose):]:
-            twin = _spawn_step_task(db, inst, step, person, assigner,
-                                    waiting=tasks[0].flow_waiting)
-            if tasks[0].flow_waiting:
-                twin.due_at = tasks[0].due_at
-            changed += 1
-    if changed:
-        db.flush()
-    return changed
-
-
-def settle_all(db: Session, org_id: int | None = None) -> int:
-    """Every run with something parked. One query finds them."""
-    q = (select(Task.flow_instance_id)
-         .where(Task.stand_in.is_(True),
-                Task.flow_instance_id.isnot(None),
-                Task.status.in_((TaskStatus.PENDING, TaskStatus.IN_PROGRESS)))
-         .distinct())
-    if org_id:
-        q = q.where(Task.org_id == org_id)
-    changed = 0
-    for inst_id in db.scalars(q).all():
-        inst = db.get(FlowInstance, inst_id)
-        if inst is not None:
-            changed += settle_stand_ins(db, inst)
-    if changed:
-        db.commit()
-    return changed
 
 
 def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
@@ -599,8 +388,14 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
 
     details = step.instructions
     if provisional:
-        details = ((details + "\n\n") if details else "") + _stand_in_note(
-            step, waiting)
+        who = (f"nobody is in {step.doer_dept} at this run's company"
+               if step.doer_dept
+               else "the flow does not say who does this step")
+        details = ((details + "\n\n") if details else "") + (
+            f"— Planned provisionally: {who}, so it is held against "
+            "whoever started the run until somebody is set. Fix it under "
+            "Edit steps & questions and the plan follows next time this "
+            "run moves.")
 
     task = Task(
         org_id=inst.org_id,
@@ -618,7 +413,6 @@ def _spawn_step_task(db: Session, inst: FlowInstance, step: FlowStep,
         requires_audit=step.requires_audit,
         requires_attachment=step.requires_attachment,
         flow_waiting=waiting,
-        stand_in=provisional,
     )
     db.add(task)
     db.flush()
@@ -855,10 +649,6 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
     it early, which they are allowed to do — so the caller can carry on
     past it rather than reopening work that is done.
     """
-    # Anything parked on a stand-in is moved BEFORE the step opens, so a
-    # step planned while the flow named nobody opens for the person the
-    # flow names now, and not for whoever started the run.
-    settle_stand_ins(db, inst, assigner)
     mine = [t for t in _run_tasks(db, inst) if t.flow_step_id == step.id]
     live = [t for t in mine if t.status in _LIVE_TASK_STATES]
     if not live:
@@ -896,14 +686,19 @@ def _activate(db: Session, inst: FlowInstance, step: FlowStep,
             return _open_step(db, inst, step, fallback, assigner)
         if not held and stale:
             # Nobody is in it now. The work stays where it was planned
-            # rather than being moved for the sake of it — but it is
-            # parked there, flagged, and moves by itself the day
-            # somebody is put in the position.
+            # rather than being moved for the sake of it, but the person
+            # holding it is told, once.
+            said = f"meant for whoever is in {step.doer_dept}"
             for t in stale:
-                if not t.stand_in:
-                    t.stand_in = True
-                    t.details = ((_without_note(t.details) or "") + "\n\n"
-                                 + _stand_in_note(step, False)).strip()
+                if any(said in (c.body or "") for c in t.comments):
+                    continue
+                db.add(TaskComment(
+                    task_id=t.id, author_id=assigner.id,
+                    body=(f"This step is {said} at this company, and right "
+                          "now nobody is. It has stayed with you because "
+                          "that is who the run planned it for. Put somebody "
+                          f"in {step.doer_dept} under Setup → Users and "
+                          "later runs will go to them.")))
 
     first = None
     for t in live:
@@ -995,12 +790,9 @@ def catch_up(db: Session, inst: FlowInstance) -> bool:
         inst.current_position = nxt.position
         moved = True
 
-    # Parked steps first, then the plan. Every tick: somebody may have
-    # been put in Accounts, or the flow given a doer, since the last one.
-    settled = settle_stand_ins(db, inst, assigner)
     changed = replan(db, inst, assigner)
     db.flush()
-    return moved or changed > 0 or settled > 0
+    return moved or changed > 0
 
 
 def catch_up_all(db: Session, limit: int = 200) -> int:
@@ -1170,16 +962,26 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
         people = [db.get(User, override)]
     else:
         people = step_people(db, inst, step)
-    parked = False
+    handed_over = ""
     if not people:
-        # Nobody to give it to — no doer set in the flow, or a position
-        # nobody at this company holds. The work still has to go
-        # somewhere, and the person in front of it is a better answer
-        # than nowhere. But it is PARKED there, flagged and said on the
-        # task, so that it is found and moved the moment there is
-        # somebody: see settle_stand_ins.
+        # A step assigned to a position should never get here — the run was
+        # refused at the start if the company had nobody in it. If it does
+        # (somebody left, mid-run), the work still has to go somewhere, and
+        # the person in front of it is a better answer than nowhere.
+        #
+        # Said out loud on the task, though. Silently it reads as an
+        # Accounts step sitting with somebody who has never been in
+        # Accounts, and the person holding it has no way to know it was
+        # meant for somebody else — which is how work gets done by the
+        # wrong person for weeks and nobody can say why.
+        if step.doer_dept:
+            handed_over = (
+                f"This step is meant for whoever is in {step.doer_dept} at "
+                "this company, and right now nobody is. It has come to you "
+                "because you had the step before it. Put somebody in "
+                f"{step.doer_dept} under Setup → Users and later runs will "
+                "go to them.")
         people = [fallback]
-        parked = True
 
     # A decision step comes down to ONE person. Two people choosing two
     # different outcomes is a flow that has to go both ways at once, and
@@ -1203,8 +1005,11 @@ def _open_step(db: Session, inst: FlowInstance, step: FlowStep,
                   "people could choose two different outcomes.")))
         return made
 
-    made = [_spawn_step_task(db, inst, step, p, assigner, provisional=parked)
-            for p in people]
+    made = [_spawn_step_task(db, inst, step, p, assigner) for p in people]
+    if handed_over:
+        for t in made:
+            db.add(TaskComment(task_id=t.id, author_id=assigner.id,
+                               body=handed_over))
     return made[0]
 
 
