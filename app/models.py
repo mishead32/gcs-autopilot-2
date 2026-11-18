@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import enum
 import json
+import re
 from datetime import datetime, date
 
 from sqlalchemy import (
@@ -1147,6 +1148,59 @@ class FlowInstance(Base):
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     flow: Mapped[Flow] = relationship()
+    # The files answered on the start form, loaded in one extra query per
+    # page rather than one per run. Read-only: files are still added and
+    # removed through the task they were uploaded on.
+    start_files: Mapped[list["Attachment"]] = relationship(
+        primaryjoin="Attachment.flow_instance_id == FlowInstance.id",
+        foreign_keys="Attachment.flow_instance_id", viewonly=True,
+        order_by="Attachment.id", lazy="selectin")
+
+    @property
+    def start_details(self) -> list[dict]:
+        """Everything this run was started with, in the order the form asks.
+
+        [{label, value, files}] — one entry per question that has an answer
+        or a file. The same list feeds the FMS board, a doer's task rows and
+        the task page, so the three can never disagree about what a run was
+        started with. Questions nobody answered are left out here (the run
+        page lists them as blank, where completeness is the point); on a
+        crowded list a row of dashes is noise.
+        """
+        try:
+            answered = context_answers(json.loads(self.context or "{}"))
+        except (ValueError, TypeError):
+            answered = {}
+        if not isinstance(answered, dict):
+            answered = {}
+        files = list(self.start_files or [])
+        out, seen, used = [], set(), set()
+        for field in (self.flow.start_form_fields if self.flow else []):
+            label = field["label"]
+            seen.add(label)
+            if field["type"] == "file":
+                got = [a for a in files if (a.start_field or "") == label]
+                used.update(a.id for a in got)
+                if got:
+                    out.append({"label": label, "value": "", "files": got})
+                continue
+            value = " ".join(str(answered.get(label, "") or "").split())
+            if field["type"] == "date" and re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}", value):
+                y, m, d = value.split("-")
+                value = f"{d}/{m}/{y}"
+            if value:
+                out.append({"label": label, "value": value, "files": []})
+        for label, value in answered.items():
+            if label not in seen:
+                value = " ".join(str(value or "").split())
+                if value:
+                    out.append({"label": f"{label} (no longer asked)",
+                                "value": value, "files": []})
+        rest = [a for a in files if a.id not in used]
+        if rest:
+            out.append({"label": "Attachments", "value": "", "files": rest})
+        return out
     branch: Mapped[Branch | None] = relationship()
     started_by: Mapped[User] = relationship(foreign_keys=[started_by_id])
     held_by: Mapped[User | None] = relationship(foreign_keys=[held_by_id])
@@ -1379,6 +1433,12 @@ class Task(Base):
         if self.flow_instance is not None and self.flow_instance.flow:
             return self.flow_instance.flow.name or self.source.value
         return self.source.value
+
+    @property
+    def run_info(self) -> list[dict]:
+        """The run's start-form answers and files, for any FMS task row."""
+        inst = self.flow_instance
+        return inst.start_details if inst is not None else []
 
     @property
     def run_about(self) -> str:
@@ -1727,7 +1787,11 @@ class Attachment(Base):
     # Used only when storage == "db": the file lives in the database itself.
     # That is how a free host with no permanent disk keeps attachments across
     # restarts without a separate storage account.
-    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Deferred: a list of FMS tasks now carries each run's start-form files,
+    # and loading every file's bytes to print a filename would turn one page
+    # into megabytes. The bytes are read only when somebody opens the file.
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True,
+                                               deferred=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
 
     task: Mapped[Task] = relationship(back_populates="attachments")

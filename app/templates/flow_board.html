@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_export.html" import excel_btn %}
+{% from "_runinfo.html" import run_info %}
 {% block title %}{{ flow.name }} — board · {{ APP_NAME }}{% endblock %}
 {% block content %}
 
@@ -110,7 +111,12 @@
    to the left edge. Without that pin, scrolling right leaves a field of
    timestamps with nothing saying which run they belong to. #}
 <div class="table-wrap fmsbwrap">
-<table class="fmsboard">
+{# An explicit width, because a fixed layout only honours the column
+     widths below when the table's own width is a number: left as "auto" the
+     browser squeezed the pinned Run column back to 190px however wide it was
+     asked to be, and the start-form details inside it wrapped a word a line.
+     330 for the Run column, then 120 + 120 + 132 for each step. #}
+<table class="fmsboard" style="width:{{ 330 + steps|length * 372 }}px">
   {# Widths said once, here, rather than left to the browser. A fixed
      layout reads them from the first row, and the first row is all
      colspans — so without this the three columns of a step get a third
@@ -156,6 +162,7 @@
     <td class="fmsb-pin">
       <a class="refid" href="/flows/instance/{{ i.id }}">{{ i.label }}</a>
       <div class="fmsb-what m" title="{{ i.reference }}">{{ i.reference }}</div>
+      {{ run_info(i.start_details, true) }}
       <div class="m rowsub" {% if i.branch %}title="{{ i.branch.name }}"{% endif %}>
         <span class="chip run_{{ i.state|replace(' ','_') }}">{{ i.state }}</span>
         {% if i.branch %} {{ i.branch.name }}{% endif %}</div>

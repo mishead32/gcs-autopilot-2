@@ -1420,7 +1420,7 @@ table.fmsboard .fmsb-step .fmsb-avg{color:var(--brand);font-weight:600;
    the columns sliding under it show through. */
 table.fmsboard .fmsb-pin{position:sticky;left:0;z-index:4;
   background:var(--card);border-right:2px solid var(--line);
-  width:180px;white-space:normal}
+  width:320px;white-space:normal}
 table.fmsboard thead .fmsb-pin{background:#f8fafc;z-index:5}
 table.fmsboard tr.held .fmsb-pin{background:#fffdf5}
 table.fmsboard .fmsb-what{text-transform:none;letter-spacing:0;font-size:12px;
@@ -1436,7 +1436,7 @@ table.fmsboard .fmsb-gap .fmsb-doer{font-weight:400;text-transform:none;
 table.fmsboard .fmsb-gap.st-late{color:var(--warn)}
 table.fmsboard .fmsb-gap.st-overdue{color:var(--bad)}
 table.fmsboard .fmsb-gap.st-done{color:var(--ok)}
-col.fmsb-c-pin{width:190px}
+col.fmsb-c-pin{width:330px}
 col.fmsb-c-when{width:120px}
 col.fmsb-c-gap{width:132px}
 
@@ -1656,6 +1656,20 @@ button.stale-note:hover{transform:translateY(-1px);
 .appr-break{margin-top:14px}
 .appr-break summary{cursor:pointer}
 
-/* What an FMS run is about, under the step's title on every task row. */
-.rowabout{margin-top:3px;font-size:12.5px;line-height:1.4;color:var(--ink,#1f2937);
-  max-width:60ch;white-space:normal;overflow-wrap:anywhere}
+
+/* What an FMS run was started with: question and answer pairs, files as
+   links. Used on the board, on a doer's task rows and on the task page. */
+dl.runinfo{margin:6px 0 4px;padding:6px 9px;background:#f8fafc;
+  border:1px solid var(--line);border-left:3px solid var(--brand,#144a7c);
+  border-radius:6px;font-size:12.5px;line-height:1.45;max-width:70ch}
+dl.runinfo .ri{display:flex;gap:6px;padding:1px 0}
+dl.runinfo dt{flex:0 0 auto;max-width:42%;color:var(--muted);font-weight:600;
+  text-transform:none;letter-spacing:0}
+dl.runinfo dt::after{content:":"}
+dl.runinfo dd{margin:0;color:var(--ink);overflow-wrap:anywhere;min-width:0}
+dl.runinfo .rifile{display:inline-block;margin:0 8px 0 0;font-weight:600;
+  overflow-wrap:anywhere}
+dl.runinfo.compact{font-size:11.5px;padding:4px 7px;white-space:normal}
+table.fmsboard .fmsb-pin dl.runinfo{max-width:none}
+h3.runinfo-h{margin:14px 0 4px;font-size:13px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em}

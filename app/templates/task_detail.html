@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_runinfo.html" import run_info %}
 {% from "_uploader.html" import uploader, attachment_list, file_grid %}
 {% block content %}
 {# Back to the list they came from, with its filters still on it — not to
@@ -13,7 +14,8 @@
   of {{ task.ref }}{% if task.flow_instance %} —
   <a href="/flows/instance/{{ task.flow_instance_id }}">{{ task.flow_instance.reference }}</a>{% endif %}</p>
 {% endif %}
-{% if task.run_about %}<p class="rowabout" style="margin:0 0 10px">{{ task.run_about }}</p>{% endif %}
+{% if task.run_info %}<h3 class="runinfo-h">What this run was started with</h3>
+{{ run_info(task.run_info) }}{% endif %}
 <p class="sub">
   <span class="chip {{ task.priority.value }}"
         title="Counts as {{ task.weight }} tasks in the score">{{ task.priority.value }} {{ task.weight_label }}</span>

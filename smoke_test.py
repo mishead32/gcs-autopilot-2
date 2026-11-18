@@ -16453,5 +16453,70 @@ with _slAb() as _d:
           _abT.run_about == "")
     _d.rollback()
 
+print("\n== every start-form answer and file shows on the board, the rows and the task ==")
+_riName = f"SMOKE runinfo {RUN}"
+admin.post("/flows/new", data={
+    "name": _riName, "description": "", "branch_id": "",
+    "sf_label": ["Item name", "Quantity", "Needed by", "Quote", "Entered by"],
+    "sf_type": ["text", "text", "date", "file", "text"],
+    "sf_required": ["1", "1", "0", "0", "1"], "sf_options": ["", "", "", "", ""],
+    "step_title": ["Quotations", "Approval"], "step_doer": ["6", "6"],
+    "step_doers": ["", ""], "step_tat_unit": ["hours", "hours"],
+    "step_tat": ["24", "24"], "step_priority": ["medium", "medium"],
+    "step_instructions": ["", ""], "step_fields": ["", ""],
+    "step_audit": ["0", "0"], "step_proof": ["0", "0"],
+    "step_decision": ["0", "0"], "step_yes": ["", ""], "step_next": ["0", "0"],
+    "step_no": ["", ""], "step_fail": ["", ""], "step_due_from": ["", ""]})
+with _slAb() as _d:
+    _riF = _d.scalar(_selAb(_FlAb).where(_FlAb.name == _riName))
+    _riFid = _riF.id
+    _riKeys = {f["label"]: f["key"] for f in _riF.start_form_fields}
+_riItem = ("Decorative Wooden Wall Panelling and Backlit Display Shelves -- "
+           "check with Mr.Arun for Operational/Technical requirement")
+_riR = admin.post(f"/flows/{_riFid}/start",
+    data={_riKeys["Item name"]: _riItem, _riKeys["Quantity"]: "as required",
+          _riKeys["Needed by"]: "2026-12-05", _riKeys["Entered by"]: "EA"},
+    files={_riKeys["Quote"]: ("PURCHASE REQUIREMENTS.png",
+                              io.BytesIO(TINY_PNG), "image/png")})
+check("the run with a file starts", _riR.status_code == 200,
+      (_riR.status_code, re.findall(r"class=.sub[^>]*>([^<]{20,300})", _riR.text)[:2]))
+with _slAb() as _d:
+    _riI = _d.scalar(_selAb(_FiAb).where(_FiAb.flow_id == _riFid))
+    _riIid = _riI.id
+    _riDet = _riI.start_details
+    _riTids = [t.id for t in _d.scalars(_selAb(_TkAb).where(
+        _TkAb.flow_instance_id == _riIid)).all()]
+    check("details come in the order the form asks them",
+          [e["label"] for e in _riDet] ==
+          ["Item name", "Quantity", "Needed by", "Quote", "Entered by"],
+          [e["label"] for e in _riDet])
+    check("the date reads dd/mm/yyyy",
+          [e["value"] for e in _riDet if e["label"] == "Needed by"] == ["05/12/2026"])
+    check("the file is listed against its own question",
+          [len(e["files"]) for e in _riDet if e["label"] == "Quote"] == [1])
+_riBoard = admin.get(f"/flows/{_riFid}/board").text
+for _what in (_riItem, "as required", "05/12/2026", "Entered by", "EA",
+              "PURCHASE REQUIREMENTS.png"):
+    check(f"the board shows: {_what[:34]}", _what in _riBoard)
+check("and the file on the board is a working link",
+      "/attachments/" in _riBoard and "/view" in _riBoard)
+_riRows = login("amit@gcs.local").get("/tasks?scope=mine&status=open").text
+for _what in (_riItem, "05/12/2026", "PURCHASE REQUIREMENTS.png"):
+    check(f"the doer's row shows: {_what[:34]}", _what in _riRows)
+_riPage = admin.get(f"/tasks/{_riTids[0]}").text
+check("the task page shows the answers and the file",
+      _riItem in _riPage and "PURCHASE REQUIREMENTS.png" in _riPage
+      and "What this run was started with" in _riPage)
+check("the second step's task shows them too",
+      _riItem in admin.get(f"/tasks/{_riTids[-1]}").text)
+# The file opens, for a person on a later step, not only its uploader.
+_riAtt = re.findall(r'href="/attachments/(\d+)', _riRows)
+check("the doer can open the start-form file from their list",
+      bool(_riAtt) and login("amit@gcs.local").get(
+          f"/attachments/{_riAtt[0]}").status_code == 200)
+# A run with no start form at all must not break any of the three pages.
+check("a run with nothing to show leaves the board standing",
+      admin.get("/flows").status_code == 200)
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

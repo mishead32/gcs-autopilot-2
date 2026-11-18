@@ -1,0 +1,28 @@
+{# Everything an FMS run was started with: each answer beside its question,
+   each file as a link. One macro for the board, a doer's task rows and the
+   task page, so what one person sees is what everybody sees.
+   Entries come from FlowInstance.start_details. #}
+{% macro run_info(entries, compact=false) %}
+{% if entries %}
+<dl class="runinfo{{ ' compact' if compact }}">
+  {% for e in entries %}
+  <div class="ri">
+    <dt>{{ e.label }}</dt>
+    <dd>{% if e.value %}{{ e.value }}{% endif %}
+      {% for a in e.files %}
+      {% if a.is_link %}
+      <a class="rifile" href="/attachments/{{ a.id }}" target="_blank"
+         rel="noopener noreferrer" title="Opens the document where it is kept">&#128279; Open the document</a>
+      {% elif a.is_image %}
+      <a class="rifile" href="/attachments/{{ a.id }}/view" target="_blank"
+         rel="noopener" title="{{ a.filename }}">&#128247; {{ a.filename }}</a>
+      {% else %}
+      <a class="rifile" href="/attachments/{{ a.id }}"
+         title="{{ a.filename }}">&#128206; {{ a.filename }}</a>
+      {% endif %}
+      {% endfor %}</dd>
+  </div>
+  {% endfor %}
+</dl>
+{% endif %}
+{% endmacro %}
