@@ -224,8 +224,12 @@ def build_filters(db: Session, user: User, path: str, date_from: str, date_to: s
 
     doers = scoring.selectable_doers(db, user, branch_id)
     doer_id = int(doer) if doer.strip().isdigit() else None
-    if doer_id is not None and doer_id not in {d.id for d in doers}:
-        doer_id = None                      # not in the chosen branch
+    # Checked against everybody the viewer may see, not only the chosen
+    # company's list: a person's score does not depend on the company
+    # picked beside it, so picking both must not quietly drop the person.
+    if doer_id is not None and doer_id not in {
+            d.id for d in scoring.selectable_doers(db, user, None)}:
+        doer_id = None
 
     start, end = _day(date_from), _day(date_to)
     if start and end and start > end:
@@ -790,9 +794,10 @@ def score_report(request: Request, date_from: str = "", date_to: str = "",
 
     # Picking a branch narrows the employee list to that branch's people —
     # both in the dropdown (handled in build_filters) and in the table below.
+    # The company filter was applied inside scoreboard(), which lists the
+    # right people with their whole score. Filtering again here by home
+    # company would drop anybody who covers it without being based there.
     people = board["people"]
-    if f.branch_id:
-        people = [r for r in people if r["user"].branch_id == f.branch_id]
 
     scores = [r["card"].score for r in people]
     avg = round(sum(scores) / len(scores), 1) if scores else 0.0

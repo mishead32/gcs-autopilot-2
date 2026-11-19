@@ -191,8 +191,11 @@ def _resolve_filters(db: Session, user: User, branch: str, doer: str):
 
     doers = scoring.selectable_doers(db, user, branch_id)
     doer_id = int(doer) if doer else None
-    if doer_id and doer_id not in {d.id for d in doers}:
-        doer_id = None   # doer isn't in the selected company — drop the filter
+    # Against everybody visible, not just the chosen company: a person's
+    # score is the same whichever company is picked beside it.
+    if doer_id and doer_id not in {
+            d.id for d in scoring.selectable_doers(db, user, None)}:
+        doer_id = None
 
     return branches, branch_id, doers, doer_id
 

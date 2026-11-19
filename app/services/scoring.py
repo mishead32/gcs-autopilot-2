@@ -527,38 +527,65 @@ def _aggregate(planned: list[Task], closed: list[Task],
 # ---------------------------------------------------------------- board ----
 def scoreboard(db: Session, org_id: int, start: datetime, end: datetime,
                branch_id: int | None = None, doer_id: int | None = None) -> dict:
-    """Everything the Performance page needs, in one pass over the tasks."""
-    q = select(Task).where(Task.org_id == org_id)
-    if branch_id:
-        q = q.where(Task.branch_id == branch_id)
-    if doer_id:
-        q = q.where(Task.doer_id == doer_id)
-    # Only the rows the window could possibly keep.
-    #
-    # This used to read EVERY task the organisation had ever had and sift
-    # them in Python — fine at a few hundred, and at ten thousand it is
-    # ten thousand objects built to produce one page of numbers, on a
-    # host with half a gigabyte of memory. The condition below is
-    # `window_tasks` own rule written in SQL, so the same rows arrive and
-    # the sifting underneath is unchanged; see the test that runs both
-    # ways and compares.
-    q = q.where(window_clause(start, end))
-    all_tasks = list(db.scalars(q).all())
+    """Everything the Performance page needs, in one pass over the tasks.
 
-    planned, closed = window_tasks(all_tasks, start, end)
+    A PERSON'S score is one number, whichever company is picked. The company
+    filter decides who is LISTED, never which of their tasks are counted:
+    somebody who works for Bodyzone and Spa Kora is scored on all of it, and
+    picking Spa Kora shows that same score rather than a second, smaller one
+    built from half their work. (It used to cut the tasks by company first,
+    so one employee had a different score on every filtered page and none of
+    them was the real one.)
 
+      no filter        everybody, every task
+      a company        the people who belong to it, cover it, or did work
+                       for it in this window — each with ALL their work
+      a person         that person alone, ALL their work, in any company
+
+    The branch-wise table is the one place a split is the point: it shows
+    each company's own tasks, and for a chosen person it breaks that
+    person's work down by company so the pieces add up to the one score.
+    """
     users = {u.id: u for u in db.scalars(
         select(User).where(User.org_id == org_id)).all()}
     branches = {b.id: b for b in db.scalars(
         select(Branch).where(Branch.org_id == org_id)).all()}
 
+    base = select(Task).where(Task.org_id == org_id, window_clause(start, end))
+    if doer_id:
+        listed_ids = {doer_id}
+        q = base.where(Task.doer_id == doer_id)
+    elif branch_id:
+        belong = {uid for uid, u in users.items()
+                  if u.branch_id == branch_id or branch_id in u.extra_branch_ids}
+        worked = set(db.scalars(
+            select(Task.doer_id).where(
+                Task.org_id == org_id, Task.branch_id == branch_id,
+                window_clause(start, end)).distinct()).all())
+        listed_ids = belong | worked
+        q = base.where(Task.doer_id.in_(listed_ids)) if listed_ids else None
+    else:
+        listed_ids = None                    # everybody
+        q = base
+    all_tasks = list(db.scalars(q).all()) if q is not None else []
+
+    planned, closed = window_tasks(all_tasks, start, end)
+
     by_user_p, by_user_c, by_br_p, by_br_c = {}, {}, {}, {}
     for t in planned:
         by_user_p.setdefault(t.doer_id, []).append(t)
-        by_br_p.setdefault(t.branch_id, []).append(t)
     for t in closed:
         by_user_c.setdefault(t.doer_id, []).append(t)
-        by_br_c.setdefault(t.branch_id, []).append(t)
+    # The company table counts each company's OWN tasks. With a company
+    # picked and no person, that is the one company; with a person picked
+    # it is every company they worked for, so it reconciles with their score.
+    only_branch = branch_id if (branch_id and not doer_id) else None
+    for t in planned:
+        if only_branch is None or t.branch_id == only_branch:
+            by_br_p.setdefault(t.branch_id, []).append(t)
+    for t in closed:
+        if only_branch is None or t.branch_id == only_branch:
+            by_br_c.setdefault(t.branch_id, []).append(t)
 
     people = []
     for uid in set(by_user_p) | set(by_user_c):
@@ -621,7 +648,8 @@ def selectable_doers(db: Session, user: User, branch_id: int | None = None) -> l
     for p in people:
         if p.branch_id is not None and p.branch_id not in allowed:
             continue
-        if branch_id and p.branch_id != branch_id:
+        if branch_id and p.branch_id != branch_id \
+                and branch_id not in p.extra_branch_ids:
             continue
         out.append(p)
     return out

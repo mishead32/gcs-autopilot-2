@@ -16518,5 +16518,77 @@ check("the doer can open the start-form file from their list",
 check("a run with nothing to show leaves the board standing",
       admin.get("/flows").status_code == 200)
 
+print("\n== one person has one score, whichever company is picked ==")
+# Somebody who works for two companies used to be scored on only the picked
+# company's tasks, so the same person showed a different score on every
+# filtered page and none of them was the real one.
+from datetime import timedelta as _tdSc
+from app import clock as _ckSc
+from app.models import (Task as _TkSc, Branch as _BrSc, User as _UsSc,
+                        TaskStatus as _TsSc, TaskSource as _TsrSc,
+                        Priority as _PrSc)
+from app.services import scoring as _scSc
+from app.db import SessionLocal as _slSc
+from sqlalchemy import select as _selSc
+with _slSc() as _d:
+    _whoSc = _d.scalar(_selSc(_UsSc).where(_UsSc.email == "amit@gcs.local"))
+    _brsSc = _d.scalars(_selSc(_BrSc).where(
+        _BrSc.org_id == _whoSc.org_id).order_by(_BrSc.id)).all()
+    _brA, _brB = _brsSc[0], _brsSc[1]
+    _bossSc = _d.scalar(_selSc(_UsSc).where(_UsSc.email == "mis@gcs.local"))
+    _whoId, _aId, _bId = _whoSc.id, _brA.id, _brB.id
+    _addedSc = []
+    for _n, _br in ((1, _brA), (3, _brB)):
+        for _k in range(_n):
+            _t = _TkSc(org_id=_whoSc.org_id, title=f"SMOKE score {_br.id} {_k} {RUN}",
+                       assigner_id=_bossSc.id, doer_id=_whoSc.id,
+                       branch_id=_br.id, priority=_PrSc.HIGH,
+                       source=_TsrSc.DELEGATION, status=_TsSc.PENDING,
+                       due_at=_ckSc.now() - _tdSc(days=1))
+            _d.add(_t); _addedSc.append(_t)
+    _d.commit()
+    _winS = (_ckSc.now() - _tdSc(days=5), _ckSc.now() + _tdSc(days=1))
+    def _scoreOf(board, uid):
+        return [r["card"] for r in board["people"] if r["user"].id == uid]
+    _all = _scoreOf(_scSc.scoreboard(_d, _whoSc.org_id, *_winS), _whoId)
+    _inA = _scoreOf(_scSc.scoreboard(_d, _whoSc.org_id, *_winS, _aId, _whoId), _whoId)
+    _inB = _scoreOf(_scSc.scoreboard(_d, _whoSc.org_id, *_winS, _bId, _whoId), _whoId)
+    _lstA = _scoreOf(_scSc.scoreboard(_d, _whoSc.org_id, *_winS, _aId), _whoId)
+    _lstB = _scoreOf(_scSc.scoreboard(_d, _whoSc.org_id, *_winS, _bId), _whoId)
+    check("the person has a score at all", len(_all) == 1)
+    check("company + person gives the same score as no filter (company A)",
+          len(_inA) == 1 and _inA[0].score == _all[0].score
+          and _inA[0].planned == _all[0].planned, (_inA and _inA[0].score, _all[0].score))
+    check("and for company B too",
+          len(_inB) == 1 and _inB[0].score == _all[0].score
+          and _inB[0].planned == _all[0].planned)
+    check("it counts the work in BOTH companies",
+          _all[0].planned >= 4, _all[0].planned)
+    check("picking only a company lists the person with the same whole score",
+          [c.score for c in _lstA] == [_all[0].score]
+          or [c.score for c in _lstB] == [_all[0].score])
+    _brdSc = _scSc.scoreboard(_d, _whoSc.org_id, *_winS, _aId, _whoId)
+    check("the company table for a chosen person splits it by company",
+          len(_brdSc["branches"]) >= 2, len(_brdSc["branches"]))
+    check("and its pieces add up to the one score's task count",
+          sum(u["card"].planned for u in _brdSc["branches"]) == _all[0].planned,
+          [u["card"].planned for u in _brdSc["branches"]])
+    _onlyA = _scSc.scoreboard(_d, _whoSc.org_id, *_winS, _aId)
+    check("a company alone still counts only that company in its own table",
+          len(_onlyA["branches"]) == 1
+          and _onlyA["branches"][0]["branch"].id == _aId)
+_repSc = admin.get(f"/reports/score?branch={_aId}&doer={_whoId}"
+                   f"&date_from={(_ckSc.today()-_tdSc(days=5)).isoformat()}"
+                   f"&date_to={_ckSc.today().isoformat()}")
+check("the EM report accepts company and person together",
+      _repSc.status_code == 200 and "Amit" in _repSc.text, _repSc.status_code)
+_perfSc = admin.get(f"/stats?branch={_aId}&doer={_whoId}&days=5")
+check("so does the Performance page", _perfSc.status_code == 200
+      and "Amit" in _perfSc.text, _perfSc.status_code)
+with _slSc() as _d:
+    for _t in _addedSc:
+        _d.delete(_d.get(_TkSc, _t.id))
+    _d.commit()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
