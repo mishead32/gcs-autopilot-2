@@ -65,6 +65,11 @@
     <div class="l">False marking</div>
     <div class="m" style="margin-top:6px">{{ o.false_marks }} flagged by auditor</div>
   </div>
+  {% if o.init_live %}<div class="kpi {{ 'bad' if o.init_penalty < 0 else 'ok' }}">
+    <div class="n">{{ o.init_penalty }}</div>
+    <div class="l">Self-initiative</div>
+    <div class="m" style="margin-top:6px">−15 when none is filed in the dates</div>
+  </div>{% endif %}
   <div class="kpi total">
     <div class="n">{{ o.total_penalty }}</div>
     <div class="l">Total score</div>
@@ -94,6 +99,8 @@
         {% endfor %}
         <div class="ln"><span>False marking</span>
           <b class="v-false">{{ c.false_penalty }}</b></div>
+        {% if c.init_live %}<div class="ln"><span>Self-initiative</span>
+          <b class="v-init">{{ c.init_penalty }}</b></div>{% endif %}
       </div>
     </div>
   </div>
@@ -123,6 +130,7 @@
     <th colspan="3">Checklist</th>
     <th colspan="3">FMS</th>
     <th rowspan="2" class="pen">False<br>marking</th>
+    <th rowspan="2" class="pen">Self-<br>initiative</th>
     <th rowspan="2" class="pen">Total</th>
     <th rowspan="2">Net<br>score</th>
   </tr>
@@ -144,12 +152,13 @@
     <td class="pen sub">{{ s.subtotal }}</td>
     {% endfor %}
     <td class="pen">{{ c.false_penalty }} <span class="m">({{ c.false_marks }})</span></td>
+    <td class="pen">{{ c.init_penalty if c.init_live else '—' }}</td>
     <td class="pen tot">{{ c.total_penalty }}</td>
     <td><div class="inline"><div class="bar" style="width:56px"><i style="width:{{ c.score }}%"></i></div>
       <strong>{{ c.score }}</strong></div></td>
   </tr>
   {% else %}
-  <tr><td colspan="15" style="text-align:center;color:var(--muted)">Nothing planned in this window.</td></tr>
+  <tr><td colspan="16" style="text-align:center;color:var(--muted)">Nothing planned in this window.</td></tr>
   {% endfor %}
 </table></div>
 <p class="m" style="margin-top:6px">
@@ -222,6 +231,7 @@
             paint(card.querySelector('b[data-src="'+s.key+'"]'), s.subtotal);
           });
           paint(card.querySelector('.v-false'), p.false_penalty);
+          if (card.querySelector('.v-init')) paint(card.querySelector('.v-init'), p.init_penalty);
           var m = card.querySelector('.meter > i');
           if (m) m.style.width = p.score + '%';
           card.classList.remove('good','warn','bad');

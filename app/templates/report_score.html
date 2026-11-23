@@ -36,6 +36,7 @@
   </td>
   {% endfor %}
   <td class="{{ 'overdue' if card.false_penalty }}">{{ card.false_penalty }}</td>
+  <td class="{{ 'overdue' if card.init_penalty }}">{{ card.init_penalty if card.init_live else '—' }}</td>
   <td>{{ card.completion_rate }}%</td>
   <td>{{ card.on_time_rate }}%</td>
 </tr>
@@ -87,13 +88,13 @@
 <table class="scoretable">
   <tr><th>Branch</th><th>Score</th><th>Gap</th>
     {% for s in heads %}<th>{{ s.label }}</th>{% endfor %}
-    <th>False marking</th><th>Completed</th><th>On time</th></tr>
+    <th>False marking</th><th>Self-initiative</th><th>Completed</th><th>On time</th></tr>
   {% for r in units %}
   {{ score_row(r.branch.name if r.branch else 'Unassigned', '', r.card,
                f.url(view='person', branch=r.branch.id if r.branch else '')) }}
   {% endfor %}
   {% if not units %}
-  <tr><td colspan="{{ 6 + heads|length }}" class="m">No scored work in this range.</td></tr>
+  <tr><td colspan="{{ 7 + heads|length }}" class="m">No scored work in this range.</td></tr>
   {% endif %}
 </table>
 </div>
@@ -108,12 +109,12 @@
 <table class="scoretable">
   <tr><th>Employee</th><th>Score</th><th>Gap</th>
     {% for s in heads %}<th>{{ s.label }}</th>{% endfor %}
-    <th>False marking</th><th>Completed</th><th>On time</th></tr>
+    <th>False marking</th><th>Self-initiative</th><th>Completed</th><th>On time</th></tr>
   {% for r in people %}
   {{ score_row(r.user.name, r.user.branch.name if r.user.branch else 'No branch', r.card, who_id=r.user.id) }}
   {% endfor %}
   {% if not people %}
-  <tr><td colspan="{{ 6 + heads|length }}" class="m">No scored work in this range.</td></tr>
+  <tr><td colspan="{{ 7 + heads|length }}" class="m">No scored work in this range.</td></tr>
   {% endif %}
 </table>
 </div>

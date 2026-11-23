@@ -914,6 +914,8 @@ def _score_columns(board, who: str):
         ("Judged by hand", lambda r: r["card"].scored_by_hand),
         ("Gap", lambda r: r["card"].gap),
         ("False marking penalty", lambda r: r["card"].false_penalty),
+        ("Self-initiative penalty", lambda r: (r["card"].init_penalty
+                                              if r["card"].init_live else "")),
         ("Work completed %", lambda r: r["card"].completion_rate),
         ("On time %", lambda r: r["card"].on_time_rate),
     ]

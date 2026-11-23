@@ -179,6 +179,19 @@
     </div>
   </div>
 
+  {% if card.init_live %}
+  <div class="tile {{ 'zero' if card.init_penalty == 0 }}" style="--i:3">
+    <div class="tile-in">
+      <div class="cap-row"><span class="cap">Self-initiative</span></div>
+      <div class="big" id="initBig">{{ card.init_penalty }}</div>
+      <div class="rows">
+        <div><span>If none filed in these dates</span><b>−15</b></div>
+      </div>
+      <div class="foot">{{ 'Done — an initiative is filed in these dates' if card.init_penalty == 0 else 'Fill the Self-Initiative form with a date inside these dates to clear it' }}</div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="tile total" style="--i:4">
     <div class="tile-in">
       <div class="cap-row"><span class="cap">Total score</span>
@@ -188,8 +201,8 @@
         <div><span>Net out of 100</span><b id="netBig">{{ card.score }}</b></div>
         <div><span>On time</span><b>{{ card.on_time_rate }}%</b></div>
       </div>
-      <div class="foot">Delegation + Checklist + FMS + false marking,
-        each capped by your benchmark</div>
+      <div class="foot">Delegation + Checklist + FMS + false marking
+        + self-initiative</div>
     </div>
   </div>
 </div>
@@ -334,6 +347,7 @@
         });
         set('#fmBig', d.false_penalty);
         set('#fmCount', d.false_marks);
+        if (document.querySelector('#initBig')) set('#initBig', d.init_penalty);
         set('#totBig', d.total_penalty);
         set('#netBig', d.score);
         set('#scoreBig', d.score);

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Self-Initiative · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Self-Initiative</h1>
+    <div class="m">Read from the Leadership &amp; Self-Initiative form's response sheet.
+      Everyone loses <strong>15</strong> points in any period in which no initiative
+      is dated, unless one is filed. Nothing here writes to the sheet.</div></div>
+  {% if configured %}
+  <form method="post" action="/initiatives/refresh"><button class="btn">Read the sheet now</button></form>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  {% if not enabled %}<span class="overdue">No Google credential is set on the server.</span>
+  {% elif not configured %}No sheet connected yet — <strong>the −15 is not applied to anybody until it is.</strong>
+  {% elif org.init_error %}<span class="overdue">{{ org.init_error }}</span>
+    {% if live %}<div class="m">Showing the last good copy, read {{ org.init_read_at.strftime('%d/%m/%Y %I:%M %p') }}.</div>{% endif %}
+  {% elif live %}The −15 rule is <strong>on</strong>. Last read {{ org.init_read_at.strftime('%d/%m/%Y %I:%M %p') }}.
+  {% else %}Connected but not read yet.{% endif %}
+</div>
+
+{% if unmatched %}
+<div class="card" style="margin-bottom:14px">
+  <strong>Names on the form that match nobody</strong>
+  <div class="m">Their initiatives count for no one until you say who they are.</div>
+  {% for nm, n in unmatched %}
+  <form method="post" action="/initiatives/match" class="searchbar" style="border:0;padding:6px 0">
+    <input type="hidden" name="name" value="{{ nm }}">
+    <div class="fb-f"><label>“{{ nm }}” ({{ n }})</label>
+      <select name="person" required><option value="">Who is this?</option>
+        {% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+    {% if can_set %}<div class="acts"><button class="btn">Save</button></div>{% endif %}
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if can_set %}
+<details class="card" {{ 'open' if not configured }} style="margin-bottom:14px">
+  <summary><strong>{{ 'Change which sheet is read' if configured else 'Connect the form sheet' }}</strong></summary>
+  <ol class="m" style="margin:12px 0 14px;padding-left:20px;line-height:1.8">
+    <li>Open the response sheet and press <strong>Share</strong>.</li>
+    <li>Add this address as a <strong>Viewer</strong>: <code>{{ robot or 'the service account address' }}</code></li>
+    <li>Copy the sheet's whole address from the browser and paste it below.</li>
+  </ol>
+  <form method="post" action="/initiatives/settings" class="searchbar" style="border:0;padding:0">
+    <div class="fb-f fb-wide"><label>Sheet link</label>
+      <input name="sheet" required placeholder="https://docs.google.com/spreadsheets/d/…"
+        value="{{ 'https://docs.google.com/spreadsheets/d/' ~ org.init_sheet_id if org.init_sheet_id }}"></div>
+    <div class="fb-f"><label>Tab name</label><input name="tab" value="{{ org.init_tab or default_tab }}"></div>
+    <div class="acts"><button class="btn">Save and read it</button></div>
+  </form>
+  <p class="m" style="margin:10px 0 0">Columns: <strong>A</strong> time filed · <strong>B</strong> employee ·
+    <strong>D</strong> company · <strong>E</strong> what was done · <strong>F</strong> date of initiative ·
+    <strong>G</strong> proof.</p>
+</details>
+{% endif %}
+
+<div class="card">
+  <strong>Answers read ({{ rows|length }}{{ '+' if rows|length == 200 }})</strong>
+  <table class="tbl" style="margin-top:8px">
+    <tr><th>Date</th><th>Name on form</th><th>Counted for</th><th>Company</th><th>What</th></tr>
+    {% for r in rows %}
+    <tr><td>{{ r.done_on.strftime('%d/%m/%Y') if r.done_on else '—' }}</td>
+      <td>{{ r.name_raw }}</td>
+      <td>{% if r.matched_name %}{{ r.matched_name }}{% else %}<span class="overdue">nobody</span>{% endif %}</td>
+      <td>{{ r.company_raw }}</td>
+      <td>{{ (r.description or '')[:140] }}{% if r.proof_url %} · <a href="{{ r.proof_url }}" target="_blank" rel="noopener">proof</a>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="m">Nothing read yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

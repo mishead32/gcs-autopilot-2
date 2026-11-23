@@ -385,6 +385,12 @@ class Organization(Base):
     # Were the sheet's dates found with day and month the wrong way round?
     appr_swapped: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
+    # The Leadership & Self-Initiative form's response sheet, same idea.
+    init_sheet_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    init_tab: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    init_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    init_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     @property
     def esc_day_list(self) -> list[int]:
         """The weekdays it runs on. Empty setting means all seven."""
@@ -2527,3 +2533,36 @@ class ApprovalItem(Base):
     # pending / approved / revision / other — read off the row's colour.
     status: Mapped[str] = mapped_column(String(20), index=True)
     colour: Mapped[str | None] = mapped_column(String(9), nullable=True)
+
+
+class Initiative(Base):
+    """One answer on the Self-Initiative form, as last read.
+
+    A COPY, replaced whole on every read; the sheet stays the record.
+    `user_id` is NULL while the name on the form has not been matched to
+    anybody, and such a row counts for nobody until it is.
+    """
+    __tablename__ = "initiatives"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    row_no: Mapped[int] = mapped_column(Integer)
+    name_raw: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True)
+    company_raw: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    done_on: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    date_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    filed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proof_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class InitiativeAlias(Base):
+    """A name as the form spells it -> the person it means. Set by hand."""
+    __tablename__ = "initiative_aliases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name_key: Mapped[str] = mapped_column(String(160), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))

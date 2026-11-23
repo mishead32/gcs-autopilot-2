@@ -27,11 +27,12 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       detective as detective_router,
                       escalation as escalation_router,
                       cmd as cmd_router,
-                      approvals as approvals_router)
+                      approvals as approvals_router, initiatives as initiatives_router)
 from .services import recurring
 from .services import detective
 from .services import flowsheet
 from .services import approvals as approvals_svc
+from .services import initiatives as initiatives_svc
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
 from .services import quietflows
@@ -162,6 +163,7 @@ async def _daily_spawn():
             # asks Google for read-only access and could not write if it
             # tried.
             await asyncio.to_thread(_approvals_once)
+            await asyncio.to_thread(_initiatives_once)
 
             # And a few of the oldest unchecked tasks handed to the
             # detective, every tick, within the day's allowance. The free
@@ -251,6 +253,18 @@ def _approvals_once() -> int:
             return approvals_svc.sync_all(db)
     except Exception as exc:                          # noqa: BLE001
         print(f"Pending Approvals read failed: {exc}")
+        return 0
+
+
+def _initiatives_once() -> int:
+    """One read of the Self-Initiative form's sheet. Never raises."""
+    if not initiatives_svc.enabled():
+        return 0
+    try:
+        with SessionLocal() as db:
+            return initiatives_svc.sync_all(db)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"Self-Initiative read failed: {exc}")
         return 0
 
 
@@ -556,6 +570,7 @@ app.include_router(reports_router.router)
 app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
 app.include_router(approvals_router.router)
+app.include_router(initiatives_router.router)
 app.include_router(escalation_router.router)
 
 

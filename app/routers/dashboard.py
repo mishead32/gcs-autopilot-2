@@ -207,7 +207,8 @@ def _pack(c):
         "on_time": c.on_time, "late": c.late, "false_marks": c.false_marks,
         "closed_in_window": c.closed_in_window, "overdue_now": c.overdue_now,
         "not_done_penalty": c.not_done_penalty, "late_penalty": c.late_penalty,
-        "false_penalty": c.false_penalty, "total_penalty": c.total_penalty,
+        "false_penalty": c.false_penalty, "init_penalty": c.init_penalty,
+        "init_live": c.init_live, "total_penalty": c.total_penalty,
         "completion_rate": c.completion_rate, "on_time_rate": c.on_time_rate,
         "sources": [{
             "key": s.key, "label": s.label, "benchmark": s.benchmark,

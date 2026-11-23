@@ -106,6 +106,10 @@ ADDITIONS = {
         ("appr_read_at", "DATETIME"),
         ("appr_error", "TEXT"),
         ("appr_swapped", "BOOLEAN"),
+        ("init_sheet_id", "VARCHAR(120)"),
+        ("init_tab", "VARCHAR(120)"),
+        ("init_read_at", "DATETIME"),
+        ("init_error", "TEXT"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

@@ -16590,5 +16590,153 @@ with _slSc() as _d:
         _d.delete(_d.get(_TkSc, _t.id))
     _d.commit()
 
+print("\n== self-initiative: -15 when none is filed in the selected dates ==")
+from datetime import date as _dI, datetime as _dtI, timedelta as _tdI
+from app import clock as _ckI
+from app.models import (Organization as _OrgI, User as _UsI, Initiative as _InI,
+                        InitiativeAlias as _AlI)
+from app.services import initiatives as _ini, scoring as _scI, sheets as _shI
+from app.db import SessionLocal as _slI
+from sqlalchemy import select as _selI
+import gspread as _gsI
+
+check("the sheet reader uses calls gspread really has",
+      hasattr(_gsI.Client, "open_by_key") and hasattr(_gsI.Worksheet, "get_values"))
+check("it asks Google for read-only access",
+      _ini.READONLY == ["https://www.googleapis.com/auth/spreadsheets.readonly"])
+
+# --- names ---
+class _U:
+    def __init__(s, i, n, a=True): s.id, s.name, s.active = i, n, a
+_us = [_U(1, "Kiran Sandhu"), _U(2, "Vikram Singh"), _U(3, "Mehak Rana"),
+       _U(4, "Mehak Gill"), _U(5, "Sagar Old", False)]
+check("a first name that is only one person matches them",
+      _ini.match_name("Kiran ", _us, {}) == 1)
+check("trailing spaces and capitals do not matter",
+      _ini.match_name("  VIKRAM singh ", _us, {}) == 2)
+check("two people with the same first name match nobody",
+      _ini.match_name("Mehak", _us, {}) is None)
+check("a full name picks between them",
+      _ini.match_name("Mehak Gill", _us, {}) == 4)
+check("a hand-made alias wins", _ini.match_name("Mehak", _us, {"mehak": 3}) == 3)
+check("an unknown name matches nobody", _ini.match_name("Zed", _us, {}) is None)
+
+# --- dates ---
+_fl = _dtI(2026, 4, 28, 10, 0)
+check("dd/mm/yyyy is read day first",
+      _ini.initiative_day("05/04/2026", _fl) == _dI(2026, 4, 5))
+check("a year typo (1026) takes the year it was filed",
+      _ini.initiative_day("28/04/1026", _fl) == _dI(2026, 4, 28))
+check("a future-year typo (2062) takes the year it was filed",
+      _ini.initiative_day("28/04/2062", _fl) == _dI(2026, 4, 28))
+check("no date at all falls back to the day it was filed",
+      _ini.initiative_day("", _fl) == _dI(2026, 4, 28))
+
+# --- a fake sheet, read like the real one ---
+_today = _ckI.today()
+def _f(d): return d.strftime("%d/%m/%Y")
+_rowsI = [["Timestamp", "Name", "Designation", "Company", "What", "Date", "Proof"],
+          [_f(_today) + " 10:00:00", "Amit", "x", "Bodyzone", "Trained the team", _f(_today - _tdI(days=2)), "https://x.test/p"],
+          [_f(_today) + " 10:00:00", "Nobody Atall", "x", "Bodyzone", "ghost", _f(_today), ""],
+          [_f(_today) + " 10:00:00", "", "x", "", "empty name", _f(_today), ""]]
+_realFI, _realSAI = _ini.fetch, _shI.SERVICE_ACCOUNT
+_ini.fetch = lambda sid, tab: _rowsI
+_shI.SERVICE_ACCOUNT = '{"client_email": "robot@example.iam.gserviceaccount.com"}'
+try:
+    with _slI() as _d:
+        _org = _d.scalar(_selI(_OrgI))
+        _amit = _d.scalar(_selI(_UsI).where(_UsI.email == "amit@gcs.local"))
+        _oid, _aid = _org.id, _amit.id
+        _winI = (_dtI.combine(_today - _tdI(days=5), _dtI.min.time()),
+                 _dtI.combine(_today, _dtI.max.time()))
+        _beforeI = _scI.user_scorecard(_d, _amit, start=_winI[0], end=_winI[1])
+        check("before a sheet is connected nobody is penalised",
+              _beforeI.init_penalty == 0 and not _beforeI.init_live)
+        # The test database holds two people called "PT Trainer Amit", so
+        # a bare "Amit" is ambiguous and, rightly, matches nobody on its own.
+        _d.add(_AlI(org_id=_oid, name_key="amit", user_id=_aid))
+        _org.init_sheet_id = "A" * 30
+        _d.commit()
+        _stillI = _scI.user_scorecard(_d, _amit, start=_winI[0], end=_winI[1])
+        check("a sheet that has never been read penalises nobody either",
+              _stillI.init_penalty == 0)
+        got = _ini.sync(_d, _org)
+        check("reading the fake sheet works and skips the empty name",
+              got.get("ok") and got["rows"] == 2, got)
+        _ids = {r.name_raw: r.user_id for r in _d.scalars(_selI(_InI)).all()}
+        check("Amit's answer is matched to Amit", _ids.get("Amit") == _aid, _ids)
+        check("an unknown name is kept but matched to nobody",
+              _ids.get("Nobody Atall") is None and "Nobody Atall" in _ids)
+        _inside = _scI.user_scorecard(_d, _amit, start=_winI[0], end=_winI[1])
+        check("an initiative inside the dates costs nothing",
+              _inside.init_live and _inside.init_penalty == 0, _inside.init_penalty)
+        _outside = _scI.user_scorecard(
+            _d, _amit, start=_winI[0] - _tdI(days=30), end=_winI[0] - _tdI(days=10))
+        check("no initiative dated inside the dates costs 15",
+              _outside.init_penalty == -15, _outside.init_penalty)
+        check("it is on top of the other penalties, not instead of them",
+              _outside.total_penalty == round(
+                  _outside.source_total + _outside.false_penalty - 15, 1),
+              (_outside.total_penalty, _outside.source_total))
+        _edge_in = _scI.user_scorecard(
+            _d, _amit, start=_dtI.combine(_today - _tdI(days=2), _dtI.min.time()),
+            end=_dtI.combine(_today - _tdI(days=2), _dtI.max.time()))
+        _edge_out = _scI.user_scorecard(
+            _d, _amit, start=_dtI.combine(_today - _tdI(days=1), _dtI.min.time()),
+            end=_dtI.combine(_today, _dtI.max.time()))
+        check("the very day counts (window edge)", _edge_in.init_penalty == 0)
+        check("the day after does not", _edge_out.init_penalty == -15)
+        # an alias fixes a name by hand
+        _d.add(_AlI(org_id=_oid, name_key="nobody atall", user_id=_aid))
+        _d.commit(); _ini.rematch(_d, _oid)
+        _later = _ini.taken_by(_d, _oid, _winI[0], _winI[1])
+        check("mapping a name by hand makes its rows count", _aid in _later)
+        _board = _scI.scoreboard(_d, _oid, *_winI)
+        _mine = [r["card"] for r in _board["people"] if r["user"].id == _aid]
+        check("the Performance board carries it", _mine and _mine[0].init_live)
+        _others = [r["card"] for r in _board["people"] if r["user"].id != _aid]
+        check("others with no initiative are at -15",
+              all(c.init_penalty == -15 for c in _others) and _others)
+        check("the company card is the average of its people",
+              abs(_board["overall"].init_penalty
+                  - sum(c.init_penalty for c in
+                        [r["card"] for r in _board["people"]]) / len(_board["people"])) < 0.051)
+    _qs = f"date_from={(_today-_tdI(days=5)).isoformat()}&date_to={_today.isoformat()}"
+    _rp = admin.get("/reports/score?" + _qs)
+    check("the EM report has a Self-initiative column",
+          _rp.status_code == 200 and "Self-initiative" in _rp.text, _rp.status_code)
+    _pf = admin.get("/stats?" + _qs.replace("date_from", "start").replace("date_to", "end"))
+    check("the Performance page shows it", _pf.status_code == 200
+          and "Self-initiative" in _pf.text, _pf.status_code)
+    _mine = doer.get("/api/my-score?" + _qs)
+    check("the doer's live score carries it",
+          _mine.status_code == 200 and "init_penalty" in _mine.json(), _mine.text[:200])
+    _dash = doer.get("/")
+    check("and the doer's dashboard shows the tile",
+          _dash.status_code == 200 and "Self-initiative" in _dash.text)
+    _pg = admin.get("/initiatives")
+    check("the settings page opens and says which address to share with",
+          _pg.status_code == 200 and "robot@example.iam.gserviceaccount.com" in _pg.text)
+    _post = admin.post("/initiatives/refresh")
+    check("refreshing works", _post.status_code == 200)
+    _bad = admin.post("/initiatives/settings", data={"sheet": "nonsense"})
+    check("a bad link is refused", _bad.status_code == 400, _bad.status_code)
+    def _boom(sid, tab): raise RuntimeError("403 permission denied")
+    _ini.fetch = _boom
+    with _slI() as _d:
+        _org = _d.get(_OrgI, _oid)
+        got = _ini.sync(_d, _org)
+        _kept = _d.scalar(_selI(_InI).where(_InI.org_id == _oid))
+        check("a failed read keeps the last copy and says how to fix it",
+              not got["ok"] and "Viewer" in got["why"] and _kept is not None, got)
+        check("and the rule stays on", _ini.active(_org))
+        # undo, so no later section sees a penalty
+        for r in _d.scalars(_selI(_InI)).all(): _d.delete(r)
+        for r in _d.scalars(_selI(_AlI)).all(): _d.delete(r)
+        _org.init_sheet_id = None; _org.init_read_at = None; _org.init_error = None
+        _d.commit()
+finally:
+    _ini.fetch, _shI.SERVICE_ACCOUNT = _realFI, _realSAI
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

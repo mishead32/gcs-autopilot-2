@@ -236,6 +236,11 @@ class Card:
     not_done_penalty: float = 0.0
     late_penalty: float = 0.0
     false_penalty: float = 0.0
+    # -15 when no self-initiative is dated inside the window; 0 when one is,
+    # or when the rule is not live. Sits beside false marking, on top of the
+    # three sources, and does not touch their benchmarks.
+    init_penalty: float = 0.0
+    init_live: bool = False
     score: float = 0.0
     gap: float = 0.0
 
@@ -269,10 +274,10 @@ class Card:
 
     @property
     def total_penalty(self) -> float:
-        """Delegation + Checklist + FMS + false marking. The headline figure."""
+        """Delegation + Checklist + FMS + false marking + self-initiative."""
         if self.total_override is not None:
             return _neg(self.total_override)
-        return _neg(self.source_total + self.false_penalty)
+        return _neg(self.source_total + self.false_penalty + self.init_penalty)
 
     @property
     def completion_rate(self) -> float:
@@ -444,9 +449,11 @@ def window_tasks(tasks, start: datetime, end: datetime):
 
 
 def _build(planned: list[Task], closed_in_window: list[Task],
-           benchmarks: dict | None = None) -> Card:
+           benchmarks: dict | None = None, init_penalty: float | None = None) -> Card:
     bm = benchmarks or DEFAULT_BENCHMARKS
     c = Card(benchmarks=dict(bm))
+    if init_penalty is not None:
+        c.init_live, c.init_penalty = True, init_penalty
     # Everything below counts WEIGHT, not rows. A high-priority task is worth
     # five, medium two, low one, so missing one high job costs what missing
     # five ordinary ones would. The task lists still show one row per task —
@@ -521,6 +528,8 @@ def _aggregate(planned: list[Task], closed: list[Task],
             c.sources[k].late_penalty = _neg(
                 sum(m.sources[k].late_penalty for m in members if k in m.sources) / n)
     c.false_penalty = _neg(sum(m.false_penalty for m in members) / n)
+    c.init_live = any(m.init_live for m in members)
+    c.init_penalty = _neg(sum(m.init_penalty for m in members) / n)
     return c.compute()
 
 
@@ -587,14 +596,17 @@ def scoreboard(db: Session, org_id: int, start: datetime, end: datetime,
         if only_branch is None or t.branch_id == only_branch:
             by_br_c.setdefault(t.branch_id, []).append(t)
 
+    from . import initiatives
+    took = initiatives.taken_by(db, org_id, start, end)
     people = []
     for uid in set(by_user_p) | set(by_user_c):
         u = users.get(uid)
         if not u:
             continue
+        ip = None if took is None else initiatives.penalty_for(took, uid)
         people.append({"user": u,
                        "card": _build(by_user_p.get(uid, []), by_user_c.get(uid, []),
-                                      u.benchmarks)})
+                                      u.benchmarks, ip)})
     people.sort(key=lambda r: (-r["card"].score, r["user"].name))
 
     by_person = {r["user"].id: r["card"] for r in people}
@@ -626,7 +638,10 @@ def user_scorecard(db: Session, user: User, days: int = 30,
         start, end = resolve_window(None, None, days)
     tasks = list(db.scalars(select(Task).where(Task.doer_id == user.id)).all())
     planned, closed = window_tasks(tasks, start, end)
-    return _build(planned, closed, user.benchmarks)
+    from . import initiatives
+    took = initiatives.taken_by(db, user.org_id, start, end)
+    ip = None if took is None else initiatives.penalty_for(took, user.id)
+    return _build(planned, closed, user.benchmarks, ip)
 
 
 def visible_branches(db: Session, user: User) -> list[Branch]:
