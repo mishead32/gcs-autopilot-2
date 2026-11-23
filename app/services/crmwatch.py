@@ -24,7 +24,7 @@ from ..models import CrmSend, CrmWatch, Organization, User
 from . import approvals, mail, sheets, whatsapp
 
 READONLY = approvals.READONLY
-WA_TEMPLATE = os.getenv("WA_TEMPLATE_PENDING", "pending_calls_escalation").strip()
+WA_TEMPLATE = os.getenv("WA_TEMPLATE_PENDING", "pending_calls_escalation_v2").strip()
 SIGN_OFF = "MIS Team."
 
 DEFAULTS = [   # label, name col, stage col, pending word, date order, sunday off
@@ -184,10 +184,11 @@ def compose(label: str, day: date, counts: dict[str, int], level_min: int
         + f"</p><p>Kindly look into this .</p><p>Thanks &amp; Regards,<br><br>{SIGN_OFF}</p></div>")
     subject = f"Pending calls escalation – {label} – {when} ({total} pending {level_min}+ min)"
     summary = ", ".join(f"{n} : {c}" for n, c in rows)
-    # The approved template has FIVE blanks, not four: the company appears in
-    # its title line and again in its first sentence, and the provider counts
-    # each place. In the order they appear in the message.
-    return subject, text, html, [label, label, when, str(total), summary]
+    # Four blanks, each used once, in the order they appear in the message.
+    # (A first template used the company twice, and the provider and Meta
+    # disagreed about whether that is four values or five. Every blank
+    # appearing once leaves nothing to count differently.)
+    return subject, text, html, [label, when, str(total), summary]
 
 
 # ------------------------------------------------------------------ run ----

@@ -16789,8 +16789,8 @@ check("the email says what the office asked for",
       "pending calls escalation for Bodyzone:" in _txt and "1. Inquiry date: 23/11/2026" in _txt
       and "2. Total Pending calls as per CRM: 23" in _txt and "1. Gopal : 20" in _txt
       and "2. Amanpreet : 2" in _txt and "3. Ashima : 1" in _txt and "MIS Team." in _txt, _txt)
-check("the WhatsApp blanks are in the template's order: company twice, date, total, one-line summary",
-      _vars == ["Bodyzone", "Bodyzone", "23/11/2026", "23", "Gopal : 20, Amanpreet : 2, Ashima : 1"], _vars)
+check("the WhatsApp blanks: company, date, total, one-line summary - each once",
+      _vars == ["Bodyzone", "23/11/2026", "23", "Gopal : 20, Amanpreet : 2, Ashima : 1"], _vars)
 
 # --- a whole run ---
 _mails, _wa = [], []
@@ -16847,8 +16847,8 @@ try:
         _org.crm_wa_on = True; _d.commit()
         _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=2))
         check("with WhatsApp on it goes with the right template and blanks",
-              len(_wa) == 2 and _wa[0][2] == "pending_calls_escalation"
-              and _wa[0][1][:4] == ["Bodyzone", "Bodyzone", "23/11/2026", "3"] and len(_wa[0][1]) == 5 and _wa[0][0] == "919876543210", _wa)
+              len(_wa) == 2 and _wa[0][2] == "pending_calls_escalation_v2"
+              and _wa[0][1][:3] == ["Bodyzone", "23/11/2026", "3"] and len(_wa[0][1]) == 4 and _wa[0][0] == "919876543210", _wa)
         _sheet["rows"] = [["11/23/2026 13:55:00", "Gopal", "Discovery"]]
         _n = len(_mails)
         _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=3))
