@@ -184,7 +184,10 @@ def compose(label: str, day: date, counts: dict[str, int], level_min: int
         + f"</p><p>Kindly look into this .</p><p>Thanks &amp; Regards,<br><br>{SIGN_OFF}</p></div>")
     subject = f"Pending calls escalation – {label} – {when} ({total} pending {level_min}+ min)"
     summary = ", ".join(f"{n} : {c}" for n, c in rows)
-    return subject, text, html, [label, when, str(total), summary]
+    # The approved template has FIVE blanks, not four: the company appears in
+    # its title line and again in its first sentence, and the provider counts
+    # each place. In the order they appear in the message.
+    return subject, text, html, [label, label, when, str(total), summary]
 
 
 # ------------------------------------------------------------------ run ----
