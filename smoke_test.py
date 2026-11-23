@@ -16738,5 +16738,161 @@ try:
 finally:
     _ini.fetch, _shI.SERVICE_ACCOUNT = _realFI, _realSAI
 
+print("\n== pending-calls escalation: 30 min to Mehak, 60 min to Santosh Mam ==")
+from datetime import datetime as _dtC, date as _dC, timedelta as _tdC
+from app.models import (Organization as _OrgC, User as _UsC, CrmWatch as _CwC,
+                        CrmSend as _CsC)
+from app.services import crmwatch as _cw, mail as _mlC, whatsapp as _waC, sheets as _shC
+from app.db import SessionLocal as _slC
+from sqlalchemy import select as _selC
+
+_mon = _dtC(2026, 11, 23, 11, 0, 0)               # a Monday, 11:00
+_sun = _dtC(2026, 11, 22, 11, 0, 0)               # the Sunday before
+
+# --- dates ---
+check("month/day sheet: 11/23/2026 09:10 is 23 November",
+      _cw.moment("11/23/2026 09:10:00", "mdy", _mon)[0] == _dtC(2026, 11, 23, 9, 10))
+check("day/month sheet: 23/11/2026 09:10 is 23 November",
+      _cw.moment("23/11/2026 09:10:00", "dmy", _mon)[0] == _dtC(2026, 11, 23, 9, 10))
+check("the sheet's own order wins when both readings are real dates",
+      _cw.moment("5/11/2026 09:10", "dmy", _mon)[0] == _dtC(2026, 11, 5, 9, 10))
+check("the other order is used when the first is impossible",
+      _cw.moment("11/23/2026 09:10", "dmy", _mon)[0] == _dtC(2026, 11, 23, 9, 10))
+check("an inquiry in the future is not read as one",
+      _cw.moment("23/11/2026 11:30", "dmy", _mon)[0] is None)
+check("a date with no time says so", _cw.moment("23/11/2026", "dmy", _mon) == (_dtC(2026, 11, 23), False))
+check("rubbish is not a date", _cw.moment("soon", "dmy", _mon)[0] is None)
+
+# --- counting ---
+class _W:                                           # a watch, without the database
+    pending_word, date_order, aliases = "Discovery", "mdy", "deo@x.com = Hitisha"
+_rowsC = [
+    ["11/23/2026 10:00:00", "Gopal", "Discovery"],          # 60 min   -> both
+    ["11/23/2026 10:30:00", "Gopal", "Discovery"],          # 30 min   -> level 1 only (edge)
+    ["11/23/2026 10:31:00", "Ashima", "discovery "],        # 29 min   -> neither
+    ["11/23/2026 09:00:00", "Ashima", "Discovery"],         # 120 min  -> both
+    ["11/23/2026 09:00:00", "Amanpreet", "Qualification"],  # called
+    ["11/22/2026 09:00:00", "Gopal", "Discovery"],          # yesterday
+    ["11/23/2026", "Gopal", "Discovery"],                   # no time
+    ["11/23/2026 08:00:00", "deo@x.com", "Discovery"],      # a mapped name
+    ["11/23/2026 08:00:00", "", "Discovery"],               # nobody
+]
+_c1, _nt = _cw.count_pending(_rowsC, _W, _mon, 30)
+_c2, _ = _cw.count_pending(_rowsC, _W, _mon, 60)
+check("30+ minutes counts per caller, the 30-minute edge included",
+      _c1 == {"Gopal": 2, "Ashima": 1, "Hitisha": 1, "(no name)": 1}, _c1)
+check("60+ minutes is the later subset",
+      _c2 == {"Gopal": 1, "Ashima": 1, "Hitisha": 1, "(no name)": 1}, _c2)
+check("a row today with no time is not guessed at, but is reported", _nt == 1)
+_sub, _txt, _html, _vars = _cw.compose("Bodyzone", _dC(2026, 11, 23), {"Gopal": 20, "Ashima": 1, "Amanpreet": 2}, 30)
+check("the email says what the office asked for",
+      "pending calls escalation for Bodyzone:" in _txt and "1. Inquiry date: 23/11/2026" in _txt
+      and "2. Total Pending calls as per CRM: 23" in _txt and "1. Gopal : 20" in _txt
+      and "2. Amanpreet : 2" in _txt and "3. Ashima : 1" in _txt and "MIS Team." in _txt, _txt)
+check("the WhatsApp blanks are company, date, total, one-line summary",
+      _vars == ["Bodyzone", "23/11/2026", "23", "Gopal : 20, Amanpreet : 2, Ashima : 1"], _vars)
+
+# --- a whole run ---
+_mails, _wa = [], []
+_realMail, _realWa, _realFetchC, _realSAC = _mlC.send, _waC.send, _cw.fetch, _shC.SERVICE_ACCOUNT
+_mlC.send = lambda to, subject, body, cc=None, html="": (_mails.append((to, subject, body)) or (True, ""))
+_waC.send = lambda to, variables, file_url="", template="": (_wa.append((to, variables, template)) or (True, ""))
+_shC.SERVICE_ACCOUNT = '{"client_email": "robot@example.iam.gserviceaccount.com"}'
+_sheet = {"rows": [["11/23/2026 10:00:00", "Gopal", "Discovery"],
+                   ["11/23/2026 10:25:00", "Gopal", "Discovery"],
+                   ["11/23/2026 10:25:00", "Ashima", "Discovery"]]}
+def _fakeFetchC(sid, tab, cols): return _sheet["rows"]
+_cw.fetch = _fakeFetchC
+try:
+    with _slC() as _d:
+        _org = _d.scalar(_selC(_OrgC)); _oid = _org.id
+        _meh = _d.scalar(_selC(_UsC).where(_UsC.email == "bz.manager@gcs.local"))
+        _san = _d.scalar(_selC(_UsC).where(_UsC.email == "meena@gcs.local"))
+        _meh.phone, _san.phone = "9876543210", "9876543211"
+        _org.crm_on, _org.crm_l1_user_id, _org.crm_l2_user_id = True, _meh.id, _san.id
+        _d.commit()
+        _ws = _cw.ensure_watches(_d, _oid)
+        check("the three companies are set up with the columns the office gave",
+              [(w.label, w.name_col, w.stage_col, w.pending_word) for w in _ws]
+              == [("Bodyzone", "J", "L", "Discovery"), ("Spa Kora", "L", "J", "Discovery"),
+                  ("BIPS", "K", "L", "Pending Discovery")], [(w.label, w.name_col) for w in _ws])
+        _bz, _sk, _bp = _ws
+        check("BIPS is the one that skips Sundays", _bp.sunday_off and not _bz.sunday_off)
+        _bz.sheet_id, _bz.active = "B" * 30, True
+        _bp.sheet_id, _bp.active = "C" * 30, True
+        _d.commit()
+        r = _cw.run_watch(_d, _org, _bz, _mon)
+        check("Mehak gets the 30-minute email, Santosh Mam the 60-minute one",
+              [m[0] for m in _mails] == [[_meh.email], [_san.email]], _mails)
+        check("the 30-minute email counts all three, the 60-minute email one",
+              "Total Pending calls as per CRM: 3" in _mails[0][2]
+              and "Total Pending calls as per CRM: 1" in _mails[1][2], [m[2] for m in _mails])
+        check("WhatsApp is off until it is switched on", _wa == [])
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(minutes=20))
+        check("the same hour is never sent twice", len(_mails) == 2, len(_mails))
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=1))
+        check("the next hour sends again", len(_mails) == 4, len(_mails))
+        _n = len(_mails)
+        _cw.run_watch(_d, _org, _bz, _mon.replace(hour=8, minute=55) )
+        _cw.run_watch(_d, _org, _bz, _mon.replace(hour=19, minute=5))
+        check("nothing before nine or after the closing hour", len(_mails) == _n)
+        _cw.run_watch(_d, _org, _bz, _mon.replace(hour=18, minute=5))
+        check("the closing hour itself is still sent", len(_mails) > _n)
+        _n = len(_mails)
+        _cw.run_watch(_d, _org, _bp, _sun)
+        check("BIPS sends nothing on a Sunday", len(_mails) == _n)
+        _cw.run_watch(_d, _org, _bz, _sun)
+        check("Bodyzone does send on a Sunday (no rows are 'today' there, so nothing is counted)",
+              len(_mails) == _n)
+        _org.crm_wa_on = True; _d.commit()
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=2))
+        check("with WhatsApp on it goes with the right template and blanks",
+              len(_wa) == 2 and _wa[0][2] == "pending_calls_escalation"
+              and _wa[0][1][:3] == ["Bodyzone", "23/11/2026", "3"] and _wa[0][0] == "919876543210", _wa)
+        _sheet["rows"] = [["11/23/2026 13:55:00", "Gopal", "Discovery"]]
+        _n = len(_mails)
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=3))
+        check("nothing pending means nothing sent", len(_mails) == _n)
+        def _boomC(sid, tab, cols): raise RuntimeError("403 permission denied")
+        _cw.fetch = _boomC
+        _res = _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=4))
+        check("an unreadable sheet is reported with the fix, not hidden",
+              not _res["ok"] and "Viewer" in _res["why"] and _bz.last_error)
+        _failed = _d.scalar(_selC(_CsC).where(_CsC.level == 0, _CsC.status == "failed"))
+        check("and it is not retried every five minutes in the same hour", _failed is not None)
+        _cw.fetch = _fakeFetchC
+        _org.crm_l2_user_id = None; _d.commit()
+        _sheet["rows"] = [["11/23/2026 08:00:00", "Gopal", "Discovery"]]
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=5))
+        _noone = _res2 = None
+        _org.crm_l2_user_id = _san.id; _d.commit()
+    # --- the page ---
+    _pg = admin.get("/pending-calls")
+    check("the page opens and shows the three companies",
+          _pg.status_code == 200 and all(x in _pg.text for x in ("Bodyzone", "Spa Kora", "BIPS")))
+    with _slC() as _d:
+        _bzid = _d.scalar(_selC(_CwC.id).where(_CwC.label == "Bodyzone"))
+    _prev = admin.post(f"/pending-calls/watch/{_bzid}/preview")
+    check("the preview works and sends nothing", _prev.status_code == 200)
+    _before = len(_mails)
+    _now = admin.post(f"/pending-calls/watch/{_bzid}/send")
+    check("send-now works and goes out", _now.status_code == 200 and len(_mails) > _before)
+    _bad = admin.post(f"/pending-calls/watch/{_bzid}", data={
+        "sheet": "", "tab": "Inquiry", "when_col": "C", "name_col": "9", "stage_col": "L",
+        "pending_word": "Discovery"})
+    check("a bad column is refused", _bad.status_code == 400, _bad.status_code)
+    _ok = admin.post(f"/pending-calls/watch/{_bzid}", data={
+        "sheet": "https://docs.google.com/spreadsheets/d/" + "B" * 30 + "/edit", "tab": "Inquiry",
+        "when_col": "C", "name_col": "J", "stage_col": "L", "pending_word": "Discovery",
+        "date_order": "mdy", "active": "on"})
+    check("saving a company's sheet works", _ok.status_code == 200)
+    _st = admin.post("/pending-calls/settings", data={"m1": "60", "m2": "30"})
+    check("first level after the second is refused", _st.status_code == 400, _st.status_code)
+    check("a doer cannot open it", doer.get("/pending-calls").status_code in (303, 401, 403))
+finally:
+    _mlC.send, _waC.send, _cw.fetch, _shC.SERVICE_ACCOUNT = _realMail, _realWa, _realFetchC, _realSAC
+    with _slC() as _d:
+        _o = _d.get(_OrgC, _oid); _o.crm_on = False; _o.crm_wa_on = False; _d.commit()
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

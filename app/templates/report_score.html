@@ -43,6 +43,14 @@
 {% endmacro %}
 
 {% block content %}
+{% if not board.overall.init_live %}
+<div class="card" style="margin:0 0 14px;border-left:4px solid #c2410c">
+  <strong>Self-initiative score is not on yet.</strong>
+  <span class="m">It starts counting (−15 when none is filed in the dates) once the form's
+    response sheet is connected and read.
+    <a href="/initiatives">Connect it on the Self-Initiative page →</a></span>
+</div>
+{% endif %}
 <div class="page-head">
   <div>
     <h1>EM score — person-wise &amp; branch-wise</h1>

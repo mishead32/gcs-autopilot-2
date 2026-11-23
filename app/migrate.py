@@ -110,6 +110,15 @@ ADDITIONS = {
         ("init_tab", "VARCHAR(120)"),
         ("init_read_at", "DATETIME"),
         ("init_error", "TEXT"),
+        ("crm_on", "BOOLEAN"),
+        ("crm_l1_user_id", "INTEGER"),
+        ("crm_l2_user_id", "INTEGER"),
+        ("crm_l1_min", "INTEGER"),
+        ("crm_l2_min", "INTEGER"),
+        ("crm_from_hour", "INTEGER"),
+        ("crm_to_hour", "INTEGER"),
+        ("crm_email_on", "BOOLEAN"),
+        ("crm_wa_on", "BOOLEAN"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

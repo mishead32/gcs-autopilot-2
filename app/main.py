@@ -27,12 +27,13 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       detective as detective_router,
                       escalation as escalation_router,
                       cmd as cmd_router,
-                      approvals as approvals_router, initiatives as initiatives_router)
+                      approvals as approvals_router, initiatives as initiatives_router, crmwatch as crmwatch_router)
 from .services import recurring
 from .services import detective
 from .services import flowsheet
 from .services import approvals as approvals_svc
 from .services import initiatives as initiatives_svc
+from .services import crmwatch as crmwatch_svc
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
 from .services import quietflows
@@ -268,6 +269,38 @@ def _initiatives_once() -> int:
         return 0
 
 
+def _crm_once() -> int:
+    """One pass over the pending-calls watches. Never raises."""
+    try:
+        with SessionLocal() as db:
+            return crmwatch_svc.run_all(db)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"Pending-calls escalation failed: {exc}")
+        return 0
+
+
+async def _crm_loop():
+    """Pending-calls escalation, looked at every five minutes.
+
+    Its own loop rather than a part of the half-hourly tick: the message is
+    promised on the hour, and a tick that lands at :30 would send nine
+    o'clock's message at half past. Cheap when it is not the time — a
+    switched-off or out-of-hours pass touches no sheet.
+    """
+    while True:
+        try:
+            now = clock.now()
+            if not _asleep(now):
+                sent = await asyncio.to_thread(_crm_once)
+                if sent:
+                    print(f"Pending-calls escalation: {sent} message(s)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:                      # noqa: BLE001
+            print(f"Pending-calls loop: {exc}")
+        await asyncio.sleep(300)
+
+
 def _catch_up_runs() -> int:
     with SessionLocal() as db:
         return flow_svc.catch_up_all(db)
@@ -332,18 +365,20 @@ async def lifespan(app: FastAPI):
     # once per day for as long as it is running, whatever the host does.
     # /cron/spawn still works and is still safe to call — each rule fires at
     # most once a day either way.
-    spawner = None
+    spawner = crm = None
     if not SERVERLESS:
         spawner = asyncio.create_task(_daily_spawn())
+        crm = asyncio.create_task(_crm_loop())
     try:
         yield
     finally:
-        if spawner:
-            spawner.cancel()
-            try:
-                await spawner
-            except asyncio.CancelledError:
-                pass
+        for t in (spawner, crm):
+            if t:
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
 
 
 class HeadAsGet:
@@ -571,6 +606,7 @@ app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
 app.include_router(approvals_router.router)
 app.include_router(initiatives_router.router)
+app.include_router(crmwatch_router.router)
 app.include_router(escalation_router.router)
 
 

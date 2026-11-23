@@ -391,6 +391,17 @@ class Organization(Base):
     init_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     init_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Pending-calls escalation: who hears at which delay, and when.
+    crm_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    crm_l1_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_l2_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_l1_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_l2_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_from_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_to_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_email_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    crm_wa_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     @property
     def esc_day_list(self) -> list[int]:
         """The weekdays it runs on. Empty setting means all seven."""
@@ -2566,3 +2577,46 @@ class InitiativeAlias(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     name_key: Mapped[str] = mapped_column(String(160), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class CrmWatch(Base):
+    """One CRM inquiry sheet that is watched for calls nobody has made."""
+    __tablename__ = "crm_watches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    label: Mapped[str] = mapped_column(String(60))              # Bodyzone, BIPS ...
+    sheet_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tab: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    when_col: Mapped[str] = mapped_column(String(3), default="C")
+    name_col: Mapped[str] = mapped_column(String(3), default="J")
+    stage_col: Mapped[str] = mapped_column(String(3), default="L")
+    pending_word: Mapped[str] = mapped_column(String(60), default="Discovery")
+    date_order: Mapped[str] = mapped_column(String(3), default="dmy")   # dmy | mdy
+    sunday_off: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # "raw value = Name" lines, for a column that holds emails or nicknames.
+    aliases: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class CrmSend(Base):
+    """Everything the escalation did, one row each. Also what stops it
+    doing the same thing twice in the same hour."""
+    __tablename__ = "crm_sends"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    watch_id: Mapped[int] = mapped_column(ForeignKey("crm_watches.id"), index=True)
+    slot: Mapped[str] = mapped_column(String(16), index=True)   # 2026-11-23 09
+    level: Mapped[int] = mapped_column(Integer)                 # 0 = the read itself
+    channel: Mapped[str] = mapped_column(String(12))            # read|email|whatsapp
+    to_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    to_addr: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    pending: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(12), default="sent")  # sent|failed|none
+    error: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)

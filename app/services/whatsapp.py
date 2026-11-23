@@ -104,7 +104,8 @@ def number(raw) -> str:
     return ""
 
 
-def send(to: str, variables: list[str], file_url: str = "") -> tuple[bool, str]:
+def send(to: str, variables: list[str], file_url: str = "",
+         template: str = "") -> tuple[bool, str]:
     """One message. Returns (sent, reason-when-not). Never raises.
 
     The caller is a background job: a provider that is down must leave a
@@ -113,11 +114,13 @@ def send(to: str, variables: list[str], file_url: str = "") -> tuple[bool, str]:
     mobile = number(to)
     if not mobile:
         return False, f"“{to}” is not a mobile number this can send to."
-    if not enabled():
-        return False, status()
+    name = (template or TEMPLATE).strip()
+    if not (URL and API_KEY and PHONE_ID and name):
+        return False, status() if not template else (
+            "WhatsApp is not set up: WA_URL, WA_API_KEY and WA_PHONE_ID are needed.")
 
     payload = {
-        "templateName": TEMPLATE,
+        "templateName": name,
         "language": LANG,
         "templateVariables": [str(v) for v in variables],
         "to": mobile,

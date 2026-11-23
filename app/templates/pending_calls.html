@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Pending Calls Escalation · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Pending Calls Escalation</h1>
+  <div class="m">Inquiries from today whose first call has not been made. Counts per tele-caller go by email
+    (and WhatsApp when switched on) once an hour, {{ '%02d' % s.h_from }}:00 to {{ '%02d' % s.h_to }}:00,
+    to the people below. Nothing here writes to your sheets.</div></div></div>
+
+<div class="card" style="margin-bottom:14px">
+  {% if not google %}<span class="overdue">No Google credential is set on the server.</span><br>{% endif %}
+  <strong>{{ 'ON' if s.on else 'OFF' }}</strong> ·
+  Email: {{ 'ready' if mail_on else 'not set up' }} <span class="m">({{ mail_status }})</span> ·
+  WhatsApp: <span class="m">{{ wa_status }}; template “{{ wa_template }}”</span>
+</div>
+
+{% if can_set %}
+<form method="post" action="/pending-calls/settings" class="card searchbar" style="margin-bottom:14px">
+  <div class="fb-f"><label>First level — after (min)</label><input name="m1" type="number" min="1" value="{{ s.m1 }}"></div>
+  <div class="fb-f"><label>First level goes to</label>
+    <select name="l1"><option value="0">— choose —</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == s.l1 }}>{{ p.name }}</option>{% endfor %}</select></div>
+  <div class="fb-f"><label>Second level — after (min)</label><input name="m2" type="number" min="1" value="{{ s.m2 }}"></div>
+  <div class="fb-f"><label>Second level goes to</label>
+    <select name="l2"><option value="0">— choose —</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == s.l2 }}>{{ p.name }}</option>{% endfor %}</select></div>
+  <div class="fb-f"><label>From hour</label><input name="h_from" type="number" min="0" max="23" value="{{ s.h_from }}"></div>
+  <div class="fb-f"><label>To hour</label><input name="h_to" type="number" min="0" max="23" value="{{ s.h_to }}"></div>
+  <div class="fb-f"><label><input type="checkbox" name="email" {{ 'checked' if s.email }}> Email</label>
+    <label><input type="checkbox" name="wa" {{ 'checked' if s.wa }}> WhatsApp</label>
+    <label><input type="checkbox" name="on" {{ 'checked' if s.on }}> Switched on</label></div>
+  <div class="acts"><button class="btn">Save</button></div>
+</form>
+{% endif %}
+
+{% for w in watches %}
+<details class="card" {{ 'open' if not w.sheet_id or w.last_error }} style="margin-bottom:14px">
+  <summary><strong>{{ w.label }}</strong>
+    {% if w.active %}<span class="m"> · on{{ ' · not on Sundays' if w.sunday_off }}</span>{% else %}<span class="overdue"> · off</span>{% endif %}
+    {% if w.last_error %}<span class="overdue"> · {{ w.last_error }}</span>
+    {% elif w.last_read_at %}<span class="m"> · read {{ w.last_read_at.strftime('%d/%m/%Y %I:%M %p') }}{{ ' · ' ~ w.last_note if w.last_note }}</span>{% endif %}
+  </summary>
+  {% if can_set %}
+  <form method="post" action="/pending-calls/watch/{{ w.id }}" class="searchbar" style="border:0;padding:8px 0">
+    <div class="fb-f fb-wide"><label>Sheet link (share it with {{ robot or 'the service account' }} as Viewer)</label>
+      <input name="sheet" placeholder="{{ 'saved — paste a new link only to change it' if w.sheet_id else 'https://docs.google.com/spreadsheets/d/…' }}"></div>
+    <div class="fb-f"><label>Tab</label><input name="tab" value="{{ w.tab or 'Inquiry' }}"></div>
+    <div class="fb-f"><label>Date &amp; time column</label><input name="when_col" size="3" value="{{ w.when_col }}"></div>
+    <div class="fb-f"><label>Tele-caller column</label><input name="name_col" size="3" value="{{ w.name_col }}"></div>
+    <div class="fb-f"><label>Stage column</label><input name="stage_col" size="3" value="{{ w.stage_col }}"></div>
+    <div class="fb-f"><label>Pending when stage says</label><input name="pending_word" value="{{ w.pending_word }}"></div>
+    <div class="fb-f"><label>Dates in the sheet are</label>
+      <select name="date_order"><option value="dmy" {{ 'selected' if w.date_order == 'dmy' }}>day/month/year</option>
+        <option value="mdy" {{ 'selected' if w.date_order == 'mdy' }}>month/day/year</option></select></div>
+    <div class="fb-f fb-wide"><label>Show these names differently (one per line: <code>raw value = Name</code>)</label>
+      <textarea name="aliases" rows="3">{{ w.aliases or '' }}</textarea></div>
+    <div class="fb-f"><label><input type="checkbox" name="active" {{ 'checked' if w.active }}> Watch this company</label>
+      <label><input type="checkbox" name="sunday_off" {{ 'checked' if w.sunday_off }}> Not on Sundays</label></div>
+    <div class="acts"><button class="btn">Save and test the sheet</button></div>
+  </form>
+  {% endif %}
+  {% if w.sheet_id %}
+  <form method="post" action="/pending-calls/watch/{{ w.id }}/preview" style="display:inline"><button class="btn">What would go out now (sends nothing)</button></form>
+  {% if can_set %}<form method="post" action="/pending-calls/watch/{{ w.id }}/send" style="display:inline"
+    onsubmit="return confirm('Send the escalation for {{ w.label }} right now?')"><button class="btn">Send now</button></form>{% endif %}
+  {% endif %}
+</details>
+{% endfor %}
+
+<div class="card"><strong>Last messages</strong>
+  <table class="tbl" style="margin-top:8px"><tr><th>When</th><th>Company</th><th>Level</th><th>Channel</th><th>To</th><th>Pending</th><th>Result</th></tr>
+  {% for r in log %}<tr><td>{{ r.created_at.strftime('%d/%m %I:%M %p') }}</td><td>{{ names.get(r.watch_id) }}</td>
+    <td>{{ r.level }}</td><td>{{ r.channel }}</td><td>{{ r.to_name }}</td><td>{{ r.pending }}</td>
+    <td>{% if r.status == 'sent' %}sent{% else %}<span class="overdue">{{ r.status }}: {{ r.error }}</span>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="7" class="m">Nothing sent yet.</td></tr>{% endfor %}</table>
+</div>
+{% endblock %}
