@@ -271,11 +271,17 @@ def _initiatives_once() -> int:
 
 def _crm_once() -> int:
     """One pass over the pending-calls watches. Never raises."""
+    hb = crmwatch_svc.HEARTBEAT
     try:
         with SessionLocal() as db:
-            return crmwatch_svc.run_all(db)
+            sent = crmwatch_svc.run_all(db)
+        hb.update(at=clock.now(), error=None, passes=hb["passes"] + 1)
+        hb["sent"] += sent
+        return sent
     except Exception as exc:                          # noqa: BLE001
         print(f"Pending-calls escalation failed: {exc}")
+        hb.update(at=clock.now(), error=f"{type(exc).__name__}: {exc}"[:300],
+                  passes=hb["passes"] + 1)
         return 0
 
 

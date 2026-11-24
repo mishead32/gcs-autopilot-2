@@ -5301,6 +5301,7 @@ check("a very long paste is cut short rather than refused",
 
 print("\n== when a task was assigned ==")
 from app.db import SessionLocal as _slC
+from app import clock as _ckC
 from app.models import Task as _TC2, TaskSource as _SC2
 from app.templating import ago as _ago
 from datetime import timedelta as _tdC
@@ -16818,6 +16819,22 @@ try:
                   ("BIPS", "K", "L", "Pending Discovery")], [(w.label, w.name_col) for w in _ws])
         _bz, _sk, _bp = _ws
         check("BIPS is the one that skips Sundays", _bp.sunday_off and not _bz.sunday_off)
+        # Spa Kora keeps the stage in J and the caller in L (caller AFTER stage):
+        # the sheet is asked for C, J, L in that order and must not be mixed up.
+        _asked_cols = {}
+        def _fakeSK(sid, tab, cols):
+            _asked_cols["c"] = cols
+            return [["11/23/2026 09:00:00", "Discovery", "Anu"],
+                    ["11/23/2026 09:00:00", "Dead", "Lakshmi"]]
+        _cw.fetch = _fakeSK
+        _sk.sheet_id, _sk.date_order = "S" * 30, "mdy"
+        _got = _cw.read_watch(_d, _sk, _mon)
+        _cnt, _ = _cw.count_pending(_got["rows"], _sk, _mon, 30)
+        check("Spa Kora (stage J before caller L) is read the right way round",
+              _asked_cols["c"] == ["C", "J", "L"] and _cnt == {"Anu": 1}, (_asked_cols, _cnt))
+        _cw.fetch = _fakeFetchC
+        _sk.sheet_id = None
+        _d.commit()
         _bz.sheet_id, _bz.active = "B" * 30, True
         _bp.sheet_id, _bp.active = "C" * 30, True
         _d.commit()
@@ -16874,6 +16891,8 @@ try:
         _bzid = _d.scalar(_selC(_CwC.id).where(_CwC.label == "Bodyzone"))
     _prev = admin.post(f"/pending-calls/watch/{_bzid}/preview")
     check("the preview works and sends nothing", _prev.status_code == 200)
+    # The page's buttons use the real clock, so the row has to be from today.
+    _sheet["rows"] = [[_ckC.now().strftime("%m/%d/%Y") + " 00:00:01", "Gopal", "Discovery"]]
     _before = len(_mails)
     _now = admin.post(f"/pending-calls/watch/{_bzid}/send")
     check("send-now works and goes out", _now.status_code == 200 and len(_mails) > _before)

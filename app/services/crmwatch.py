@@ -34,6 +34,13 @@ DEFAULTS = [   # label, name col, stage col, pending word, date order, sunday of
 ]
 
 
+# What the background loop last did, kept in memory so the page can show it.
+# If this never changes, the loop is not running; if it carries an error,
+# that is the reason nothing is going out — otherwise it lives only in a log
+# nobody opens.
+HEARTBEAT: dict = {"at": None, "sent": 0, "error": None, "passes": 0}
+
+
 def settings(org: Organization) -> dict:
     return {
         "on": bool(org.crm_on),

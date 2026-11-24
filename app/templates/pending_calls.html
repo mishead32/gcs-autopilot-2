@@ -7,6 +7,13 @@
     to the people below. Nothing here writes to your sheets.</div></div></div>
 
 <div class="card" style="margin-bottom:14px">
+  <strong>Automatic checker:</strong>
+  {% if beat.at %}last ran {{ beat.at.strftime('%d/%m/%Y %I:%M %p') }}
+    ({{ beat.passes }} check{{ '' if beat.passes == 1 else 's' }} since the app started, {{ beat.sent }} message{{ '' if beat.sent == 1 else 's' }} sent)
+    {% if beat.error %}<br><span class="overdue">Last check failed: {{ beat.error }}</span>{% endif %}
+  {% else %}<span class="overdue">has not run since the app last started</span>
+    <span class="m">(it checks every 5 minutes; if this stays like this for 10 minutes, tell your developer)</span>{% endif %}
+  <br>
   {% if not google %}<span class="overdue">No Google credential is set on the server.</span><br>{% endif %}
   <strong>{{ 'ON' if s.on else 'OFF' }}</strong> ·
   Email: {{ 'ready' if mail_on else 'not set up' }} <span class="m">({{ mail_status }})</span> ·

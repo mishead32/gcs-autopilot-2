@@ -45,6 +45,7 @@ def page(request: Request, user: User = Depends(manager_up),
         "mail_status": mail.status(), "mail_on": mail.enabled(),
         "wa_status": whatsapp.status(), "wa_template": crmwatch.WA_TEMPLATE,
         "can_set": user.has(Right.MANAGE_USER), "now": clock.now(),
+        "beat": crmwatch.HEARTBEAT,
     })
 
 
