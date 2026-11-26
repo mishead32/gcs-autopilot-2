@@ -3,8 +3,8 @@
 {% block content %}
 <div class="page-head"><div><h1>Pending Calls Escalation</h1>
   <div class="m">Inquiries from today whose first call has not been made. Counts per tele-caller go by email
-    (and WhatsApp when switched on) once an hour, {{ '%02d' % s.h_from }}:00 to {{ '%02d' % s.h_to }}:00,
-    to the people below. Nothing here writes to your sheets.</div></div></div>
+    (and WhatsApp when switched on) from {{ '%02d' % s.h_from }}:00 to {{ '%02d' % s.h_to }}:00 —
+    the first person every {{ s.e1 }} minutes, the second every {{ s.e2 }} — to the people below. Nothing here writes to your sheets.</div></div></div>
 
 <div class="card" style="margin-bottom:14px">
   <strong>Automatic checker:</strong>
@@ -23,10 +23,12 @@
 {% if can_set %}
 <form method="post" action="/pending-calls/settings" class="card searchbar" style="margin-bottom:14px">
   <div class="fb-f"><label>First level — after (min)</label><input name="m1" type="number" min="1" value="{{ s.m1 }}"></div>
+  <div class="fb-f"><label>First level sent every (min)</label><input name="e1" type="number" min="10" max="240" value="{{ s.e1 }}"></div>
   <div class="fb-f"><label>First level goes to</label>
     <select name="l1"><option value="0">— choose —</option>
       {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == s.l1 }}>{{ p.name }}</option>{% endfor %}</select></div>
   <div class="fb-f"><label>Second level — after (min)</label><input name="m2" type="number" min="1" value="{{ s.m2 }}"></div>
+  <div class="fb-f"><label>Second level sent every (min)</label><input name="e2" type="number" min="10" max="240" value="{{ s.e2 }}"></div>
   <div class="fb-f"><label>Second level goes to</label>
     <select name="l2"><option value="0">— choose —</option>
       {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == s.l2 }}>{{ p.name }}</option>{% endfor %}</select></div>

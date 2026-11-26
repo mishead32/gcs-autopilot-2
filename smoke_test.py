@@ -16850,11 +16850,18 @@ try:
         _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=1))
         check("the next hour sends again", len(_mails) == 4, len(_mails))
         _n = len(_mails)
+        _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=1, minutes=30))
+        check("half past: Mehak's 30-minute message goes, Santosh Mam's hourly one does not",
+              len(_mails) == _n + 1 and _mails[-1][0] == [_meh.email], _mails[-1:])
+        _n = len(_mails)
         _cw.run_watch(_d, _org, _bz, _mon.replace(hour=8, minute=55) )
         _cw.run_watch(_d, _org, _bz, _mon.replace(hour=19, minute=5))
         check("nothing before nine or after the closing hour", len(_mails) == _n)
         _cw.run_watch(_d, _org, _bz, _mon.replace(hour=18, minute=5))
         check("the closing hour itself is still sent", len(_mails) > _n)
+        _n = len(_mails)
+        _cw.run_watch(_d, _org, _bz, _mon.replace(hour=18, minute=35))
+        check("the half-hour stretch after the closing hour is not sent", len(_mails) == _n)
         _n = len(_mails)
         _cw.run_watch(_d, _org, _bp, _sun)
         check("BIPS sends nothing on a Sunday", len(_mails) == _n)
@@ -16875,7 +16882,7 @@ try:
         _res = _cw.run_watch(_d, _org, _bz, _mon + _tdC(hours=4))
         check("an unreadable sheet is reported with the fix, not hidden",
               not _res["ok"] and "Viewer" in _res["why"] and _bz.last_error)
-        _failed = _d.scalar(_selC(_CsC).where(_CsC.level == 0, _CsC.status == "failed"))
+        _failed = _d.scalar(_selC(_CsC).where(_CsC.channel == "read", _CsC.status == "failed"))
         check("and it is not retried every five minutes in the same hour", _failed is not None)
         _cw.fetch = _fakeFetchC
         _org.crm_l2_user_id = None; _d.commit()
@@ -16912,6 +16919,117 @@ finally:
     _mlC.send, _waC.send, _cw.fetch, _shC.SERVICE_ACCOUNT = _realMail, _realWa, _realFetchC, _realSAC
     with _slC() as _d:
         _o = _d.get(_OrgC, _oid); _o.crm_on = False; _o.crm_wa_on = False; _d.commit()
+
+print("\n== API keys: another program reading scores/tasks and creating work ==")
+from fastapi.testclient import TestClient as _TCA
+from app.models import ApiKey as _AKA, User as _UsA, Task as _TkA, FlowInstance as _FIA
+from app.services import apikeys as _akA
+from app.db import SessionLocal as _slA
+from sqlalchemy import select as _selA
+
+_boss = _tstA = None
+with _slA() as _d:
+    _bossA = _d.scalar(_selA(_UsA).where(_UsA.email == "mis@gcs.local")).id
+    _amitA = _d.scalar(_selA(_UsA).where(_UsA.email == "amit@gcs.local")).id
+
+def _keyfor(name, scopes, acting):
+    r = admin.post("/api-keys/new", data={"name": name, "acting": str(acting), "scope": scopes})
+    assert r.status_code == 200, r.status_code
+    import re as _reA
+    m = _reA.search(r'id="thekey"[^>]*>(gcs_[A-Za-z0-9_\-]+)<', r.text)
+    assert m, r.text[:500]
+    return m.group(1)
+
+_bad = admin.post("/api-keys/new", data={"name": "x", "acting": str(_bossA)})
+check("a key with no permission ticked is refused", _bad.status_code == 400, _bad.status_code)
+check("a doer cannot open the keys page", doer.get("/api-keys").status_code == 403)
+_kAll = _keyfor("Test agent", ["scores", "tasks_read", "tasks_write", "flows_write"], _bossA)
+_kScore = _keyfor("Score reader", ["scores"], _bossA)
+_kDoerW = _keyfor("Doer writer", ["tasks_write"], _amitA)
+_api = _TCA(app)                      # no login, no cookie: only the key
+H = lambda k: {"Authorization": f"Bearer {k}"}
+with _slA() as _d:
+    _rows = _d.scalars(_selA(_AKA)).all()
+    check("only a hash of the key is stored, never the key",
+          all(r.key_hash != _kAll and _kAll not in (r.prefix, r.name) and len(r.key_hash) == 64 for r in _rows))
+check("no key, no entry", _api.get("/api/v1/me").status_code == 401)
+check("a wrong key is refused", _api.get("/api/v1/me", headers=H("gcs_nonsense")).status_code == 401)
+check("a login cookie is not a key", admin.get("/api/v1/me").status_code == 401)
+_me = _api.get("/api/v1/me", headers=H(_kAll))
+check("a real key works and says who it acts as",
+      _me.status_code == 200 and _me.json()["acts_as"]["email"] == "mis@gcs.local", _me.text)
+check("X-API-Key header works too", _api.get("/api/v1/me", headers={"X-API-Key": _kAll}).status_code == 200)
+check("a scores-only key cannot read tasks",
+      _api.get("/api/v1/tasks", headers=H(_kScore)).status_code == 403)
+check("or create them",
+      _api.post("/api/v1/tasks", headers=H(_kScore), json={}).status_code == 403)
+_sc = _api.get("/api/v1/scores?days=30", headers=H(_kScore))
+check("scores come back with people and the self-initiative field",
+      _sc.status_code == 200 and _sc.json()["people"] and "init_penalty" in _sc.json()["people"][0]
+      and "overall" in _sc.json(), _sc.text[:200])
+check("a bad date is a clear error", _api.get("/api/v1/scores?date_from=x&date_to=y", headers=H(_kScore)).status_code == 400)
+_tl = _api.get("/api/v1/tasks?limit=5000", headers=H(_kAll))
+check("tasks list works and the limit is capped at 500",
+      _tl.status_code == 200 and _tl.json()["limit"] == 500 and _tl.json()["tasks"], _tl.text[:200])
+_t0 = _tl.json()["tasks"][0]["id"]
+check("one task with its comments",
+      _api.get(f"/api/v1/tasks/{_t0}", headers=H(_kAll)).json().get("comments") is not None)
+check("an unknown task is 404", _api.get("/api/v1/tasks/99999999", headers=H(_kAll)).status_code == 404)
+check("a bad filter is a clear error", _api.get("/api/v1/tasks?status=nope", headers=H(_kAll)).status_code == 400)
+_mk = _api.post("/api/v1/tasks", headers=H(_kAll), json={
+    "title": f"API task {RUN}", "details": "from an agent", "doer_emails": ["amit@gcs.local"],
+    "due_at": "2026-12-30T18:00:00", "priority": "high"})
+check("a task is created through the API", _mk.status_code == 201 and _mk.json()["created"], _mk.text[:300])
+_new = _mk.json()["created"][0]
+check("assigned by the person the key acts as, to the right doer",
+      _new["assigner"]["email"] == "mis@gcs.local" and _new["doer"]["email"] == "amit@gcs.local")
+check("and the task says it came through the API",
+      any("API key" in c["body"] for c in _api.get(f"/api/v1/tasks/{_new['id']}", headers=H(_kAll)).json()["comments"]))
+check("an unknown email is refused",
+      _api.post("/api/v1/tasks", headers=H(_kAll), json={"title": "x", "doer_emails": ["no@one.test"],
+                "due_at": "2026-12-30T18:00:00"}).status_code == 400)
+check("no doer at all is refused",
+      _api.post("/api/v1/tasks", headers=H(_kAll), json={"title": "x", "due_at": "2026-12-30T18:00:00"}).status_code == 400)
+check("a bad date is refused",
+      _api.post("/api/v1/tasks", headers=H(_kAll), json={"title": "x", "doer_ids": [_amitA], "due_at": "tomorrow"}).status_code == 400)
+check("a key acting as somebody without the right to create tasks cannot",
+      _api.post("/api/v1/tasks", headers=H(_kDoerW), json={"title": "x", "doer_ids": [_amitA],
+                "due_at": "2026-12-30T18:00:00"}).status_code == 403)
+# flows
+_fl = _api.get("/api/v1/flows", headers=H(_kAll)).json()["flows"]
+_bill = [f for f in _fl if f["name"] == f"Bill verification {RUN}"]
+check("flows are listed with their questions", bool(_bill) and [q["label"] for q in _bill[0]["questions"]] == ["Bill No", "Vendor", "Bill type"], _fl[:1])
+_fid2 = _bill[0]["id"]
+check("a question that is not on the form is refused",
+      _api.post(f"/api/v1/flows/{_fid2}/start", headers=H(_kAll), json={"answers": {"Nope": "1"}}).status_code == 400)
+check("a missing required answer is refused",
+      _api.post(f"/api/v1/flows/{_fid2}/start", headers=H(_kAll), json={"answers": {"Bill No": "B-1"}}).status_code == 400)
+check("a wrong choice is refused",
+      _api.post(f"/api/v1/flows/{_fid2}/start", headers=H(_kAll), json={"answers": {
+          "Bill No": "B-1", "Vendor": "ACME", "Bill type": "Gold"}}).status_code == 400)
+_run = _api.post(f"/api/v1/flows/{_fid2}/start", headers=H(_kAll), json={"answers": {
+    "Bill No": f"API-{RUN}", "Vendor": "ACME", "Bill type": "Water"}})
+check("a run is started through the API", _run.status_code == 201 and _run.json()["run_id"], _run.text[:300])
+with _slA() as _d:
+    _inst = _d.get(_FIA, _run.json()["run_id"])
+    check("it carries the answers and says who started it",
+          f"API-{RUN}" in (_inst.context or "") and _inst.started_by_id == _bossA)
+check("a key that may not start runs cannot",
+      _api.post(f"/api/v1/flows/{_fid2}/start", headers=H(_kScore), json={}).status_code == 403)
+# revoke + limit
+with _slA() as _d:
+    _kid = _d.scalar(_selA(_AKA.id).where(_AKA.name == "Score reader"))
+admin.post(f"/api-keys/{_kid}/revoke")
+check("a revoked key stops at once", _api.get("/api/v1/scores", headers=H(_kScore)).status_code == 401)
+with _slA() as _d:
+    _used = _d.scalar(_selA(_AKA).where(_AKA.name == "Test agent"))
+    check("use is recorded", _used.use_count > 5 and _used.last_used_at is not None)
+check("the rate limit trips after 120 a minute",
+      _akA.too_many(10**9, 0.0) is False and all(not _akA.too_many(10**9, 0.0) for _ in range(119))
+      and _akA.too_many(10**9, 1.0) is True and _akA.too_many(10**9, 70.0) is False)
+_pg = admin.get("/api-keys")
+check("the keys page opens and shows names, not keys",
+      _pg.status_code == 200 and "Test agent" in _pg.text and _kAll not in _pg.text)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

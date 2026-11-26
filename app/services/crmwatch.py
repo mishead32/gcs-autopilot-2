@@ -50,6 +50,9 @@ def settings(org: Organization) -> dict:
         "h_to": 18 if org.crm_to_hour is None else org.crm_to_hour,
         "email": True if org.crm_email_on is None else bool(org.crm_email_on),
         "wa": bool(org.crm_wa_on),
+        # How often each level is sent: the first person every 30 minutes,
+        # the second every hour, unless changed.
+        "e1": org.crm_l1_every or 30, "e2": org.crm_l2_every or 60,
     }
 
 
@@ -199,8 +202,10 @@ def compose(label: str, day: date, counts: dict[str, int], level_min: int
 
 
 # ------------------------------------------------------------------ run ----
-def _slot(now: datetime) -> str:
-    return now.strftime("%Y-%m-%d %H")
+def _slot(now: datetime, every: int) -> str:
+    """The `every`-minute stretch of the day this moment falls in."""
+    start = (now.hour * 60 + now.minute) // every * every
+    return f"{now:%Y-%m-%d} {start:04d}"
 
 
 def _done(db: Session, w: CrmWatch, slot: str, level: int, channel: str) -> bool:
@@ -209,11 +214,17 @@ def _done(db: Session, w: CrmWatch, slot: str, level: int, channel: str) -> bool
         CrmSend.level == level, CrmSend.channel == channel)) is not None
 
 
-def in_hours(org: Organization, now: datetime, w: CrmWatch) -> bool:
+def in_hours(org: Organization, now: datetime, w: CrmWatch, every: int = 60) -> bool:
+    """Is this stretch one that starts between the first and last hour?
+
+    With the last hour 18, the stretch that begins at 18:00 is sent and the
+    one that begins at 18:30 is not — "9 am to 6 pm" ends at six.
+    """
     s = settings(org)
     if w.sunday_off and now.weekday() == 6:
         return False
-    return s["h_from"] <= now.hour <= s["h_to"]
+    start = (now.hour * 60 + now.minute) // every * every
+    return s["h_from"] * 60 <= start <= s["h_to"] * 60
 
 
 def read_watch(db: Session, w: CrmWatch, now: datetime | None = None
@@ -245,36 +256,48 @@ def read_watch(db: Session, w: CrmWatch, now: datetime | None = None
 
 def run_watch(db: Session, org: Organization, w: CrmWatch, now: datetime,
               send: bool = True, force: bool = False) -> dict:
-    """One company, one hour. Reads once, then tells each level what it owes.
+    """One company, one moment. Reads once, then tells each level what it owes.
 
-    A message the log says went (or failed) in this hour is not repeated —
-    a restart at ten past nine does not send nine o'clock's message twice.
+    Each level has its own rhythm — the first person every 30 minutes, the
+    second every hour — and each rhythm is cut into stretches of the day
+    (09:00-09:29, 09:30-09:59 ...). A message the log says went (or failed)
+    in a level's current stretch is not repeated, so a restart at ten past
+    nine does not send nine o'clock's message twice.
     `force` is the "Send now" button; it ignores the hours and the log.
     """
     s = settings(org)
-    slot = _slot(now)
-    out = {"label": w.label, "slot": slot, "levels": [], "ok": True}
-    if not force:
-        if not w.active or not in_hours(org, now, w) or _done(db, w, slot, 0, "read"):
+    every = {1: s["e1"], 2: s["e2"]}
+    slot = {lv: _slot(now, every[lv]) for lv in (1, 2)}
+    out = {"label": w.label, "slot": slot[1], "levels": [], "ok": True}
+    if force:
+        due = {1, 2}
+    else:
+        due = {lv for lv in (1, 2) if w.active and in_hours(org, now, w, every[lv])
+               and not _done(db, w, slot[lv], lv, "read")}
+        if not due:
             out["skipped"] = True
             return out
     got = read_watch(db, w, now)
     if not got["ok"]:
         out.update(ok=False, why=got["why"])
         if not force:
-            db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot, level=0,
-                           channel="read", status="failed", error=got["why"][:400]))
+            for lv in due:
+                db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot[lv], level=lv,
+                               channel="read", status="failed", error=got["why"][:400]))
             db.commit()
         return out
     if not force:
-        db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot, level=0,
-                       channel="read", status="sent"))
+        for lv in due:
+            db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot[lv], level=lv,
+                           channel="read", status="sent"))
         db.commit()
 
     users = {u.id: u for u in db.scalars(select(User).where(
         User.id.in_([i for i in (s["l1"], s["l2"]) if i]))).all()} if (
         s["l1"] or s["l2"]) else {}
     for level, uid, minutes in ((1, s["l1"], s["m1"]), (2, s["l2"], s["m2"])):
+        if level not in due:
+            continue
         counts, no_time = count_pending(got["rows"], w, now, minutes)
         who = users.get(uid)
         info = {"level": level, "minutes": minutes, "counts": counts,
@@ -293,7 +316,7 @@ def run_watch(db: Session, org: Organization, w: CrmWatch, now: datetime,
             if (channel == "email" and not s["email"]) or \
                (channel == "whatsapp" and not s["wa"]):
                 continue
-            if not force and _done(db, w, slot, level, channel):
+            if not force and _done(db, w, slot[level], level, channel):
                 continue
             if channel == "email":
                 to = (who.email or "").strip()
@@ -303,7 +326,7 @@ def run_watch(db: Session, org: Organization, w: CrmWatch, now: datetime,
                 to = whatsapp.number(who.phone or "")
                 ok, why = (whatsapp.send(to, wa_vars, template=WA_TEMPLATE)
                            if to else (False, "No valid mobile number."))
-            db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot, level=level,
+            db.add(CrmSend(org_id=org.id, watch_id=w.id, slot=slot[level], level=level,
                            channel=channel, to_name=who.name, to_addr=to,
                            pending=info["total"], status="sent" if ok else "failed",
                            error=None if ok else (why or "")[:400], body=text))

@@ -119,6 +119,8 @@ ADDITIONS = {
         ("crm_to_hour", "INTEGER"),
         ("crm_email_on", "BOOLEAN"),
         ("crm_wa_on", "BOOLEAN"),
+        ("crm_l1_every", "INTEGER"),
+        ("crm_l2_every", "INTEGER"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

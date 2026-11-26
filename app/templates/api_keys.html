@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}API keys · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>API keys</h1>
+  <div class="m">A key lets another program (or an AI agent) use GCS Autopilot without a login.
+    Treat it like a password: anyone who has it can do what it allows.</div></div></div>
+
+{% if new_key %}
+<div class="card" style="margin-bottom:14px;border-left:4px solid #15803d">
+  <strong>Key “{{ new_key.name }}” — copy it now. It is shown only this once.</strong>
+  <div style="margin:8px 0"><code id="thekey" style="font-size:15px;word-break:break-all">{{ new_key.key }}</code></div>
+  <button class="btn" type="button" onclick="navigator.clipboard.writeText(document.getElementById('thekey').textContent);this.textContent='Copied'">Copy</button>
+  <div class="m" style="margin-top:8px">Send it with every request as the header <code>Authorization: Bearer {{ new_key.key[:10] }}…</code>
+    (your whole key). Address: <code>{{ base }}/api/v1/</code></div>
+</div>
+{% endif %}
+
+<form method="post" action="/api-keys/new" class="card searchbar" style="margin-bottom:14px">
+  <div class="fb-f"><label>Name (what will use it)</label><input name="name" required maxlength="80" placeholder="e.g. Sales AI agent"></div>
+  <div class="fb-f"><label>Acts as</label>
+    <select name="acting" required><option value="">— choose —</option>
+      {% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+    <div class="m">Tasks it creates are assigned by this person.</div></div>
+  <div class="fb-f"><label>It may</label>
+    {% for k, label in scopes.items() %}<label style="display:block"><input type="checkbox" name="scope" value="{{ k }}"> {{ label }}</label>{% endfor %}</div>
+  <div class="acts"><button class="btn">Make key</button></div>
+</form>
+
+<div class="card"><strong>Keys</strong>
+  <table class="tbl" style="margin-top:8px"><tr><th>Name</th><th>Starts with</th><th>May</th><th>Acts as</th><th>Last used</th><th>Calls</th><th></th></tr>
+  {% for k in keys %}<tr>
+    <td>{{ k.name }}{% if k.revoked_at %} <span class="overdue">revoked</span>{% endif %}</td>
+    <td><code>{{ k.prefix }}…</code></td>
+    <td>{% for s in k.scopes.split(',') if s %}{{ scopes.get(s, s) }}{{ ', ' if not loop.last }}{% endfor %}</td>
+    <td>{{ k.acting_user.name }}</td>
+    <td>{{ k.last_used_at.strftime('%d/%m/%Y %I:%M %p') if k.last_used_at else 'never' }}</td>
+    <td>{{ k.use_count }}</td>
+    <td>{% if not k.revoked_at %}<form method="post" action="/api-keys/{{ k.id }}/revoke" onsubmit="return confirm('Revoke this key? Whatever uses it stops working.')"><button class="btn">Revoke</button></form>{% endif %}</td>
+  </tr>{% else %}<tr><td colspan="7" class="m">No keys yet.</td></tr>{% endfor %}</table>
+</div>
+{% endblock %}

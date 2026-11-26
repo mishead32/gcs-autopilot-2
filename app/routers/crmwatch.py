@@ -52,6 +52,7 @@ def page(request: Request, user: User = Depends(manager_up),
 @router.post("/pending-calls/settings")
 def save_settings(request: Request, l1: int = Form(0), l2: int = Form(0),
                   m1: int = Form(30), m2: int = Form(60),
+                  e1: int = Form(30), e2: int = Form(60),
                   h_from: int = Form(9), h_to: int = Form(18),
                   on: str = Form(""), email: str = Form(""), wa: str = Form(""),
                   user: User = Depends(require_right(Right.MANAGE_USER)),
@@ -64,6 +65,9 @@ def save_settings(request: Request, l1: int = Form(0), l2: int = Form(0),
         if uid and (db.get(User, uid) or User(org_id=-1)).org_id != org.id:
             raise HTTPException(400, "Pick people from the list.")
     org.crm_l1_user_id, org.crm_l2_user_id = (l1 or None), (l2 or None)
+    if not (10 <= e1 <= 240 and 10 <= e2 <= 240):
+        raise HTTPException(400, "Send every: between 10 and 240 minutes.")
+    org.crm_l1_every, org.crm_l2_every = e1, e2
     org.crm_l1_min, org.crm_l2_min = m1, m2
     org.crm_from_hour, org.crm_to_hour = h_from, h_to
     org.crm_on, org.crm_email_on, org.crm_wa_on = bool(on), bool(email), bool(wa)

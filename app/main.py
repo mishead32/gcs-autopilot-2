@@ -27,7 +27,7 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       detective as detective_router,
                       escalation as escalation_router,
                       cmd as cmd_router,
-                      approvals as approvals_router, initiatives as initiatives_router, crmwatch as crmwatch_router)
+                      approvals as approvals_router, initiatives as initiatives_router, crmwatch as crmwatch_router, apikeys as apikeys_router, api_v1 as api_v1_router)
 from .services import recurring
 from .services import detective
 from .services import flowsheet
@@ -613,6 +613,8 @@ app.include_router(cmd_router.router)
 app.include_router(approvals_router.router)
 app.include_router(initiatives_router.router)
 app.include_router(crmwatch_router.router)
+app.include_router(apikeys_router.router)
+app.include_router(api_v1_router.router)
 app.include_router(escalation_router.router)
 
 

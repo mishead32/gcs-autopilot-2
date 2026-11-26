@@ -83,6 +83,9 @@
       <a class="{{ 'active' if p.startswith('/pending-calls') }}" href="/pending-calls"
          title="Pending calls escalation from the CRM sheets">
         <span class="ic">☎</span><span class="lb">Pending Calls Escalation</span></a>
+      {% if user.has_manage_user %}<a class="{{ 'active' if p.startswith('/api-keys') }}" href="/api-keys"
+         title="Keys for other programs">
+        <span class="ic">⚿</span><span class="lb">API keys</span></a>{% endif %}
       <a class="{{ 'active' if p.startswith('/initiatives') }}" href="/initiatives"
          title="Self-initiative form answers">
         <span class="ic">★</span><span class="lb">Self-Initiative</span></a>

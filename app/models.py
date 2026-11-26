@@ -401,6 +401,8 @@ class Organization(Base):
     crm_to_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crm_email_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     crm_wa_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    crm_l1_every: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crm_l2_every: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     @property
     def esc_day_list(self) -> list[int]:
@@ -2620,3 +2622,29 @@ class CrmSend(Base):
     error: Mapped[str | None] = mapped_column(String(400), nullable=True)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+
+
+class ApiKey(Base):
+    """A key another program uses to talk to GCS Autopilot.
+
+    Only a SHA-256 of the key is kept, never the key: it is shown once, when
+    made, and a lost one is replaced rather than recovered. `acting_user_id`
+    is who the key acts AS — tasks it creates are assigned by that person
+    and need that person's rights.
+    """
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    prefix: Mapped[str] = mapped_column(String(16))             # first characters, to tell keys apart
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scopes: Mapped[str] = mapped_column(String(120), default="")  # scores,tasks_read,tasks_write,flows_write
+    acting_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    acting_user: Mapped["User"] = relationship(foreign_keys=[acting_user_id])
