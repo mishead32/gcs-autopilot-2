@@ -17031,5 +17031,45 @@ _pg = admin.get("/api-keys")
 check("the keys page opens and shows names, not keys",
       _pg.status_code == 200 and "Test agent" in _pg.text and _kAll not in _pg.text)
 
+print("\n== API keys: add a note, attach proof, mark done ==")
+_kUpd = _keyfor("Updater", ["tasks_update", "tasks_read"], _bossA)
+_kAmit = _keyfor("Amit's updater", ["tasks_update", "tasks_read"], _amitA)
+_mk2 = _api.post("/api/v1/tasks", headers=H(_kAll), json={
+    "title": f"API proof task {RUN}", "doer_emails": ["amit@gcs.local"],
+    "due_at": "2026-12-30T18:00:00", "requires_attachment": True})
+_pid = _mk2.json()["created"][0]["id"]
+_kScore2 = _keyfor("Score reader 2", ["scores"], _bossA)
+check("a key without the update permission cannot add a note",
+      _api.post(f"/api/v1/tasks/{_pid}/notes", headers=H(_kScore2), json={"body": "x"}).status_code == 403)
+_n = _api.post(f"/api/v1/tasks/{_pid}/notes", headers=H(_kUpd), json={"body": "Called the vendor"})
+check("a note is added", _n.status_code == 201, _n.text)
+_c = _api.get(f"/api/v1/tasks/{_pid}", headers=H(_kUpd)).json()["comments"]
+check("and shows in the task's notes", any(x["body"] == "Called the vendor" for x in _c))
+check("an empty note is refused", _api.post(f"/api/v1/tasks/{_pid}/notes", headers=H(_kUpd), json={"body": ""}).status_code == 422)
+_r = _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kAmit), json={"note": "done"})
+check("completing without proof is refused when proof is required", _r.status_code == 400 and "proof" in _r.text, _r.text)
+_png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
+_up = _api.post(f"/api/v1/tasks/{_pid}/proof", headers=H(_kAmit), files={"file": ("proof.png", _png, "image/png")})
+check("proof file uploads", _up.status_code == 201 and _up.json()["attachment_id"], _up.text)
+_bad = _api.post(f"/api/v1/tasks/{_pid}/proof", headers=H(_kAmit), files={"file": ("x.exe", b"MZ", "application/x-msdownload")})
+check("a disallowed file type is refused", _bad.status_code == 400, _bad.text)
+_lk = _api.post(f"/api/v1/tasks/{_pid}/proof-link", headers=H(_kAmit), json={"url": "https://drive.google.com/x", "name": "Drive proof"})
+check("a proof link is accepted", _lk.status_code == 201, _lk.text)
+check("a javascript: link is refused", _api.post(f"/api/v1/tasks/{_pid}/proof-link", headers=H(_kAmit), json={"url": "javascript:alert(1)"}).status_code == 400)
+_r = _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kAmit), json={})
+check("a note is still required", _r.status_code == 400, _r.text)
+with _slA() as _d:
+    from app.models import Right as _RgA
+    _someoneId = next(u.id for u in _d.scalars(_selA(_UsA).where(_UsA.org_id == _d.get(_UsA, _amitA).org_id, _UsA.active.is_(True))).all()
+                      if u.id not in (_amitA, _bossA) and not u.has(_RgA.EDIT_TASK))
+_kOther = _keyfor("Other person", ["tasks_update"], _someoneId)
+_r = _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kOther), json={"note": "x"})
+check("someone who is not the doer cannot complete it", _r.status_code == 403, _r.text)
+_r = _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kAmit), json={"note": "Vendor confirmed, photo attached"})
+check("the doer's key marks it done", _r.status_code == 200 and _r.json()["task"]["status"] in ("completed", "submitted"), _r.text)
+check("and the note is kept", _r.json()["task"]["completion_note"] == "Vendor confirmed, photo attached")
+check("completing twice is refused or harmless",
+      _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kAmit), json={"note": "again"}).status_code in (200, 400))
+
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

@@ -4,7 +4,7 @@ Every call is `Authorization: Bearer <key>` (or `X-API-Key`). A key carries
 permissions, and acts as one person: tasks it creates are assigned by that
 person and need that person's right to create tasks.
 
-Answers are JSON. Nothing here uploads files — a start question that wants a
+Answers are JSON. Proof files go up as a multipart upload; a start question that wants a
 file cannot be answered through it.
 """
 from __future__ import annotations
@@ -12,15 +12,16 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import (ApiKey, Branch, Flow, Priority, Right, Task, TaskComment,
+from ..models import (ApiKey, AuditState, Attachment, Branch, LINK_STORAGE, read_link, Flow, Priority, Right, Task, TaskComment,
                       TaskSource, TaskStatus, User, CONTEXT_PEOPLE)
-from ..services import apikeys, flowform, holidays, notify, scoring
+from .. import clock
+from ..services import apikeys, attach, flowform, holidays, notify, scoring, shrink, storage
 from ..services import flows as flow_svc
 
 router = APIRouter(prefix="/api/v1")
@@ -231,6 +232,148 @@ def task_create(body: NewTask, key: ApiKey = Depends(key_for("tasks_write")),
         made.append(t)
     db.commit()
     return {"created": [_task(t) for t in made]}
+
+
+# ------------------------------------------- notes, proof, mark done ------
+def _task_to_act_on(db: Session, key: ApiKey, task_id: int, *, doer_only=False) -> Task:
+    """The task, if the person this key acts as may work on it.
+
+    Same people as the website: the doer, and anybody who may edit tasks
+    (owners and admins always). Adding a note or proof also lets the assigner."""
+    t = db.get(Task, task_id)
+    if not t or t.org_id != key.org_id:
+        raise HTTPException(404, "No such task.")
+    u = key.acting_user
+    ok = (t.doer_id == u.id or u.has(Right.EDIT_TASK)
+          or (not doer_only and t.assigner_id == u.id))
+    if not ok:
+        raise HTTPException(403, f"{u.name}, whom this key acts as, may not "
+                                 "work on this task.")
+    return t
+
+
+def _not_closed(t: Task):
+    if t.status == TaskStatus.CANCELLED:
+        raise HTTPException(400, "This task is cancelled.")
+    if t.status == TaskStatus.ON_HOLD:
+        raise HTTPException(400, "This step's FMS run is on hold — resume it first.")
+
+
+class NoteIn(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/tasks/{task_id}/notes", status_code=201)
+def task_note(task_id: int, body: NoteIn,
+              key: ApiKey = Depends(key_for("tasks_update")),
+              db: Session = Depends(get_db)):
+    t = _task_to_act_on(db, key, task_id)
+    c = TaskComment(task_id=t.id, author_id=key.acting_user_id,
+                    body=body.body.strip())
+    db.add(c)
+    db.commit()
+    return {"ok": True, "task_id": t.id, "note_id": c.id}
+
+
+@router.post("/tasks/{task_id}/proof", status_code=201)
+async def task_proof(task_id: int, file: UploadFile = File(...),
+                     key: ApiKey = Depends(key_for("tasks_update")),
+                     db: Session = Depends(get_db)):
+    """Attach one file (photo, screenshot, PDF…) as proof. Multipart upload,
+    field name `file`. Same size and type limits as the website."""
+    t = _task_to_act_on(db, key, task_id)
+    _not_closed(t)
+    if storage.mode() not in ("local", "db"):
+        raise HTTPException(400, "File uploads are not available on this server.")
+    data = await file.read()
+    name = (file.filename or "proof.png").strip()
+    data, ctype, name = shrink.shrink(data, file.content_type or "", name)
+    err = storage.check(name, ctype, len(data))
+    if err:
+        raise HTTPException(400, err)
+    row = attach.save(db, t.id, key.acting_user_id, name, ctype, data)
+    db.commit()
+    return {"ok": True, "task_id": t.id, "attachment_id": row.id,
+            "filename": row.filename, "size": row.size}
+
+
+class ProofLink(BaseModel):
+    url: str
+    name: str = ""
+
+
+@router.post("/tasks/{task_id}/proof-link", status_code=201)
+def task_proof_link(task_id: int, body: ProofLink,
+                    key: ApiKey = Depends(key_for("tasks_update")),
+                    db: Session = Depends(get_db)):
+    """Attach proof that lives elsewhere (a Drive link, say)."""
+    t = _task_to_act_on(db, key, task_id)
+    _not_closed(t)
+    link, problem = read_link(body.url)
+    if problem or not link:
+        raise HTTPException(400, problem or "Give a url starting with http:// or https://.")
+    row = Attachment(task_id=t.id, uploaded_by_id=key.acting_user_id,
+                     filename=(body.name.strip() or "Link")[:250],
+                     stored_name=link, size=0, content_type="",
+                     storage=LINK_STORAGE)
+    db.add(row)
+    db.commit()
+    return {"ok": True, "task_id": t.id, "attachment_id": row.id}
+
+
+class DoneIn(BaseModel):
+    note: str = ""
+    decision: str = ""        # only for an FMS decision step: pass or fail
+
+
+@router.post("/tasks/{task_id}/complete")
+def task_complete(task_id: int, body: DoneIn,
+                  key: ApiKey = Depends(key_for("tasks_update")),
+                  db: Session = Depends(get_db)):
+    """Mark a task done — the same as the doer pressing Submit.
+
+    A task that needs proof is refused until proof is attached (use /proof
+    first) and a note is given. A task that needs an audit goes to the
+    auditor as "submitted" rather than "completed"."""
+    from .tasks import close_help_ticket     # here: tasks.py is a heavy import
+    t = _task_to_act_on(db, key, task_id, doer_only=True)
+    _not_closed(t)
+    if t.status in (TaskStatus.COMPLETED,):
+        raise HTTPException(400, "Task is already closed.")
+    note = (body.note or "").strip()
+    if t.requires_attachment and not t.proof_files:
+        raise HTTPException(400, "This task needs proof first — attach it with "
+                                 "POST /tasks/{id}/proof or /proof-link, then complete it.")
+    if t.requires_attachment and not note:
+        raise HTTPException(400, "Give a short note saying what was done.")
+    t.completion_note = note or None
+    boss = key.acting_user
+    step = t.flow_step
+    if step is not None and step.is_decision:
+        choice = (body.decision or "").strip().lower()
+        if choice not in ("pass", "fail"):
+            raise HTTPException(400, f"Send decision: pass ({step.yes_label}) "
+                                     f"or fail ({step.no_label}).")
+        t.decision = choice
+        label = step.yes_label if choice == "pass" else step.no_label
+        db.add(TaskComment(task_id=t.id, author_id=boss.id, body=f"Decision: {label}."))
+    if t.doer_id != boss.id:
+        db.add(TaskComment(task_id=t.id, author_id=boss.id,
+                           body=f"Marked done through the API key “{key.name}”."))
+    t.submitted_at = clock.now()
+    if t.requires_audit:
+        t.status = TaskStatus.SUBMITTED
+        t.audit_state = AuditState.PENDING
+        db.commit()
+    else:
+        t.status = TaskStatus.COMPLETED
+        t.closed_at = t.submitted_at
+        close_help_ticket(db, t)
+        db.commit()
+    if t.flow_instance_id:
+        flow_svc.advance_flow(db, t)
+    db.refresh(t)
+    return {"ok": True, "task": _task(t)}
 
 
 # --------------------------------------------------------------- flows ----

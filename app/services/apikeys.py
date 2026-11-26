@@ -17,6 +17,7 @@ SCOPES = {
     "scores": "Read scores and reports",
     "tasks_read": "Read tasks",
     "tasks_write": "Create tasks",
+    "tasks_update": "Mark tasks done, add notes, attach proof",
     "flows_write": "Start FMS runs",
 }
 LIMIT_PER_MINUTE = 120
