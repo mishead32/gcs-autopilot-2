@@ -1,52 +1,51 @@
 {% extends "base.html" %}
 {% from "_emailframe.html" import email_frame, email_frame_script %}
-{% block title %}FMS nobody is starting · {{ APP_NAME }}{% endblock %}
+{% block title %}FMS working status · {{ APP_NAME }}{% endblock %}
 {% block content %}
 
 {% from "_export.html" import excel_btn %}
 <div class="page-head">
   <div>
-    <h1>FMS nobody is starting</h1>
-    <p class="sub">Every flow whose start form has had no entry for
-      {{ threshold }} working day(s) or more — at each company separately.
+    <h1>FMS working status</h1>
+    <p class="sub">{{ shows[show] }} — no first entry for
+      {{ threshold }} working day(s) or more, steps counted when overdue and
+      not marked yet; at each company separately.
       {% if is_today %}As at today.{% else %}<strong>As at
       {{ day|dt('%d/%m/%Y') }}</strong> — what this report would have said
       that day.{% endif %}</p>
   </div>
   <div>
     {{ excel_btn('/reports/fms-entries?export=xlsx&on=' ~ on ~ '&gap=' ~
-                 threshold ~ '&company=' ~ company,
+                 threshold ~ '&company=' ~ company ~ '&show=' ~ show,
                  title='Download these lines — one tab per company, '
                        'and everything together on the first') }}
     <a class="btn ghost" href="/escalation">Settings &amp; email</a>
   </div>
 </div>
 
-{# Why this exists at all, said once. Somebody opening it for the first
-   time reasonably assumes it is another view of overdue work, and it is
-   the opposite: it is about work that was never created. #}
 <div class="card">
   <p class="m" style="margin:0">
-    Escalation finds work somebody was given and has not done. This finds
-    the other failure — a flow that has quietly stopped being followed.
-    No task is overdue, because no task was ever created, so nothing else
-    in the software notices. Counted <strong>per flow and per company</strong>:
-    an entry at one company does not clear another, which is how a company
-    that has stopped altogether would otherwise hide behind one that has not.
+    An FMS is <strong>not working</strong> when nobody has made a first entry
+    for the set number of working days <strong>and</strong> at least one of its
+    steps is overdue and has not been marked yet. Both numbers are shown for
+    every line. Counted <strong>per flow and per company</strong>: an entry
+    at one company does not clear another. Use <em>Show</em> below to look at
+    flows that meet either condition, or only one of them.
   </p>
 </div>
 
 <div class="grid g3">
   <div class="kpi {{ 'bad' if rows else 'ok' }}">
-    <div class="l">Lines to report</div>
+    <div class="l">FMS not working</div>
     <div class="n">{{ rows|length }}</div>
     <div class="m">flow &amp; company pairs</div></div>
   <div class="kpi"><div class="l">Pairs watched</div>
     <div class="n">{{ covered }}</div>
     <div class="m">active flows × their companies</div></div>
-  <div class="kpi"><div class="l">Worst gap</div>
-    <div class="n">{{ rows|map(attribute='days')|max if rows else 0 }}</div>
-    <div class="m">working days with nothing entered</div></div>
+  <div class="kpi"><div class="l">Steps overdue, not marked</div>
+    <div class="n">{{ rows|sum(attribute='overdue') if rows else 0 }}</div>
+    <div class="m">on the lines below · worst gap
+      {{ rows|map(attribute='days')|max if rows else 0 }} working days</div></div>
 </div>
 
 {# The date is the reason this is a report and not only an email. The
@@ -73,6 +72,14 @@
     </select>
   </div>
   <div class="fb-f">
+    <label>Show</label>
+    <select name="show">
+      {% for k, label in shows.items() %}
+      <option value="{{ k }}" {{ 'selected' if show == k }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fb-f">
     <label>Group by</label>
     <select name="by">
       <option value="company" {{ 'selected' if by == 'company' }}>Company</option>
@@ -81,7 +88,7 @@
   </div>
   <div class="acts">
     <button class="btn">Show</button>
-    {% if not is_today or threshold != org.quiet_gap or company %}
+    {% if not is_today or threshold != org.quiet_gap or company or show != 'both' %}
     <a class="btn ghost" href="/reports/fms-entries">Back to today</a>
     {% endif %}
   </div>
@@ -101,24 +108,26 @@
 {% for name, lines in groups %}
 <h3 class="cogroup">{{ name }} <span class="m">({{ lines|length }})</span></h3>
 <div class="table-wrap"><table>
-  <tr><th>{{ 'FMS name' if by == 'company' else 'Company' }}</th>
-      <th>Days with no entry</th><th>Last entry</th></tr>
+  <tr><th>Sno</th>
+      <th>{{ 'FMS name' if by == 'company' else 'Company' }}</th>
+      <th>No. of days first entry not made</th>
+      <th>No. of steps overdue but not marked</th></tr>
   {% for g in lines %}
   <tr>
+    <td class="m">{{ loop.index }}</td>
     <td><strong>{{ g.flow.name if by == 'company' else g.company }}</strong></td>
     {# Red past a working week: by then it is not a slow week, it is a
        process that has stopped. #}
     <td class="{{ 'overdue' if g.days >= 5 }}">{{ g.days_label }}</td>
-    <td class="m">{{ g.since }}</td>
+    <td class="{{ 'overdue' if g.overdue }}">{{ g.overdue }}</td>
   </tr>
   {% endfor %}
 </table></div>
 {% endfor %}
 {% else %}
 <div class="empty">
-  Every active flow had an entry at every company within the
-  {{ threshold }} working day(s) before {{ day|dt('%d/%m/%Y') }}.
-  {% if is_today %}Nothing would be sent this morning.{% endif %}
+  No FMS matches "{{ shows[show] }}" as at {{ day|dt('%d/%m/%Y') }}
+  ({{ threshold }} working day(s)).
 </div>
 {% endif %}
 
@@ -192,7 +201,7 @@
 <h2>The email itself</h2>
 <div class="card">
   <div class="esc-subject">{{ subject }}</div>
-  {{ email_frame(body_html, 'FMS entry report') }}
+  {{ email_frame(body_html, 'FMS working status') }}
   <details style="margin-top:10px">
     <summary class="m">The plain-text version that goes with it</summary>
     <div class="esc-body" style="margin-top:8px">{{ body }}</div>

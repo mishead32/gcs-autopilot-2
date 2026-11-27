@@ -110,8 +110,8 @@
        shown it, which is the same right the page itself requires. #}
     {% if user.has_manage_user %}
     <a class="{{ 'active' if p == '/reports/fms-entries' }}"
-       href="/reports/fms-entries" title="FMS with no entries">
-      <span class="ic">⌛</span><span class="lb">FMS inactivity</span></a>
+       href="/reports/fms-entries" title="FMS working status">
+      <span class="ic">⌛</span><span class="lb">FMS working status</span></a>
     {% endif %}
     {% if user.can_see_all_reports or user.can_follow_up %}
     <a class="{{ 'active' if p == '/reports/followups' }}" href="/reports/followups" title="Follow-up report">

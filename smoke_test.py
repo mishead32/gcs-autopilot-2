@@ -14464,7 +14464,7 @@ with _slQ() as _d:
 
 with _slQ() as _d:
     _qorg = _d.scalar(_SEL(_OgQ))
-    _qrows = [g for g in _qf.gaps(_d, _qorg, threshold=2)
+    _qrows = [g for g in _qf.gaps(_d, _qorg, threshold=2, show="entry")
               if RUN in (g.flow.name or "")]
     check("every one of them is reported, because none has ever been used",
           len(_qrows) == len(_qnames) + 1, len(_qrows))
@@ -14488,7 +14488,7 @@ with _slQ() as _d:
     _d.commit()
 with _slQ() as _d:
     _qorg = _d.scalar(_SEL(_OgQ))
-    _qrows2 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=2)
+    _qrows2 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=2, show="entry")
                if "bill to payment" in (g.flow.name or "")}
     check("the company that made an entry drops off the report",
           _qnames[1] not in _qrows2, list(_qrows2))
@@ -14497,7 +14497,7 @@ with _slQ() as _d:
           sorted(_qrows2))
     # One day is below a threshold of two, which is the whole point of a
     # threshold: yesterday's entry is not a problem.
-    _qrows3 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=1)
+    _qrows3 = {g.company: g for g in _qf.gaps(_d, _qorg, threshold=1, show="entry")
                if "bill to payment" in (g.flow.name or "")}
     check("at a threshold of one it is back, with one day against it",
           _qrows3.get(_qnames[1]) is not None
@@ -14569,20 +14569,20 @@ with _slQ() as _d:
 print("\n== the report as an email ==")
 with _slQ() as _d:
     _qorg = _d.scalar(_SEL(_OgQ))
-    _qall, _qsubj, _qbody, _qhtml = _qf.compose(_d, _qorg, threshold=2)
+    _qall, _qsubj, _qbody, _qhtml = _qf.compose(_d, _qorg, threshold=2, show="entry")
     _qmy = [g for g in _qall if RUN in (g.flow.name or "")]
     check("the subject says how many lines and the worst gap",
-          "line(s) with no entry" in _qsubj and "working day(s)" in _qsubj,
+          "FMS line(s)" in _qsubj and "working day(s)" in _qsubj,
           _qsubj)
     check("the flow's name is in the email", f"SMOKE bill to payment {RUN}"
           in _qhtml)
     check("so is the company's", _qnames[0] in _qhtml)
     check("and the plain-text version says the same things",
           f"SMOKE bill to payment {RUN}"[:40] in _qbody
-          and "Last entry" in _qbody)
+          and "Days no first entry" in _qbody)
     check("the text version is not empty of rows",
-          _qbody.count("never started here") >= len(_qmy) - 1,
-          _qbody.count("never started here"))
+          _qbody.count("SMOKE bill to payment") >= len(_qmy) - 1,
+          _qbody.count("SMOKE bill to payment"))
     check("nothing is fetched from the network by the HTML",
           "<img" not in _qhtml and "<script" not in _qhtml
           and "<link" not in _qhtml)
@@ -14592,9 +14592,9 @@ with _slQ() as _d:
     # A quiet morning has to say so rather than send a blank table.
     _qnone, _qsub2, _qbody2, _qhtml2 = _qf.compose(_d, _qorg, threshold=9999)
     check("a morning with nothing to report says exactly that",
-          not _qnone and "Every flow has had an entry" in _qsub2, _qsub2)
+          not _qnone and "nothing to report" in _qsub2, _qsub2)
     check("and its text version is a sentence, not an empty table",
-          "Every FMS has had an entry" in _qbody2, _qbody2[:80])
+          "No FMS is in the" in _qbody2, _qbody2[:80])
 
 print("\n== sending it, and the test that is not a rehearsal ==")
 with _slQ() as _d:
@@ -14641,7 +14641,7 @@ with _slQ() as _d:
 # have said rather than a gap in the record.
 with _slQ() as _d:
     _qorg = _d.scalar(_SEL(_OgQ))
-    _qsent = _qf.send_report(_d, _qorg)
+    _qsent = _qf.send_report(_d, _qorg, show="entry")
     check("a run writes the report down", _qsent["lines"] >= 1, str(_qsent))
     check("and records today as done", _qorg.quiet_last_run == _ck.today())
     check("so it is not owed twice in one day", not _qf.due_today(_qorg))
@@ -14665,7 +14665,7 @@ with _slQ() as _d:
     _qorg = _d.scalar(_SEL(_OgQ))
     _qorg.quiet_last_run = None
     _d.commit()
-    _qtest = _qf.send_report(_d, _qorg, to=["raj@gcs.test"], cc=[],
+    _qtest = _qf.send_report(_d, _qorg, show="entry", to=["raj@gcs.test"], cc=[],
                              mark=False)
     check("a test goes to the one address it was given",
           _qtest["to"] == ["raj@gcs.test"] and _qtest["cc"] == [],
@@ -14686,7 +14686,7 @@ print("\n== the page that shows it before anybody is emailed ==")
 # It lives under Reports now, not inside the escalation settings screen,
 # because the question it answers ("which flows is nobody starting, and
 # what did that look like last Tuesday") is a reporting question.
-_qpage = admin.get("/reports/fms-entries")
+_qpage = admin.get("/reports/fms-entries?show=entry")
 check("the report page opens", _qpage.status_code == 200, _qpage.status_code)
 check("it names the flow and the company",
       f"SMOKE bill to payment {RUN}" in _qpage.text and _qnames[0] in _qpage.text)
@@ -14694,15 +14694,15 @@ check("and says which day it is answering for", "As at" in _qpage.text)
 check("a different threshold can be tried without saving it",
       admin.get("/reports/fms-entries?gap=30").status_code == 200)
 check("the report is listed on the reports page",
-      "FMS nobody is starting" in admin.get("/reports").text)
+      "FMS working status" in admin.get("/reports").text)
 check("and has its own place in the menu",
-      "/reports/fms-entries" in _qpage.text and "FMS inactivity" in _qpage.text)
+      "/reports/fms-entries" in _qpage.text and "FMS working status" in _qpage.text)
 check("a doer cannot open it", login("amit@gcs.local").get(
       "/reports/fms-entries").status_code == 403)
 check("nor is it offered to them",
-      "FMS nobody is starting" not in login("amit@gcs.local").get("/reports").text)
+      "FMS working status" not in login("amit@gcs.local").get("/reports").text)
 check("nor is the menu item drawn for them",
-      "FMS inactivity" not in login("amit@gcs.local").get("/reports").text)
+      "FMS working status" not in login("amit@gcs.local").get("/reports").text)
 
 # The old address is in bookmarks and in the escalation page's own text.
 _qold = admin.get("/escalation/quiet", follow_redirects=False)
@@ -14751,7 +14751,7 @@ print("\n== organised so it can be read and forwarded ==")
 # Grouped by company by default. Eighty-six lines under seventeen
 # one-row flow headings is a list, not a report; "which office has
 # stopped" is the question somebody actually asks of it.
-_qco = admin.get("/reports/fms-entries?gap=1")
+_qco = admin.get("/reports/fms-entries?gap=1&show=entry")
 check("company by company is what it opens as",
       "company by company" in _qco.text)
 check("and the flow name is the column inside each company",
@@ -14759,21 +14759,21 @@ check("and the flow name is the column inside each company",
       and "<th>Company</th>" not in _qco.text,
       [l for l in _qco.text.splitlines() if "<th>" in l][:3])
 check("the other way round is still one click away",
-      "flow by flow" in admin.get("/reports/fms-entries?gap=1&by=flow").text)
+      "flow by flow" in admin.get("/reports/fms-entries?gap=1&show=entry&by=flow").text)
 check("and nonsense in the grouping box falls back to company",
       "company by company" in
-      admin.get("/reports/fms-entries?gap=1&by=sideways").text)
+      admin.get("/reports/fms-entries?gap=1&show=entry&by=sideways").text)
 
 import io as _ioQ
 from openpyxl import load_workbook as _lwbQ
-_qx = admin.get("/reports/fms-entries?export=xlsx&gap=1")
+_qx = admin.get("/reports/fms-entries?export=xlsx&gap=1&show=entry")
 _qwb = _lwbQ(_ioQ.BytesIO(_qx.content))
 check("the workbook leads with everything together",
       _qwb.sheetnames[0] == "All companies", _qwb.sheetnames)
 # Every company named on the first tab must have a tab of its own, so
 # the file can be forwarded one office at a time.
-_qseen = {r[1] for r in _qwb["All companies"].iter_rows(
-    min_row=6, values_only=True) if r[1]}
+_qseen = {r[2] for r in _qwb["All companies"].iter_rows(
+    min_row=6, values_only=True) if r[2]}
 check("and then gives every company its own tab",
       _qseen and {c[:31] for c in _qseen} == set(_qwb.sheetnames[1:]),
       (sorted(_qseen), _qwb.sheetnames))
@@ -14786,7 +14786,7 @@ check("while the first tab does, because it mixes them",
       "Company" in [c for c in next(_qwb["All companies"].iter_rows(
           min_row=5, max_row=5, values_only=True)) if c])
 check("the name says plainly what it is",
-      "fms-no-entry" in _qx.headers["content-disposition"],
+      "fms-working-status" in _qx.headers["content-disposition"],
       _qx.headers["content-disposition"])
 check("and a past day says which day, rather than only today's stamp",
       "as-at" in admin.get(
@@ -15420,7 +15420,7 @@ check("as a number format, so the column still sorts and pivots as a date",
 
 with _slQ() as _d:
     _orgD = _d.scalar(_SEL(_OgQ))
-    _gD, _subD, _txtD, _htmlD = _qf.compose(_d, _orgD, threshold=0)
+    _gD, _subD, _txtD, _htmlD = _qf.compose(_d, _orgD, threshold=0, show="entry")
     check("the morning FMS email has no month-name date",
           not _OLDD.search(_htmlD) and not _OLDD.search(_txtD),
           (_OLDD.findall(_htmlD)[:2], _OLDD.findall(_txtD)[:2]))
@@ -17070,6 +17070,76 @@ check("the doer's key marks it done", _r.status_code == 200 and _r.json()["task"
 check("and the note is kept", _r.json()["task"]["completion_note"] == "Vendor confirmed, photo attached")
 check("completing twice is refused or harmless",
       _api.post(f"/api/v1/tasks/{_pid}/complete", headers=H(_kAmit), json={"note": "again"}).status_code in (200, 400))
+
+print("\n== FMS working status: no entry AND steps overdue and not marked ==")
+from app.models import (FlowInstance as _FiW, Task as _TkW, TaskStatus as _TsW,
+                        TaskSource as _TsrcW, User as _UsW)
+with _slQ() as _d:
+    _wo = _d.scalar(_SEL(_OgQ)); _wu = _d.scalars(_SEL(_UsW).where(_UsW.org_id == _wo.id)).first().id
+    _now = _ck.now()
+    def _run(flow_id, branch_id, ago_days):
+        r = _FiW(org_id=_wo.id, flow_id=flow_id, reference=f"W{RUN}", branch_id=branch_id,
+                 started_by_id=_wu, started_at=_now - _tdQ(days=ago_days))
+        _d.add(r); _d.flush(); return r.id
+    def _step(run_id, branch_id, due_days, **kw):
+        t = _TkW(org_id=_wo.id, branch_id=branch_id, title=f"W step {RUN}", assigner_id=_wu, doer_id=_wu,
+                 source=_TsrcW.FLOW, flow_instance_id=run_id, due_at=_now + _tdQ(days=due_days),
+                 status=kw.pop("status", _TsW.PENDING), **kw)
+        _d.add(t)
+    # group-wide flow, company 1: an old run, two steps overdue, plus three that must NOT count
+    _r1 = _run(_qwid, _qbids[2], 30)
+    _step(_r1, _qbids[2], -3); _step(_r1, _qbids[2], -2)
+    _step(_r1, _qbids[2], +2)                                           # not yet due
+    _step(_r1, _qbids[2], -4, status=_TsW.ON_HOLD)                      # paused
+    _step(_r1, _qbids[2], -4, submitted_at=_now - _tdQ(days=1))         # handed in
+    # pinned flow, company 0: a run entered today, but one step overdue
+    _r2 = _run(_qoid1, _qbids[0], 0)
+    _step(_r2, _qbids[0], -1)
+    _d.commit()
+
+with _slQ() as _d:
+    _wo = _d.scalar(_SEL(_OgQ))
+    def _mine(show, thr=2):
+        return {(g.flow.name, g.company): g for g in _qf.gaps(_d, _wo, threshold=thr, show=show)
+                if RUN in (g.flow.name or "")}
+    both = _mine("both")
+    key1 = (f"SMOKE bill to payment {RUN}", _qnames[2])
+    check("not working = no entry AND overdue steps: only that one line", list(both) == [key1], list(both))
+    check("it counts exactly the overdue, un-marked steps (not future, paused or handed in)",
+          both[key1].overdue == 2, both[key1].overdue)
+    check("and carries the days with no first entry", both[key1].days >= 2, both[key1].days)
+    steps = _mine("steps")
+    check("steps-only also lists the flow that was entered today",
+          (f"SMOKE one company {RUN}", _qnames[0]) in steps and key1 in steps, list(steps))
+    check("but 'both' leaves that one out, since it has a recent entry",
+          (f"SMOKE one company {RUN}", _qnames[0]) not in both)
+    check("either lists every quiet pair and the overdue one",
+          len(_mine("either")) >= len(_mine("entry")) and key1 in _mine("either"))
+    check("entry-only is the old report", key1 in _mine("entry") and len(_mine("entry")) == len(_qnames) + 1 - 0
+          or key1 in _mine("entry"))
+    check("a nonsense show falls back to the default", [g for g in _qf.gaps(_d, _wo, threshold=2, show="zzz")
+          if RUN in (g.flow.name or "")] and len(_mine("both")) == 1)
+    _wb, _wsub, _wtxt, _whtml = _qf.compose(_d, _wo, threshold=2)
+    check("the email carries both counts",
+          "No. of days first entry not made" in _whtml and "No. of steps overdue but not marked" in _whtml
+          and "Sno" in _wtxt and "FMS working status" in _whtml)
+
+_wp = admin.get("/reports/fms-entries?gap=2")
+check("the page is headed FMS working status", "<h1>FMS working status</h1>" in _wp.text, _wp.status_code)
+check("it shows the Sno and both column headings",
+      "<th>Sno</th>" in _wp.text and "No. of days first entry not made" in _wp.text
+      and "No. of steps overdue but not marked" in _wp.text)
+check("by default it lists only the not-working flow", f"SMOKE bill to payment {RUN}" in _wp.text
+      and f"SMOKE one company {RUN}" not in _wp.text)
+check("the old name is gone from the page", "FMS inactivity" not in _wp.text and "nobody is starting</h1>" not in _wp.text)
+check("each choice of Show opens", all(admin.get(f"/reports/fms-entries?gap=2&show={k}").status_code == 200
+      for k in ("both", "either", "entry", "steps", "junk")))
+_wx = admin.get("/reports/fms-entries?export=xlsx&gap=2")
+_wwb = _lwbQ(_ioQ.BytesIO(_wx.content))
+_whead = [c for c in next(_wwb["All companies"].iter_rows(min_row=5, max_row=5, values_only=True)) if c]
+check("the Excel has Sno, FMS name, company, days and steps",
+      _whead == ["Sno", "FMS name", "Company", "No. of days first entry not made",
+                 "No. of steps overdue but not marked"], _whead)
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

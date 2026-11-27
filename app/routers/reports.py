@@ -333,9 +333,9 @@ REPORT_CARDS = [
     # Behind the same right as the ladder, because it is read by the people
     # the ladder is read by and names no individual doer at all.
     {"key": "quiet", "url": "/reports/fms-entries", "manage_user": True,
-     "title": "7 · FMS nobody is starting",
-     "desc": "Flows with no new entry, company by company — the report "
-             "emailed each morning."},
+     "title": "7 · FMS working status",
+     "desc": "Which FMS are not working: no first entry for some days and "
+             "steps overdue but not marked — the report emailed each morning."},
 ]
 
 
@@ -360,6 +360,7 @@ def index(request: Request, user: User = Depends(current_user)):
 @router.get("/reports/fms-entries", response_class=HTMLResponse)
 def fms_entries(request: Request, on: str = "", gap: str = "",
                 company: str = "", by: str = "company", export: str = "",
+                show: str = "",
                 user: User = Depends(require_right(Right.MANAGE_USER)),
                 db: Session = Depends(get_db)):
     """Flows with no new entry — as at today, or as at any past day.
@@ -390,7 +391,8 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
         threshold = None
     limit = org.quiet_gap if threshold is None else threshold
 
-    rows = quietflows.gaps(db, org, day, limit)
+    show = quietflows.clean_show(show)
+    rows = quietflows.gaps(db, org, day, limit, show)
     pick = (company or "").strip()
     if pick.isdigit():
         rows = [g for g in rows if g.branch and g.branch.id == int(pick)]
@@ -404,29 +406,30 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
         # runs one office should be sent their own tab, not a list of
         # eighty-six lines of which four are theirs. The first tab stays
         # whole so the group picture is not lost.
-        note = (f"As at {day:%d/%m/%Y} · {limit} working day(s) or more "
-                "with nothing entered. One row per flow and company; "
+        note = (f"As at {day:%d/%m/%Y} · {quietflows.SHOWS[show]} · "
+                f"{limit} working day(s). One row per flow and company; "
                 "working days for that company, so its own Sundays and "
                 "holidays are not counted.")
         cols = [
-            ("FMS name", lambda g: g.flow.name),
-            ("Company", lambda g: g.company),
-            ("Working days with no entry", lambda g: g.days),
-            ("Last entry", lambda g: g.last_at.date() if g.last_at else ""),
-            ("Ever started here", lambda g: "Yes" if g.ever else "No"),
+            ("Sno", lambda r: r[0]),
+            ("FMS name", lambda r: r[1].flow.name),
+            ("Company", lambda r: r[1].company),
+            ("No. of days first entry not made", lambda r: r[1].days),
+            ("No. of steps overdue but not marked", lambda r: r[1].overdue),
         ]
+        number = lambda lines: list(enumerate(lines, 1))
         every = sorted(rows, key=lambda g: (g.company.lower(), -g.days,
                                             (g.flow.name or "").lower()))
-        sheets = [("All companies", cols, every, note)]
+        sheets = [("All companies", cols, number(every), note)]
         for name, lines in quietflows.by_company(rows):
             # The company is the tab's name, so repeating it in every row
             # of that tab is a column of the same word eighty times.
             sheets.append((name, [c for c in cols if c[0] != "Company"],
-                           lines,
-                           f"{name} — {len(lines)} FMS with no entry. "
+                           number(lines),
+                           f"{name} — {len(lines)} FMS line(s). "
                            + note))
-        name = ("fms-no-entry" if day == today
-                else f"fms-no-entry-as-at-{day:%d-%m-%Y}")
+        name = ("fms-working-status" if day == today
+                else f"fms-working-status-as-at-{day:%d-%m-%Y}")
         return xlsx.book(name, sheets)
 
     branches = db.scalars(
@@ -439,7 +442,7 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
     subject = body = body_html = ""
     if day == today:
         subject, body, body_html = quietflows.compose(
-            db, org, day, threshold=limit)[1:]
+            db, org, day, threshold=limit, show=show)[1:]
     to, cc = quietflows.recipients(org)
     grouped = "flow" if by == "flow" else "company"
     return templates.TemplateResponse(request, "report_fms_entries.html", {
@@ -449,6 +452,7 @@ def fms_entries(request: Request, on: str = "", gap: str = "",
         "subject": subject, "body": body, "body_html": body_html,
         "to": to, "cc": cc, "today": today, "day": day, "on": day.isoformat(),
         "is_today": day == today, "threshold": limit,
+        "show": show, "shows": quietflows.SHOWS,
         "branches": branches, "company": pick,
         "covered": len(quietflows.covered(db, user.org_id)),
         "mail_on": mail.enabled(), "mail_status": mail.status(),

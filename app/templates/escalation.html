@@ -157,26 +157,27 @@
        given — a flow that has quietly stopped being followed raises no
        overdue task, because no task was ever created. #}
     <hr style="margin:20px 0;border:none;border-top:1px solid var(--line)">
-    <h2 style="margin:0 0 4px">FMS nobody is starting</h2>
+    <h2 style="margin:0 0 4px">FMS working status</h2>
     <p class="m" style="margin:0 0 12px">
-      A separate report, and a separate email. Escalation finds work that is
-      late; this finds a flow whose start form nobody has filled in for days
-      — at <strong>each company separately</strong>, so an entry at Bodyzone
-      does not cover for a spa that has stopped.
+      A separate report, and a separate email. An FMS is <strong>not
+      working</strong> when nobody has made a first entry for the days set
+      below <strong>and</strong> a step is overdue and not marked — counted at
+      <strong>each company separately</strong>, so an entry at Bodyzone does
+      not cover for a spa that has stopped.
       <a href="/escalation/quiet">See it as it stands now →</a>
     </p>
 
     <label class="check">
       <input type="checkbox" name="quiet_on" value="1"
              {{ 'checked' if org.quiet_on }}>
-      <span>Email the <strong>FMS entry report</strong> every morning</span>
+      <span>Email the <strong>FMS working status</strong> every morning</span>
     </label>
     <div class="m" style="margin:4px 0 14px">
       Off until somebody switches it on. It sends on the same days as the
       escalation check above, so it skips Sundays and holidays with it.
     </div>
 
-    <label>Working days with no entry before a flow is listed</label>
+    <label>Working days with no first entry before a flow counts as not working</label>
     <input name="quiet_gap" type="number" min="1" max="90"
            value="{{ org.quiet_gap or 2 }}">
     <div class="m" style="margin:6px 0 14px">
