@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}To-Do sheet · {{ APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>To Do List sheet</h1>
+    <div class="m">When a Delegation task or an FMS run in column <strong>I</strong> is
+      completed here, its proof link is pasted in column <strong>K</strong> and the row
+      (B to K) turns dark green. Blank rows are skipped; nothing above the first row is read.</div></div>
+  <form method="post" action="/todo-sync/check"><button class="btn">Check now</button></form>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  {% if not enabled %}<span class="overdue">No Google credential is set on the server.</span>
+  {% elif org.todo_error %}<span class="overdue">{{ org.todo_error }}</span>
+  {% elif not cfg.on %}<strong>Switched off.</strong> Nothing is written until it is turned on below.
+  {% elif org.todo_read_at %}On — it checks the sheet at {{ times_label }} every day. Last checked
+    {{ org.todo_read_at.strftime('%d/%m/%Y %I:%M %p') }}.
+    {% if note.get('marked') is not none %}Last pass: {{ note.get('marked', 0) }} turned green,
+    {{ note.get('waiting_n', 0) }} waiting.{% endif %}
+  {% else %}On — waiting for its first check.{% endif %}
+</div>
+
+{% if can_set %}
+<details class="card" {{ 'open' if not cfg.on }} style="margin-bottom:14px">
+  <summary><strong>Settings</strong></summary>
+  <ol class="m" style="margin:12px 0 14px;padding-left:20px;line-height:1.8">
+    <li>Open the To Do List sheet and press <strong>Share</strong>.</li>
+    <li>Add this address as an <strong>Editor</strong> (not Viewer, it has to write):
+      <code>{{ robot or 'the service account address' }}</code></li>
+    <li>Come back here, tick the box and press Save.</li>
+  </ol>
+  <form method="post" action="/todo-sync/settings" class="searchbar" style="border:0;padding:0">
+    <div class="fb-f fb-wide"><label>Sheet link</label>
+      <input name="sheet" value="https://docs.google.com/spreadsheets/d/{{ cfg.sheet }}"></div>
+    <div class="fb-f"><label>Tab name</label><input name="tab" value="{{ cfg.tab }}"></div>
+    <div class="fb-f"><label>First row to read</label>
+      <input name="from_row" type="number" min="2" value="{{ cfg.from_row }}"></div>
+    <div class="fb-f"><label>Checks at (24-hour, comma between)</label>
+      <input name="times" value="{{ times_label }}" placeholder="12:00, 17:00"></div>
+    <div class="fb-f"><label class="check"><input type="checkbox" name="on" value="1"
+      {{ 'checked' if cfg.on }}> <span>Switched on</span></label></div>
+    <div class="acts"><button class="btn">Save</button></div>
+  </form>
+</details>
+{% endif %}
+
+{% if note.get('waiting') %}
+<div class="card" style="margin-bottom:14px">
+  <strong>Rows still waiting</strong> <span class="m">({{ note.get('waiting_n', 0) }})</span>
+  <table class="tbl" style="margin-top:8px">
+    <tr><th>Sheet row</th><th>ID</th><th>Why</th></tr>
+    {% for w in note.get('waiting') %}
+    <tr><td>{{ w.row }}</td><td>{{ w.id }}</td><td class="m">{{ w.why }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <strong>Turned green by the software</strong>
+  <table class="tbl" style="margin-top:8px">
+    <tr><th>Sheet row</th><th>ID(s)</th><th>Written in K</th><th>When</th></tr>
+    {% for m in marks %}
+    <tr><td>{{ m.row_no }}</td><td>{{ m.refs }}</td>
+      <td class="m">{{ (m.wrote or 'K already had something — left as it was')[:120] }}</td>
+      <td class="m">{{ m.marked_at.strftime('%d/%m/%Y %I:%M %p') }}</td></tr>
+    {% else %}<tr><td colspan="4" class="m">Nothing yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

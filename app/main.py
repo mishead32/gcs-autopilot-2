@@ -27,12 +27,13 @@ from .routers import (auth, tasks, flows, dashboard, admin, attachments, bulk,
                       detective as detective_router,
                       escalation as escalation_router,
                       cmd as cmd_router,
-                      approvals as approvals_router, initiatives as initiatives_router, crmwatch as crmwatch_router, apikeys as apikeys_router, api_v1 as api_v1_router)
+                      approvals as approvals_router, initiatives as initiatives_router, crmwatch as crmwatch_router, apikeys as apikeys_router, api_v1 as api_v1_router, todosync as todosync_router)
 from .services import recurring
 from .services import detective
 from .services import flowsheet
 from .services import approvals as approvals_svc
 from .services import initiatives as initiatives_svc
+from .services import todosync as todosync_svc
 from .services import crmwatch as crmwatch_svc
 from .services import flows as flow_svc
 from .services import escalation as escalation_svc
@@ -307,6 +308,33 @@ async def _crm_loop():
         await asyncio.sleep(300)
 
 
+def _todo_once() -> int:
+    """One look at the To Do List sheet, when it is due. Never raises."""
+    try:
+        with SessionLocal() as db:
+            got = todosync_svc.run_due(db)
+        if got and got.get("marked"):
+            print(f"To-Do sheet: {got['marked']} row(s) turned green")
+        return (got or {}).get("marked", 0)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"To-Do sheet sync failed: {exc}")
+        return 0
+
+
+async def _todo_loop():
+    """Wakes every two minutes; the sheet is only touched when it is due
+    (every N minutes, set on the page) and switched on."""
+    while True:
+        try:
+            if not _asleep(clock.now()):
+                await asyncio.to_thread(_todo_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:                      # noqa: BLE001
+            print(f"To-Do sheet loop: {exc}")
+        await asyncio.sleep(120)
+
+
 def _catch_up_runs() -> int:
     with SessionLocal() as db:
         return flow_svc.catch_up_all(db)
@@ -371,14 +399,15 @@ async def lifespan(app: FastAPI):
     # once per day for as long as it is running, whatever the host does.
     # /cron/spawn still works and is still safe to call — each rule fires at
     # most once a day either way.
-    spawner = crm = None
+    spawner = crm = todo = None
     if not SERVERLESS:
         spawner = asyncio.create_task(_daily_spawn())
         crm = asyncio.create_task(_crm_loop())
+        todo = asyncio.create_task(_todo_loop())
     try:
         yield
     finally:
-        for t in (spawner, crm):
+        for t in (spawner, crm, todo):
             if t:
                 t.cancel()
                 try:
@@ -612,6 +641,7 @@ app.include_router(detective_router.router)
 app.include_router(cmd_router.router)
 app.include_router(approvals_router.router)
 app.include_router(initiatives_router.router)
+app.include_router(todosync_router.router)
 app.include_router(crmwatch_router.router)
 app.include_router(apikeys_router.router)
 app.include_router(api_v1_router.router)

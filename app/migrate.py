@@ -121,6 +121,15 @@ ADDITIONS = {
         ("crm_wa_on", "BOOLEAN"),
         ("crm_l1_every", "INTEGER"),
         ("crm_l2_every", "INTEGER"),
+        ("todo_on", "BOOLEAN"),
+        ("todo_sheet_id", "VARCHAR(120)"),
+        ("todo_tab", "VARCHAR(120)"),
+        ("todo_from_row", "INTEGER"),
+        ("todo_every", "INTEGER"),
+        ("todo_times", "VARCHAR(60)"),
+        ("todo_read_at", "DATETIME"),
+        ("todo_error", "TEXT"),
+        ("todo_note", "TEXT"),
     ],
     "escalation_mails": [
         # The HTML version of the message. NULL on a row written before the

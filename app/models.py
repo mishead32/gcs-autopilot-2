@@ -404,6 +404,18 @@ class Organization(Base):
     crm_l1_every: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crm_l2_every: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # The To Do List sheet: finished tasks get their proof link and a green
+    # row written back into it (services/todosync.py).
+    todo_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    todo_sheet_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    todo_tab: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    todo_from_row: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    todo_every: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    todo_times: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    todo_read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    todo_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    todo_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     @property
     def esc_day_list(self) -> list[int]:
         """The weekdays it runs on. Empty setting means all seven."""
@@ -2648,3 +2660,21 @@ class ApiKey(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     acting_user: Mapped["User"] = relationship(foreign_keys=[acting_user_id])
+
+
+class TodoMark(Base):
+    """A row of the To Do List sheet that has been turned green.
+
+    Remembered so the same row is not rewritten every few minutes, and keyed
+    by what column I said at the time: if somebody changes the ID in that
+    row, it is looked at again.
+    """
+    __tablename__ = "todo_marks"
+    __table_args__ = (UniqueConstraint("org_id", "row_no", name="uq_todo_row"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    row_no: Mapped[int] = mapped_column(Integer)
+    ids_text: Mapped[str] = mapped_column(String(300), default="")
+    refs: Mapped[str] = mapped_column(String(300), default="")
+    wrote: Mapped[str] = mapped_column(Text, default="")
+    marked_at: Mapped[datetime] = mapped_column(DateTime, default=clock.now)

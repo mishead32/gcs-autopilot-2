@@ -15692,6 +15692,8 @@ with _slQ() as _d:
           _QP["n"] <= 4, _QP["n"])
     # And it must not go stale inside the one session that changed it.
     _dayP = _ck.today() + _tdP(days=400)
+    while _dayP.weekday() == 6:        # a Sunday is closed for some companies, whatever today is
+        _dayP += _tdP(days=1)
     check("a day with nothing on it is open", not _hoP.is_closed(_d, 1, _dayP))
     _d.add(_HolQ(org_id=1, branch_id=None, day=_dayP, name=f"PERF {RUN}"))
     _d.commit()
@@ -17140,6 +17142,171 @@ _whead = [c for c in next(_wwb["All companies"].iter_rows(min_row=5, max_row=5, 
 check("the Excel has Sno, FMS name, company, days and steps",
       _whead == ["Sno", "FMS name", "Company", "No. of days first entry not made",
                  "No. of steps overdue but not marked"], _whead)
+
+print("\n== To Do List sheet: green rows and proof links ==")
+from app.services import todosync as _ts
+from app.models import (Attachment as _AtW2, Task as _TkW2, TaskStatus as _TsW2, TaskSource as _TsrW2,
+                        FlowInstance as _FiW2, Flow as _FlW2, TodoMark as _TmW2, User as _UsW2,
+                        LINK_STORAGE as _LkW2)
+check("IDs are read out of the cell, in order, once each",
+      _ts.refs_in("Boney-DEL-1130\nRaj-DEL-1131") == ["DEL-1130", "DEL-1131"]
+      and _ts.refs_in("EA-DEL-1136") == ["DEL-1136"] and _ts.refs_in("DEL-1133\t") == ["DEL-1133"]
+      and _ts.refs_in("fms-12") == ["FMS-12"] and _ts.refs_in("DEL-1 DEL-01") == ["DEL-01"])
+check("notes and other kinds are ignored", _ts.refs_in("FMS Dated- 23 Nov 2026") == []
+      and _ts.refs_in("CL-5") == [] and _ts.refs_in("") == [])
+
+with _slQ() as _d:
+    _o = _d.scalar(_SEL(_OgQ)); _u = _d.scalars(_SEL(_UsW2).where(_UsW2.org_id == _o.id)).first().id
+    def _t(done, with_proof=True, link=False, title="TS"):
+        t = _TkW2(org_id=_o.id, title=f"{title} {RUN}", assigner_id=_u, doer_id=_u,
+                  source=_TsrW2.DELEGATION, due_at=_ck.now(),
+                  status=_TsW2.COMPLETED if done else _TsW2.PENDING)
+        _d.add(t); _d.flush()
+        if with_proof:
+            if link:
+                _d.add(_AtW2(task_id=t.id, uploaded_by_id=_u, filename="Drive", stored_name="https://drive.google.com/x",
+                             size=0, content_type="", storage=_LkW2))
+            else:
+                _d.add(_AtW2(task_id=t.id, uploaded_by_id=_u, filename="p.png", stored_name="x", size=1,
+                             content_type="image/png", storage="local"))
+        _d.flush(); return t
+    _tDone, _tOpen = _t(True), _t(False)
+    _tNone = _t(True, with_proof=False)
+    _tLink = _t(True, link=True)
+    _tA, _tB = _t(True), _t(False)
+    _tDone_id, _tA_ref, _tB_ref = _tDone.id, _tA.ref, _tB.ref
+    _refs = {k: v.ref for k, v in dict(done=_tDone, open=_tOpen, none=_tNone, link=_tLink, a=_tA, b=_tB).items()}
+    # a finished FMS run with two steps and proof on one of them
+    _fl = _d.scalar(_SEL(_FlW2).where(_FlW2.org_id == _o.id))
+    _run = _FiW2(org_id=_o.id, flow_id=_fl.id, reference="TSrun", started_by_id=_u, completed_at=_ck.now())
+    _run2 = _FiW2(org_id=_o.id, flow_id=_fl.id, reference="TSrun2", started_by_id=_u)
+    _d.add_all([_run, _run2]); _d.flush()
+    _st = _TkW2(org_id=_o.id, title=f"TS step {RUN}", assigner_id=_u, doer_id=_u, source=_TsrW2.FLOW,
+                due_at=_ck.now(), status=_TsW2.COMPLETED, flow_instance_id=_run.id)
+    _d.add(_st); _d.flush()
+    _d.add(_AtW2(task_id=_st.id, uploaded_by_id=_u, filename="s.png", stored_name="y", size=1,
+                 content_type="image/png", storage="local"))
+    _d.commit()
+    _refs["fms_done"], _refs["fms_open"] = _run.ref, _run2.ref
+    _attDone = _d.scalar(_SEL(_AtW2).where(_AtW2.task_id == _tDone_id)).id
+    _o_id = _o.id
+
+_calls = []
+_ROWS = [
+    (59554, "", ""),                                         # blank I: ignored
+    (59555, _refs["done"], ""),                              # done, K empty -> link
+    (59556, _refs["open"], ""),                              # not completed
+    (59557, _refs["none"], ""),                              # done, nothing attached
+    (59558, _refs["link"], ""),                              # done, a pasted link
+    (59559, "X-" + _refs["a"] + "\nY-" + _refs["b"], ""),    # one of two not done
+    (59560, _refs["done"], "https://prnt.sc/already"),       # K already filled
+    (59561, "FMS Dated- 23 Nov 2026", ""),                   # not an ID
+    (59562, _refs["fms_done"], ""),                          # finished FMS run
+    (59563, _refs["fms_open"], ""),                          # unfinished FMS run
+    (59564, "DEL-999999", ""),                               # not in Autopilot
+]
+_fetched = []
+_ts.enabled = lambda: True
+_ts.fetch = lambda sid, tab, first: (_fetched.append((sid, tab, first)) or list(_ROWS))
+_ts.write = lambda sid, tab, ups: _calls.append(list(ups))
+with _slQ() as _d:
+    _o = _d.get(_OgQ, _o_id)
+    _r1 = _ts.run(_d, _o)
+check("a pass succeeds", _r1["ok"], _r1)
+check("it reads from the first row set, nothing above", _fetched[-1][2] == 59554, _fetched)
+_up = dict(_calls[-1])
+site = "https://gcs-autopilot-2.onrender.com"
+with _slQ() as _d:
+    site = _ts._site(_d.get(_OgQ, _o_id))
+check("a finished delegation gets its proof link in K",
+      _up.get(59555) == f"{site}/attachments/{_attDone}/view", _up.get(59555))
+check("an unfinished one is left alone", 59556 not in _up)
+check("a finished one with nothing attached says so", _up.get(59557) == f"{_refs['none']}: No attachment" or _up.get(59557) == "No attachment" or "No attachment" in (_up.get(59557) or ""), _up.get(59557))
+check("a pasted link is used as it is", _up.get(59558) == "https://drive.google.com/x", _up.get(59558))
+check("a row with two IDs waits for both", 59559 not in _up)
+check("a K that already has something is not overwritten, but the row is still coloured",
+      59560 in _up and _up[59560] is None, _up.get(59560, "absent"))
+check("blank I, and text that is no ID, are never touched", 59554 not in _up and 59561 not in _up)
+check("a finished FMS run gets its steps' proof", 59562 in _up and "/attachments/" in (_up[59562] or ""), _up.get(59562))
+check("an unfinished run, and an ID Autopilot does not know, wait", 59563 not in _up and 59564 not in _up)
+with _slQ() as _d:
+    _marks = {m.row_no for m in _d.scalars(_SEL(_TmW2)).all()}
+    _o = _d.get(_OgQ, _o_id)
+    check("done rows are remembered", {59555, 59557, 59558, 59560, 59562} <= _marks, sorted(_marks))
+    check("and the waiting ones are listed with a reason",
+          any(w["row"] == 59564 and "not found" in w["why"] for w in _ts.note(_o).get("waiting", [])), _ts.note(_o))
+    n = len(_calls)
+    _ts.run(_d, _o)
+check("a second pass writes nothing for rows already done",
+      len(_calls) == n or not any(r in dict(_calls[-1]) for r in (59555, 59557, 59558, 59560, 59562)), _calls[-1:])
+
+# the second ID of a two-ID row is completed -> the row goes green with both
+with _slQ() as _d:
+    _d.get(_TkW2, _d.scalar(_SEL(_TkW2.id).where(_TkW2.ref == _refs["b"], _TkW2.org_id == _o_id))).status = _TsW2.COMPLETED
+    _d.commit()
+    _o = _d.get(_OgQ, _o_id)
+    _ts.run(_d, _o)
+_up2 = dict(_calls[-1]) if _calls else {}
+check("both IDs done: the row is written, one line per ID",
+      59559 in _up2 and _up2[59559].count("/attachments/") == 2 and _refs["a"] in _up2[59559] and _refs["b"] in _up2[59559], _up2.get(59559))
+# changing the ID cell makes the row be looked at again
+_ROWS[1] = (59555, _refs["a"], "")
+_before = len(_calls)
+with _slQ() as _d:
+    _o = _d.get(_OgQ, _o_id); _ts.run(_d, _o)
+check("an edited ID cell is read again", len(_calls) > _before and 59555 in dict(_calls[-1]))
+
+# failures say something a person can act on
+def _boom(*a):
+    raise RuntimeError("403 PERMISSION_DENIED the caller does not have permission")
+_ts.fetch = _boom
+with _slQ() as _d:
+    _o = _d.get(_OgQ, _o_id); _r = _ts.run(_d, _o)
+check("no write access is explained as 'Editor'", not _r["ok"] and "EDITOR" in _r["why"], _r)
+_ts.fetch = lambda sid, tab, first: list(_ROWS)
+# when it runs by itself: 12:00 and 17:00 each day
+from datetime import datetime as _dtW
+check("12:00 and 17:00 are the default times", _ts.read_times(_ts.DEFAULT_TIMES) == [(12, 0), (17, 0)])
+check("times are read leniently and sorted", _ts.read_times("5pm, 17:00 ; 9, 25:00, 12:30") == [(9, 0), (12, 30), (17, 0)],
+      _ts.read_times("5pm, 17:00 ; 9, 25:00, 12:30"))
+with _slQ() as _d:
+    _o = _d.get(_OgQ, _o_id)
+    _o.todo_times = None
+    _day = _dtW(2026, 12, 2)
+    _o.todo_on = False; _o.todo_read_at = None
+    check("switched off: never due", not _ts.due(_o, _day.replace(hour=13)))
+    _o.todo_on = True
+    check("never read: due", _ts.due(_o, _day.replace(hour=13)))
+    _o.todo_read_at = _day.replace(hour=12, minute=1)
+    check("read after 12:00: not due at 13:00", not _ts.due(_o, _day.replace(hour=13)))
+    check("and not due at 16:59", not _ts.due(_o, _day.replace(hour=16, minute=59)))
+    check("but due at 17:00", _ts.due(_o, _day.replace(hour=17)))
+    _o.todo_read_at = _day.replace(hour=17, minute=2)
+    check("read after 17:00: quiet until tomorrow 12:00",
+          not _ts.due(_o, _day.replace(hour=23)) and not _ts.due(_o, (_day + _tdQ(days=1)).replace(hour=11, minute=59))
+          and _ts.due(_o, (_day + _tdQ(days=1)).replace(hour=12)))
+    _o.todo_read_at = _day.replace(hour=8)
+    check("not yet read today at 11:59 morning slot logic: yesterday's 17:00 already covered", not _ts.due(_o, _day.replace(hour=11, minute=59)))
+    check("12:00 arrives: due", _ts.due(_o, _day.replace(hour=12)))
+    _o.todo_on = False; _d.commit()
+
+_pg = admin.get("/todo-sync")
+check("the page opens for an admin and names the sheet's tab", _pg.status_code == 200 and "Weekly/Today" in _pg.text, _pg.status_code)
+check("it tells them to share as Editor", "Editor" in _pg.text)
+check("it is in the menu", "/todo-sync" in admin.get("/").text)
+check("a doer cannot change the settings",
+      login("amit@gcs.local").post("/todo-sync/settings", data={"sheet": "", "tab": ""}).status_code in (403, 401))
+_sv = admin.post("/todo-sync/settings", data={"sheet": "", "tab": "", "from_row": "59554", "times": "12:00, 17:00", "on": "1"},
+                 follow_redirects=False)
+check("settings save", _sv.status_code == 303, _sv.status_code)
+check("bad times are refused", admin.post("/todo-sync/settings", data={"sheet": "", "times": "noon"}).status_code == 400)
+check("the saved times are shown", "12:00, 17:00" in admin.get("/todo-sync").text)
+check("a bad row number is refused",
+      admin.post("/todo-sync/settings", data={"sheet": "", "from_row": "abc"}).status_code == 400)
+_ck2 = admin.post("/todo-sync/check", follow_redirects=False)
+check("check now works", _ck2.status_code == 303)
+with _slQ() as _d:
+    _o = _d.get(_OgQ, _o_id); _o.todo_on = False; _d.commit()
 
 print("\n" + ("ALL CHECKS PASSED" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)
