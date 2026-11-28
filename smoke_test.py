@@ -17171,11 +17171,13 @@ with _slQ() as _d:
                              content_type="image/png", storage="local"))
         _d.flush(); return t
     _tDone, _tOpen = _t(True), _t(False)
+    _tSub = _t(True); _tSub.status = _TsW2.SUBMITTED          # handed in, waiting for audit
+    _tRej = _t(True); _tRej.status = _TsW2.REJECTED           # sent back by the auditor
     _tNone = _t(True, with_proof=False)
     _tLink = _t(True, link=True)
     _tA, _tB = _t(True), _t(False)
     _tDone_id, _tA_ref, _tB_ref = _tDone.id, _tA.ref, _tB.ref
-    _refs = {k: v.ref for k, v in dict(done=_tDone, open=_tOpen, none=_tNone, link=_tLink, a=_tA, b=_tB).items()}
+    _refs = {k: v.ref for k, v in dict(sub=_tSub, rej=_tRej, done=_tDone, open=_tOpen, none=_tNone, link=_tLink, a=_tA, b=_tB).items()}
     # a finished FMS run with two steps and proof on one of them
     _fl = _d.scalar(_SEL(_FlW2).where(_FlW2.org_id == _o.id))
     _run = _FiW2(org_id=_o.id, flow_id=_fl.id, reference="TSrun", started_by_id=_u, completed_at=_ck.now())
@@ -17204,6 +17206,8 @@ _ROWS = [
     (59562, _refs["fms_done"], ""),                          # finished FMS run
     (59563, _refs["fms_open"], ""),                          # unfinished FMS run
     (59564, "DEL-999999", ""),                               # not in Autopilot
+    (59565, _refs["sub"], ""),                               # handed in, audit pending
+    (59566, _refs["rej"], ""),                               # sent back by the auditor
 ]
 _fetched = []
 _ts.enabled = lambda: True
@@ -17228,6 +17232,9 @@ check("a K that already has something is not overwritten, but the row is still c
       59560 in _up and _up[59560] is None, _up.get(59560, "absent"))
 check("blank I, and text that is no ID, are never touched", 59554 not in _up and 59561 not in _up)
 check("a finished FMS run gets its steps' proof", 59562 in _up and "/attachments/" in (_up[59562] or ""), _up.get(59562))
+check("a task handed in and waiting for audit counts as done, with its proof",
+      59565 in _up and "/attachments/" in (_up[59565] or ""), _up.get(59565, "absent"))
+check("a task the auditor sent back does not", 59566 not in _up)
 check("an unfinished run, and an ID Autopilot does not know, wait", 59563 not in _up and 59564 not in _up)
 with _slQ() as _d:
     _marks = {m.row_no for m in _d.scalars(_SEL(_TmW2)).all()}

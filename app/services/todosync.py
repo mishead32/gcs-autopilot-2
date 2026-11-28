@@ -15,8 +15,8 @@ What it will and will not touch:
   * A row whose column I is blank is skipped: nothing is read from or written
     to it. Rows above the starting row are never read at all.
   * A row is finished only when EVERY ID in its cell is finished. A
-    Delegation task is finished when it is Completed (not merely handed in
-    for audit). An FMS ID names a whole run, finished when the run is.
+    Delegation task is finished when it is Completed, or handed in by the
+    doer and waiting for audit (Submitted). An FMS ID names a whole run, finished when the run is.
   * Column K is never overwritten. If somebody already pasted a link there,
     it stays; the row is still coloured.
   * Writing needs the service account to be an EDITOR of the sheet.
@@ -173,7 +173,10 @@ def look(db: Session, org: Organization, ref: str) -> tuple[str, list[str]]:
         Task.source == TaskSource.DELEGATION))
     if task is None:
         return "missing", []
-    if task.status != TaskStatus.COMPLETED:
+    # Handed in by the doer counts as done, even while it waits for audit:
+    # the doer has finished and attached their proof. Only a task still with
+    # the doer (pending, in progress, sent back, reopened, on hold) waits.
+    if task.status not in (TaskStatus.COMPLETED, TaskStatus.SUBMITTED):
         return "open", []
     return "done", [_link(a, site) for a in task.proof_files]
 
